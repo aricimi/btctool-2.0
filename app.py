@@ -282,6 +282,7 @@ st.markdown(f"""
         <div><b>Invalidation (Stop):</b> <span style="color: #F87171;">${td.invalidation_stop:,.2f}</span></div>
         <div><b>Target 1 (Scalp):</b> <span style="color: #00FFA3;">${td.take_profit_1:,.2f}</span></div>
         <div><b>Target 2 (Runner):</b> <span style="color: #00FFA3;">${td.take_profit_2:,.2f}</span></div>
+        <div><b>Risk:Reward:</b> 1:{td.risk_reward_ratio}</div>
         <div><b>Counter-Trend Flag:</b> {"⚠️ YES (4H Bearish)" if td.is_counter_trend else "🟢 NO (Trend Aligned)"}</div>
     </div>
 </div>

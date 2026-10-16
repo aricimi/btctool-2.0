@@ -1,9 +1,9 @@
 # 🏛️ PROJECT_BLUEPRINT.md — btctool 2.0 Master Blueprint
-**System:** btctool 2.0 — Advanced Predictive Advisory & Directive Engine for BTC/USDT  
+**System:** btctool 2.0 — Institutional Predictive Advisory & Directive Engine for BTC/USDT  
 **Root Directory:** `C:\gemini proyect\btctool 2.0`  
 **GitHub Repository:** [https://github.com/aricimi/btctool-2.0](https://github.com/aricimi/btctool-2.0)  
 **Branch:** `main`  
-**Status:** Operational / Live with Binance Real-Time Feeds  
+**Status:** Operational / Live with Zero-Contradiction Institutional Bot Matrix  
 
 ---
 
@@ -43,7 +43,7 @@ This document serves as the **Single Source of Truth** for the entire project.
 * **Order Book Depth & Imbalance:**
   - Evaluates live bid vs. ask depth within the **0.5% mid-price boundary** from Binance Level 2 order book (`/api/v3/depth?limit=100`).
   - **Imbalance %:** $\frac{\text{Bid Depth} - \text{Ask Depth}}{\text{Bid Depth} + \text{Ask Depth}} \times 100$
-  - Identifies real institutional limit order absorption walls.
+  - Injects dynamic probability alpha ($\pm 15\%$ probability shift) based on real institutional limit order walls.
 * **Futures Derivatives:**
   - Open Interest in BTC from Binance Futures (`/fapi/v1/openInterest`).
   - Real-time funding rate from `/fapi/v1/premiumIndex`.
@@ -55,9 +55,9 @@ This document serves as the **Single Source of Truth** for the entire project.
 ### 3.1. The Statistical Brain (`StatisticalBrain`)
 - Bollinger Bands ($N=20, K=2.0$).
 - $\%B = \frac{\text{Close} - \text{Lower}}{\text{Upper} - \text{Lower}}$
-- Bandwidth $= \frac{\text{Upper} - \text{Lower}}{\text{SMA}_{20}}$
-- Price $Z$-Score relative to moving average.
-- Mean-reversion probability vs. channel expansion.
+- **Regime-Aware Envelopes:**
+  - When 4H Macro is `Trend Down` and $\%B \ge 0.60$ (upper half of band): Evaluated as a **Bearish Retest Resistance Zone** (`sell_prob = 0.55`, `buy_prob = 0.20`), preventing buy traps into overhead resistance.
+  - When 4H Macro is `Trend Up` and $\%B \le 0.40$ (lower half of band): Evaluated as a **Bullish Dip Support Zone** (`buy_prob = 0.55`, `sell_prob = 0.20`).
 
 ### 3.2. The Momentum Brain (`MomentumBrain`)
 - **Triple-Period Dynamic RSI:** Tailored periods `(6, 12, 24)` on 1H/15M to detect fast micro-reversals before 14-period RSI catches up.
@@ -71,22 +71,26 @@ This document serves as the **Single Source of Truth** for the entire project.
 
 ---
 
-## 4. Anti-Contradiction Confluence & Actionable Directives
+## 4. Institutional Algorithmic Bot Decision Matrix (Zero Contradictions)
 
-Unlike legacy tools that issue blind `ENTER LONG NOW` directives with inflated probabilities, **btctool 2.0** enforces strict confluence:
+The engine acts as a professional algorithmic trading bot where all parameters are strictly co-aligned:
 
-1. **4H Macro Trend Confluence Filter:**
-   - Evaluates the 4H trend structure (Price relative to 4H 21 EMA).
-   - If 4H is in a **`Trend Down`**, the engine **forbids aggressive buy calls**. Bounces off lower wicks are strictly downgraded to:
-     `COUNTER-TREND SCALP: BUY PULLBACK LIMIT` with tight targets and explicit counter-trend risk flags.
-2. **Harmonized Probability Model:**
-   - The trade directive's target reach probability is mathematically bound to the ensemble probability model. No arbitrary 87% claims when the model calculates 52%.
-3. **Execution Levels Provided:**
-   - **Entry Trigger Price**
-   - **Invalidation Stop Loss** (calculated dynamically off the sweep wick and ATR buffer)
-   - **Take-Profit 1 (Scalp Target)**
-   - **Take-Profit 2 (Runner Target)**
-   - **Risk % calculation**
+1. **Scenario 1 (Downtrend Resistance Fade):**
+   - **Trigger:** 4H Macro is `Trend Down` + $\%B \ge 0.58$ (price in upper channel) + Order Book Imbalance $< -10\%$ (overhead ask wall).
+   - **Directive:** `SET SELL LIMIT AT RESISTANCE (BEARISH FADE)`
+   - **Levels:** Invalidation strictly above Upper BB ($+0.25 \times \text{ATR}$); $TP_1$ at Middle Band; $TP_2$ at Lower Band.
+2. **Scenario 2 (Downtrend Continuation):**
+   - **Trigger:** 4H Macro is `Trend Down` + Breakdown momentum or $\%B < 0.40$ with heavy sell flow.
+   - **Directive:** `TREND CONTINUATION: ENTER SHORT ON RETEST`
+3. **Scenario 3 (Bottom Sweep Rebound):**
+   - **Trigger:** 24h Low swept + Rebound $\ge \$120$ + Bid Imbalance $> +15\%$.
+   - **Directive:** If 4H is Down: `COUNTER-TREND SCALP: BUY PULLBACK LIMIT` (tight scalp targets, explicit counter-trend flag). If 4H is Up: `ENTER LONG NOW (MOMENTUM REBOUND)`.
+4. **Scenario 4 (Uptrend Dip Buy):**
+   - **Trigger:** 4H Macro is `Trend Up` + $\%B \le 0.45$ + Order Book has bid support.
+   - **Directive:** `TREND FOLLOWING: SET BUY LIMIT AT SUPPORT`
+5. **Scenario 5 (Range-Bound Ping-Pong):**
+   - **Trigger:** Consolidation / Equilibrium.
+   - **Directive:** If $\%B \ge 0.50$: `RANGE DEFENSE: SET SELL LIMIT AT UPPER BAND`. If $\%B < 0.50$: `RANGE DEFENSE: SET BUY LIMIT AT LOWER BAND`. Never buys the top of the range.
 
 ---
 

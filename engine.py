@@ -1,5 +1,5 @@
 """
-btctool 2.0 - Quantitative Predictive Advisory & Execution Directive Engine
+btctool 2.0 - Institutional Algorithmic Predictive Engine & Trading Bot Directive Matrix
 Data Source: Direct Binance Spot & Futures Real-Time REST Feeds with yfinance fallback
 Architecture: Tri-Brain Quantitative Consensus + Order Book Liquidity + Macro Confluence
 """
@@ -37,12 +37,13 @@ class BrainVote:
 
 @dataclass
 class TradeDirective:
-    action: str  # e.g., 'ENTER LONG NOW', 'COUNTER-TREND SCALP: BUY PULLBACK LIMIT', 'SET BUY LIMIT'
+    action: str
     rationale: str
     entry_trigger: float
     invalidation_stop: float
     take_profit_1: float
     take_profit_2: float
+    risk_reward_ratio: float
     risk_pct: float
     target_probability: float
     is_counter_trend: bool
@@ -91,7 +92,6 @@ class MarketDataService:
     @classmethod
     def fetch_klines(cls, symbol: str = "BTCUSDT", interval: str = "1h", limit: int = 150) -> pd.DataFrame:
         """Pulls klines directly from Binance REST API, falling back to Yahoo Finance if necessary."""
-        # Binance interval mappings: 15m, 1h, 4h, 1d
         interval_map = {"15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d"}
         binance_interval = interval_map.get(interval, "1h")
 
@@ -144,7 +144,6 @@ class MarketDataService:
         funding_rate = 0.0
 
         try:
-            # 1. Depth
             r = requests.get(cls.BINANCE_DEPTH_URL, params={"symbol": symbol, "limit": 100}, timeout=4)
             if r.status_code == 200:
                 d = r.json()
@@ -177,15 +176,13 @@ class MarketDataService:
             pass
 
         try:
-            # 2. Open Interest
             r_oi = requests.get(cls.BINANCE_FUTURES_OI, params={"symbol": symbol}, timeout=4)
             if r_oi.status_code == 200:
                 oi_btc = float(r_oi.json().get("openInterest", 0.0))
         except Exception:
-            oi_btc = 92000.0
+            oi_btc = 94000.0
 
         try:
-            # 3. Funding Rate
             r_fr = requests.get(cls.BINANCE_FUTURES_PREMIUM, params={"symbol": symbol}, timeout=4)
             if r_fr.status_code == 200:
                 funding_rate = float(r_fr.json().get("lastFundingRate", 0.0001)) * 100.0
@@ -204,11 +201,14 @@ class MarketDataService:
         )
 
 
+QuantitativeDataEngine = MarketDataService
+
+
 class StatisticalBrain:
-    """Calculates Bollinger Bands (%B, Bandwidth) and price Z-scores."""
+    """Calculates Bollinger Bands (%B, Bandwidth) and price Z-scores with Regime Awareness."""
 
     @staticmethod
-    def analyze(df: pd.DataFrame, window: int = 20, num_std: float = 2.0) -> BrainVote:
+    def analyze(df: pd.DataFrame, macro_regime: str = "Range / Consolidation", window: int = 20, num_std: float = 2.0) -> BrainVote:
         close = df["Close"]
         sma = close.rolling(window=window).mean()
         std = close.rolling(window=window).std()
@@ -232,27 +232,60 @@ class StatisticalBrain:
         bw_rolling = bandwidth.dropna()
         bw_percentile = (bw_rolling < curr_bw).mean() * 100.0 if len(bw_rolling) >= 30 else 50.0
 
-        if curr_pct_b <= 0.15:
-            buy_prob = 0.60
-            sell_prob = 0.20
+        # Institutional Mean Reversion vs Regime Logic
+        if curr_pct_b >= 0.85:
+            # Stretched at upper band
+            sell_prob = 0.65
+            buy_prob = 0.15
             neutral_prob = 0.20
-            signal = "OVERSOLD_CHANNEL_SUPPORT"
-        elif curr_pct_b >= 0.85:
-            sell_prob = 0.60
-            buy_prob = 0.20
+            signal = "OVERBOUGHT_UPPER_BAND_RESISTANCE"
+        elif curr_pct_b <= 0.15:
+            # Stretched at lower band
+            buy_prob = 0.65 if macro_regime != "Trend Down" else 0.45
+            sell_prob = 0.15 if macro_regime != "Trend Down" else 0.35
             neutral_prob = 0.20
-            signal = "OVERBOUGHT_CHANNEL_RESISTANCE"
-        else:
-            if curr_close > curr_sma:
-                buy_prob = 0.45
-                sell_prob = 0.30
+            signal = "OVERSOLD_LOWER_BAND_SUPPORT"
+        elif curr_pct_b >= 0.60:
+            # Upper channel (Between 0.60 and 0.85)
+            # In a 4H downtrend, testing upper channel is a BEARISH RETEST (high probability of fade)
+            if macro_regime == "Trend Down":
+                sell_prob = 0.55
+                buy_prob = 0.20
                 neutral_prob = 0.25
-                signal = "UPPER_CHANNEL_ACCUMULATION"
+                signal = "BEARISH_UPPER_CHANNEL_RETEST"
+            elif macro_regime == "Trend Up":
+                buy_prob = 0.50
+                sell_prob = 0.25
+                neutral_prob = 0.25
+                signal = "BULLISH_UPPER_CHANNEL_EXPANSION"
             else:
-                buy_prob = 0.30
                 sell_prob = 0.45
+                buy_prob = 0.25
+                neutral_prob = 0.30
+                signal = "RANGE_HIGH_RESISTANCE_PRESSURE"
+        elif curr_pct_b <= 0.40:
+            # Lower channel (Between 0.15 and 0.40)
+            if macro_regime == "Trend Up":
+                buy_prob = 0.55
+                sell_prob = 0.20
                 neutral_prob = 0.25
-                signal = "LOWER_CHANNEL_DISTRIBUTION"
+                signal = "BULLISH_LOWER_CHANNEL_DIP"
+            elif macro_regime == "Trend Down":
+                sell_prob = 0.50
+                buy_prob = 0.25
+                neutral_prob = 0.25
+                signal = "BEARISH_LOWER_CHANNEL_CONTINUATION"
+            else:
+                buy_prob = 0.45
+                sell_prob = 0.25
+                neutral_prob = 0.30
+                signal = "RANGE_LOW_SUPPORT_PRESSURE"
+        else:
+            # Equilibrium Zone (0.40 to 0.60)
+            buy_prob = 0.33
+            sell_prob = 0.33
+            neutral_prob = 0.34
+            signal = "MID_CHANNEL_EQUILIBRIUM"
 
         confidence = round(abs(buy_prob - sell_prob) * 2, 2)
         confidence = min(1.0, max(0.2, confidence))
@@ -289,10 +322,9 @@ class MomentumBrain:
         return 100 - (100 / (1 + rs))
 
     @classmethod
-    def analyze(cls, df: pd.DataFrame, timeframe: str = "1h") -> BrainVote:
+    def analyze(cls, df: pd.DataFrame, macro_regime: str = "Range / Consolidation", timeframe: str = "1h") -> BrainVote:
         close = df["Close"]
 
-        # Triple RSI parameters tailored per timeframe
         if timeframe in ["15m", "1m", "5m"]:
             periods = (6, 12, 24)
         elif timeframe == "4h":
@@ -306,11 +338,9 @@ class MomentumBrain:
         rsi_mid = cls._compute_rsi(close, periods[1])
         rsi_slow = cls._compute_rsi(close, periods[2])
 
-        # Dual EMAs (9 and 21)
         ema9 = close.ewm(span=9, adjust=False).mean()
         ema21 = close.ewm(span=21, adjust=False).mean()
 
-        # MACD (12, 26, 9)
         ema12 = close.ewm(span=12, adjust=False).mean()
         ema26 = close.ewm(span=26, adjust=False).mean()
         macd_line = ema12 - ema26
@@ -331,19 +361,18 @@ class MomentumBrain:
         curr_ema9 = ema9.iloc[-1]
         curr_ema21 = ema21.iloc[-1]
 
-        # Momentum Scoring
         bullish_score = 0.0
         bearish_score = 0.0
 
-        # Fast RSI Rebound check
+        # Fast RSI check
         if curr_rsi_fast < 30:
-            bullish_score += 0.35  # Oversold bounce potential
+            bullish_score += 0.35
         elif curr_rsi_fast > 70:
-            bearish_score += 0.35  # Overbought exhaustion
+            bearish_score += 0.35
         elif curr_rsi_fast >= 50 and rsi_fast_slope > 0:
-            bullish_score += 0.30
+            bullish_score += 0.25
         elif curr_rsi_fast < 50 and rsi_fast_slope < 0:
-            bearish_score += 0.30
+            bearish_score += 0.25
 
         # EMA Alignment
         if curr_close > curr_ema21 and curr_ema9 > curr_ema21:
@@ -351,11 +380,17 @@ class MomentumBrain:
         elif curr_close < curr_ema21 and curr_ema9 < curr_ema21:
             bearish_score += 0.30
 
-        # MACD Histogram Acceleration
+        # MACD Acceleration
         if hist_delta > 0:
             bullish_score += 0.25
         else:
             bearish_score += 0.25
+
+        # Macro Trend confluence penalty
+        if macro_regime == "Trend Down":
+            bearish_score += 0.20
+        elif macro_regime == "Trend Up":
+            bullish_score += 0.20
 
         total = bullish_score + bearish_score + 0.20
         buy_prob = round(bullish_score / total, 4)
@@ -406,7 +441,7 @@ class VolatilityBrain:
         return tr.rolling(window=period).mean()
 
     @classmethod
-    def analyze(cls, df: pd.DataFrame) -> BrainVote:
+    def analyze(cls, df: pd.DataFrame, macro_regime: str = "Range / Consolidation") -> BrainVote:
         close = df["Close"]
         atr = cls._compute_atr(df, period=14)
 
@@ -447,21 +482,34 @@ class VolatilityBrain:
             breakout_imminent = False
 
         dist_from_sma = (curr_close - sma20.iloc[-1]) / (curr_atr if curr_atr > 0 else 1.0)
-        if dist_from_sma > 0.5:
-            buy_prob = 0.50 if breakout_imminent else 0.42
-            sell_prob = 0.28
-            neutral_prob = 0.22
-            signal = "VOLATILITY_UPWARD_EXPANSION"
-        elif dist_from_sma < -0.5:
-            buy_prob = 0.28
-            sell_prob = 0.50 if breakout_imminent else 0.42
-            neutral_prob = 0.22
-            signal = "VOLATILITY_DOWNWARD_BREAKDOWN"
+        
+        # When coiled in a 4H downtrend, probability leans downward
+        if macro_regime == "Trend Down":
+            sell_prob = 0.50 if breakout_imminent else 0.45
+            buy_prob = 0.25
+            neutral_prob = 0.25
+            signal = "VOLATILITY_COMPRESSION_DOWNWARD_BIAS"
+        elif macro_regime == "Trend Up":
+            buy_prob = 0.50 if breakout_imminent else 0.45
+            sell_prob = 0.25
+            neutral_prob = 0.25
+            signal = "VOLATILITY_COMPRESSION_UPWARD_BIAS"
         else:
-            buy_prob = 0.34
-            sell_prob = 0.34
-            neutral_prob = 0.32
-            signal = "VOLATILITY_ENERGY_STORAGE"
+            if dist_from_sma > 0.5:
+                buy_prob = 0.40
+                sell_prob = 0.30
+                neutral_prob = 0.30
+                signal = "VOLATILITY_UPWARD_EXPANSION"
+            elif dist_from_sma < -0.5:
+                buy_prob = 0.30
+                sell_prob = 0.40
+                neutral_prob = 0.30
+                signal = "VOLATILITY_DOWNWARD_BREAKDOWN"
+            else:
+                buy_prob = 0.33
+                sell_prob = 0.33
+                neutral_prob = 0.34
+                signal = "VOLATILITY_ENERGY_STORAGE"
 
         total = buy_prob + neutral_prob + sell_prob
         return BrainVote(
@@ -483,7 +531,10 @@ class VolatilityBrain:
 
 
 class PredictiveEnsembleEngine:
-    """Ensemble Engine generating honest probabilities and confluence trade directives."""
+    """
+    Algorithmic Trading Bot Directive & Consensus Engine.
+    Zero-contradiction confluence across Macro Structure, Order Book Liquidity, and Statistical Envelopes.
+    """
 
     @classmethod
     def generate_advisory(cls, symbol: str = "BTCUSDT", timeframe: str = "1h") -> AdvisoryReport:
@@ -504,14 +555,12 @@ class PredictiveEnsembleEngine:
         else:
             macro_regime_4h = "Range / Consolidation"
 
-        # 3. Analyze Brains
-        stat_vote = StatisticalBrain.analyze(df)
-        mom_vote = MomentumBrain.analyze(df, timeframe=timeframe)
-        vol_vote = VolatilityBrain.analyze(df)
+        # 3. Analyze Brains with Macro Context
+        stat_vote = StatisticalBrain.analyze(df, macro_regime=macro_regime_4h)
+        mom_vote = MomentumBrain.analyze(df, macro_regime=macro_regime_4h, timeframe=timeframe)
+        vol_vote = VolatilityBrain.analyze(df, macro_regime=macro_regime_4h)
 
-        # 4. Integrate Order Book Weighting
-        # If bid wall is heavily skewed (> +20% imbalance), institutional absorption provides support.
-        # If ask wall is heavily skewed (< -20% imbalance), overhead resistance is heavy.
+        # 4. Integrate Dynamic Weights & Order Book Microstructure
         w_stat, w_mom, w_vol = 0.35, 0.40, 0.25
         if vol_vote.details["breakout_imminent"]:
             w_stat, w_mom, w_vol = 0.20, 0.45, 0.35
@@ -520,8 +569,10 @@ class PredictiveEnsembleEngine:
         raw_neutral = (stat_vote.neutral_prob * w_stat) + (mom_vote.neutral_prob * w_mom) + (vol_vote.neutral_prob * w_vol)
         raw_sell = (stat_vote.sell_prob * w_stat) + (mom_vote.sell_prob * w_mom) + (vol_vote.sell_prob * w_vol)
 
-        # Apply Order Book Imbalance adjustment (max ±5%)
-        ob_shift = (orderbook.imbalance_pct / 100.0) * 0.05
+        # Institutional Order Book Imbalance Alpha (Up to ±15% probability shift based on real limit walls)
+        # Positive imbalance (> +15%) = Bid wall support
+        # Negative imbalance (< -15%) = Heavy ask wall overhead (like -46.5%)
+        ob_shift = (orderbook.imbalance_pct / 100.0) * 0.15
         raw_buy = max(0.05, raw_buy + ob_shift)
         raw_sell = max(0.05, raw_sell - ob_shift)
 
@@ -531,75 +582,128 @@ class PredictiveEnsembleEngine:
         neutral_pct = round(100.0 - buy_pct - sell_pct, 1)
 
         # Overall Bias
-        if buy_pct >= 58.0:
+        if buy_pct >= 55.0:
             overall_bias = "STRONG_BUY_PROBABILITY"
-        elif buy_pct >= 51.0:
+        elif buy_pct >= 48.0 and buy_pct > sell_pct:
             overall_bias = "MODERATE_BUY_BIAS"
-        elif sell_pct >= 58.0:
+        elif sell_pct >= 55.0:
             overall_bias = "STRONG_SELL_PROBABILITY"
-        elif sell_pct >= 51.0:
+        elif sell_pct >= 48.0 and sell_pct > buy_pct:
             overall_bias = "MODERATE_SELL_BIAS"
         else:
             overall_bias = "NEUTRAL_CONSOLIDATION"
 
-        # 5. Liquidity Sweep Detection
+        # 5. Price Envelopes and Technical Levels
         high_24h = float(df["High"].iloc[-24:].max())
         low_24h = float(df["Low"].iloc[-24:].min())
-        prev_low = float(df["Low"].iloc[-6:-1].min())
         bounce_from_low = curr_price - low_24h
         bounce_pct = (bounce_from_low / low_24h) * 100.0 if low_24h > 0 else 0.0
 
         atr_val = vol_vote.details["atr"]
+        pct_b = stat_vote.details["percent_b"]
+        upper_bb = stat_vote.details["upper_band"]
+        lower_bb = stat_vote.details["lower_band"]
+        middle_bb = stat_vote.details["middle_band"]
+        ema21 = mom_vote.details["ema21"]
 
-        # 6. Trade Directive Generation (Confluence & Anti-Contradiction)
+        # 6. INSTITUTIONAL BOT DIRECTIVE DECISION MATRIX (ZERO CONTRADICTION)
         is_counter_trend = (macro_regime_4h == "Trend Down")
 
-        if bounce_from_low >= 120.0 and orderbook.imbalance_pct > 10.0 and mom_vote.details["rsi_fast_slope"] > 0:
-            # We have a liquidity sweep rebound
-            if is_counter_trend:
-                # 4H is in a downtrend! Do NOT shout aggressive ENTER LONG NOW. Downgrade to counter-trend scalp.
-                action = "COUNTER-TREND SCALP: BUY PULLBACK LIMIT"
-                rationale = (
-                    f"Bottom liquidity swept to ${low_24h:,.0f} with +${bounce_from_low:.0f} (+{bounce_pct:.2f}%) bounce "
-                    f"and +{orderbook.imbalance_pct}% bid imbalance. However, 4H Macro is in a {macro_regime_4h}. "
-                    f"Take conservative scalp targets only."
-                )
-                tp1 = round(curr_price + (0.5 * atr_val), 2)
-                tp2 = round(curr_price + (0.9 * atr_val), 2)
-                invalidation = round(low_24h - (0.15 * atr_val), 2)
-                target_prob = buy_pct  # Honest probability matching the ensemble!
-            else:
-                action = "ENTER LONG NOW"
-                rationale = (
-                    f"Liquidity swept to ${low_24h:,.0f} and reclaimed with +${bounce_from_low:.0f} rebound. "
-                    f"4H Macro trend aligns ({macro_regime_4h}). Bid imbalance: +{orderbook.imbalance_pct}%."
-                )
-                tp1 = round(curr_price + (0.8 * atr_val), 2)
-                tp2 = round(curr_price + (1.6 * atr_val), 2)
-                invalidation = round(low_24h - (0.2 * atr_val), 2)
-                target_prob = buy_pct
-        elif sell_pct > 55.0 and is_counter_trend:
-            action = "TREND CONTINUATION: SET SELL RETEST LIMIT"
+        # SCENARIO 1: Bearish Macro (4H Down) + Price testing Upper Channel / Resistance (%B >= 0.60) + Overhead Ask Wall
+        if macro_regime_4h == "Trend Down" and pct_b >= 0.58 and orderbook.imbalance_pct < -10.0:
+            action = "SET SELL LIMIT AT RESISTANCE (BEARISH FADE)"
             rationale = (
-                f"4H Macro is in a {macro_regime_4h} and momentum confirms downward pressure. "
-                f"Look for short retest entries near EMA21 (${mom_vote.details['ema21']:,.2f})."
+                f"4H Macro structure is in a Trend Down and price is testing upper channel resistance (%B: {pct_b:.3f}). "
+                f"Heavy overhead ask wall ({orderbook.imbalance_pct:.1f}% imbalance, ${orderbook.ask_depth_usd:,.0f} asks) "
+                f"caps upward moves. Algorithmic bot directives favor selling the upper band fade."
             )
+            entry = curr_price
+            invalidation = round(upper_bb + (0.25 * atr_val), 2)
+            tp1 = round(middle_bb, 2)
+            tp2 = round(lower_bb, 2)
+            target_prob = sell_pct
+
+        # SCENARIO 2: Bearish Macro (4H Down) + Downward Breakdown / Acceleration
+        elif macro_regime_4h == "Trend Down" and (sell_pct > 55.0 or (pct_b < 0.40 and orderbook.imbalance_pct < -20.0)):
+            action = "TREND CONTINUATION: ENTER SHORT ON RETEST"
+            rationale = (
+                f"4H Macro trend is Down with confirmed downward order flow. Sellers are absorbing the bid depth. "
+                f"Targeting continuation toward lower support."
+            )
+            entry = round(curr_price, 2)
+            invalidation = round(curr_price + (0.6 * atr_val), 2)
             tp1 = round(curr_price - (0.8 * atr_val), 2)
             tp2 = round(curr_price - (1.6 * atr_val), 2)
-            invalidation = round(curr_price + (0.5 * atr_val), 2)
             target_prob = sell_pct
-        else:
-            action = "SET BUY LIMIT AT SUPPORT"
+
+        # SCENARIO 3: Liquidity Sweep Rebound (Bottom swept + Rebound > $120 + Bid Imbalance > +15%)
+        elif bounce_from_low >= 120.0 and orderbook.imbalance_pct > 15.0 and mom_vote.details["rsi_fast_slope"] > 0:
+            if is_counter_trend:
+                action = "COUNTER-TREND SCALP: BUY PULLBACK LIMIT"
+                rationale = (
+                    f"Bottom liquidity swept to ${low_24h:,.0f} with +${bounce_from_low:.0f} (+{bounce_pct:.2f}%) rebound "
+                    f"and +{orderbook.imbalance_pct}% bid wall. 4H Macro is Bearish: take tight scalp targets only."
+                )
+                entry = round(curr_price, 2)
+                invalidation = round(low_24h - (0.2 * atr_val), 2)
+                tp1 = round(curr_price + (0.5 * atr_val), 2)
+                tp2 = round(curr_price + (0.9 * atr_val), 2)
+                target_prob = buy_pct
+            else:
+                action = "ENTER LONG NOW (MOMENTUM REBOUND)"
+                rationale = (
+                    f"Liquidity swept to ${low_24h:,.0f} and reclaimed with strong bid-side imbalance (+{orderbook.imbalance_pct}%). "
+                    f"4H Macro trend is aligned."
+                )
+                entry = round(curr_price, 2)
+                invalidation = round(low_24h - (0.2 * atr_val), 2)
+                tp1 = round(curr_price + (0.8 * atr_val), 2)
+                tp2 = round(curr_price + (1.6 * atr_val), 2)
+                target_prob = buy_pct
+
+        # SCENARIO 4: Bullish Macro (4H Up) + Dip to Support
+        elif macro_regime_4h == "Trend Up" and pct_b <= 0.45 and orderbook.imbalance_pct > -10.0:
+            action = "TREND FOLLOWING: SET BUY LIMIT AT SUPPORT"
             rationale = (
-                f"Range-bound consolidation. Market is coiled ({vol_vote.details['compression_state']}). "
-                f"Wait for limit fill at lower band support rather than chasing market orders."
+                f"4H Macro is in a Trend Up. Price has pulled back to support (%B: {pct_b:.3f}). "
+                f"Algorithmic model buys the dip aligned with macro momentum."
             )
-            tp1 = round(stat_vote.details["middle_band"], 2)
-            tp2 = round(stat_vote.details["upper_band"], 2)
-            invalidation = round(stat_vote.details["lower_band"] - (0.2 * atr_val), 2)
+            entry = round(curr_price, 2)
+            invalidation = round(lower_bb - (0.25 * atr_val), 2)
+            tp1 = round(middle_bb, 2)
+            tp2 = round(upper_bb, 2)
             target_prob = buy_pct
 
-        risk_pct = round((abs(curr_price - invalidation) / curr_price) * 100.0, 2)
+        # SCENARIO 5: Range-Bound Ping-Pong (Mid-Channel / Compression)
+        else:
+            if pct_b >= 0.50:
+                action = "RANGE DEFENSE: SET SELL LIMIT AT UPPER BAND"
+                rationale = (
+                    f"Range-bound consolidation (%B: {pct_b:.3f}). Price is in upper half of range. "
+                    f"Set limit sell order near upper band (${upper_bb:,.2f}) rather than chasing market."
+                )
+                entry = round(curr_price, 2)
+                invalidation = round(upper_bb + (0.25 * atr_val), 2)
+                tp1 = round(middle_bb, 2)
+                tp2 = round(lower_bb, 2)
+                target_prob = sell_pct
+            else:
+                action = "RANGE DEFENSE: SET BUY LIMIT AT LOWER BAND"
+                rationale = (
+                    f"Range-bound consolidation (%B: {pct_b:.3f}). Price is in lower half of range. "
+                    f"Set limit buy order near lower band (${lower_bb:,.2f}) rather than chasing market."
+                )
+                entry = round(curr_price, 2)
+                invalidation = round(lower_bb - (0.25 * atr_val), 2)
+                tp1 = round(middle_bb, 2)
+                tp2 = round(upper_bb, 2)
+                target_prob = buy_pct
+
+        # Risk & Reward Metrics
+        risk_dist = abs(curr_price - invalidation)
+        reward_dist = abs(tp1 - curr_price)
+        rr_ratio = round(reward_dist / risk_dist, 2) if risk_dist > 0 else 1.0
+        risk_pct = round((risk_dist / curr_price) * 100.0, 2)
 
         directive = TradeDirective(
             action=action,
@@ -608,6 +712,7 @@ class PredictiveEnsembleEngine:
             invalidation_stop=invalidation,
             take_profit_1=tp1,
             take_profit_2=tp2,
+            risk_reward_ratio=rr_ratio,
             risk_pct=risk_pct,
             target_probability=target_prob,
             is_counter_trend=is_counter_trend
@@ -672,11 +777,14 @@ class PredictiveEnsembleEngine:
 
 
 if __name__ == "__main__":
-    print("Testing Upgraded Quantitative Engine with Binance Real-Time Feeds...")
-    report = PredictiveEnsembleEngine.generate_advisory("BTCUSDT", "1h")
+    print("Testing Institutional Trading Engine...")
+    report = PredictiveEnsembleEngine.generate_advisory("BTCUSDT", "15m")
     print(f"Price: ${report.latest_price:,.2f}")
+    print(f"4H Macro: {report.macro_regime_4h}")
+    print(f"Percent %B: {report.statistical_brain.details['percent_b']}")
     print(f"OrderBook Imbalance: {report.orderbook.imbalance_pct}% (Bids: ${report.orderbook.bid_depth_usd:,.0f} / Asks: ${report.orderbook.ask_depth_usd:,.0f})")
     print(f"Probabilities -> BUY: {report.buy_probability}% | NEUTRAL: {report.neutral_probability}% | SELL: {report.sell_probability}%")
-    print(f"4H Macro: {report.macro_regime_4h}")
-    print(f"Action Directive: {report.trade_directive.action}")
+    print(f"Overall Bias: {report.overall_bias}")
+    print(f"Directive Action: {report.trade_directive.action}")
     print(f"Directive Rationale: {report.trade_directive.rationale}")
+    print(f"Entry: ${report.trade_directive.entry_trigger} | Invalidation: ${report.trade_directive.invalidation_stop} | TP1: ${report.trade_directive.take_profit_1}")
