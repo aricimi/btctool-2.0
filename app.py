@@ -11,11 +11,17 @@ from plotly.subplots import make_subplots
 import datetime
 import time
 
-from engine import (
-    MarketDataService,
-    PredictiveEnsembleEngine,
-    AdvisoryReport
-)
+import importlib
+import engine
+try:
+    importlib.reload(engine)
+except Exception:
+    pass
+
+MarketDataService = getattr(engine, "MarketDataService", getattr(engine, "QuantitativeDataEngine", None))
+PredictiveEnsembleEngine = engine.PredictiveEnsembleEngine
+AdvisoryReport = engine.AdvisoryReport
+
 
 # Page configuration
 st.set_page_config(
