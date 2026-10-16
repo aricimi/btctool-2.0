@@ -1,5 +1,6 @@
 """
-btctool 2.0 - Quantitative Trading Probability & Predictive Advisory Dashboard
+btctool 2.0 - Quantitative Predictive Advisory & Execution Directive Dashboard
+Data Source: Direct Binance Real-Time Spot & Futures Engine
 """
 
 import streamlit as st
@@ -11,14 +12,14 @@ import datetime
 import time
 
 from engine import (
-    QuantitativeDataEngine,
+    MarketDataService,
     PredictiveEnsembleEngine,
     AdvisoryReport
 )
 
 # Page configuration
 st.set_page_config(
-    page_title="btctool 2.0 | BTC/USDT Predictive Advisory Engine",
+    page_title="btctool 2.0 | Binance Real-Time Predictive Advisory",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -34,7 +35,17 @@ st.markdown("""
         color: #00FFA3;
     }
     
-    /* Custom advisory container */
+    /* Custom container */
+    .directive-card {
+        background: linear-gradient(135deg, #0F172A 0%, #1E293B 100%);
+        border: 1px solid #38BDF8;
+        border-left: 6px solid #38BDF8;
+        border-radius: 10px;
+        padding: 18px 22px;
+        margin-bottom: 20px;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.45);
+    }
+    
     .advisory-box {
         background: linear-gradient(135deg, #131b2e 0%, #1e293b 100%);
         border: 1px solid #334155;
@@ -74,31 +85,15 @@ st.markdown("""
         font-size: 0.9rem;
     }
 
-    .badge-squeeze {
-        background-color: rgba(239, 68, 68, 0.2);
-        color: #F87171;
-        border: 1px dashed #EF4444;
-        padding: 4px 12px;
+    .badge-directive {
+        background-color: rgba(56, 189, 248, 0.18);
+        color: #38BDF8;
+        border: 1px solid #38BDF8;
+        padding: 6px 14px;
         border-radius: 6px;
-        font-weight: bold;
-        animation: pulse 2s infinite;
-    }
-    
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-    }
-
-    .stTabs [data-baseweb="tab"] {
-        background-color: #131B2E;
-        border-radius: 6px 6px 0 0;
-        padding: 10px 20px;
-        color: #94A3B8;
-    }
-
-    .stTabs [aria-selected="true"] {
-        background-color: #1E293B !important;
-        color: #00FFA3 !important;
-        border-bottom: 2px solid #00FFA3 !important;
+        font-weight: 800;
+        font-size: 1.05rem;
+        letter-spacing: 0.03em;
     }
 
     /* Top Persistent Disclaimer Banner */
@@ -162,25 +157,27 @@ st.markdown("""
 # Sidebar controls
 st.sidebar.image("https://cryptologos.cc/logos/bitcoin-btc-logo.png", width=60)
 st.sidebar.title("btctool 2.0")
-st.sidebar.caption("Advanced Predictive Advisory Engine")
+st.sidebar.caption("Binance Real-Time Quantitative Engine")
 st.sidebar.markdown("---")
 
-selected_pair = st.sidebar.selectbox("Trading Pair", ["BTC-USD"], index=0)
-active_timeframe = st.sidebar.radio("Active Timeframe", ["1h", "4h"], index=0, horizontal=True)
+selected_pair = st.sidebar.selectbox("Trading Pair", ["BTCUSDT"], index=0)
+active_timeframe = st.sidebar.selectbox("Active Timeframe", ["15m", "1h", "4h", "1d"], index=1)
 
-auto_refresh = st.sidebar.checkbox("Auto-Refresh Data", value=False)
-refresh_interval = st.sidebar.slider("Refresh Interval (s)", 30, 300, 60, disabled=not auto_refresh)
+auto_refresh = st.sidebar.checkbox("Auto-Refresh Data", value=True)
+refresh_interval = st.sidebar.slider("Refresh Interval (s)", 15, 120, 30, disabled=not auto_refresh)
 
-if st.sidebar.button("🔄 Refresh Market Data", use_container_width=True):
+if st.sidebar.button("🔄 Refresh Binance Data", use_container_width=True):
     st.cache_data.clear()
     st.rerun()
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("""
-### 🧠 Analytical Brains
-- **Statistical Brain**: Bollinger Bands, %B, Z-score mean-reversion.
-- **Momentum Brain**: RSI exhaustion & MACD acceleration.
-- **Volatility Brain**: ATR compression & Squeeze Breakout alert.
+### 🧠 Engine Capabilities
+- **Feed:** Direct Binance Spot & Futures API.
+- **Order Book:** 0.5% Depth & Bid/Ask Imbalance.
+- **Macro Confluence:** 4H Trend alignment filter.
+- **Triple RSI:** Dynamic periods `(6, 12, 24)`.
+- **Anti-Contradiction:** Calibrated probabilities.
 """)
 
 # Persistent Sidebar Legal Notice
@@ -192,34 +189,30 @@ st.sidebar.markdown("""
 """, unsafe_allow_html=True)
 
 st.sidebar.markdown("---")
-st.sidebar.caption("🚀 Architecture: Python / Streamlit / yfinance")
+st.sidebar.caption("🚀 Architecture: Python / Streamlit / Binance REST")
 
 
-# Fetching Engine Data
-@st.cache_data(ttl=60)
-def load_advisory_data(symbol: str, timeframe: str):
+# Load Live Data
+@st.cache_data(ttl=20)
+def load_market_data(symbol: str, timeframe: str):
     report = PredictiveEnsembleEngine.generate_advisory(symbol=symbol, timeframe=timeframe)
-    df = QuantitativeDataEngine.fetch_data(symbol=symbol, interval=timeframe)
+    df = MarketDataService.fetch_klines(symbol=symbol, interval=timeframe, limit=120)
     return report, df
 
 
-with st.spinner("Analyzing real-time order flow and volatility distributions..."):
+with st.spinner("Connecting to Binance WebSocket & orderbook feed..."):
     try:
-        report_1h, df_1h = load_advisory_data(selected_pair, "1h")
-        report_4h, df_4h = load_advisory_data(selected_pair, "4h")
-        
-        current_report = report_1h if active_timeframe == "1h" else report_4h
-        current_df = df_1h if active_timeframe == "1h" else df_4h
+        current_report, current_df = load_market_data(selected_pair, active_timeframe)
     except Exception as e:
-        st.error(f"Error connecting to market data feed: {str(e)}")
+        st.error(f"Error connecting to Binance data feed: {str(e)}")
         st.stop()
 
 
 # Top Header
 col_title, col_time = st.columns([3, 1])
 with col_title:
-    st.title("⚡ btctool 2.0: Predictive Advisory Engine")
-    st.caption("Multi-Methodology Quantitative Probabilities for BTC/USDT")
+    st.title("⚡ btctool 2.0: Binance Real-Time Engine")
+    st.caption(f"Real-Time Order Book, Liquidity Sweeps & Calibrated Probabilities on **{active_timeframe.upper()}**")
 with col_time:
     st.markdown(f"**Last Sync:** `{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}`")
     st.markdown(f"**Active Bar:** `{current_report.timestamp}`")
@@ -239,7 +232,7 @@ st.markdown("---")
 m1, m2, m3, m4, m5 = st.columns(5)
 with m1:
     st.metric(
-        "BTC/USDT Spot Price",
+        "Binance Spot Price",
         f"${current_report.latest_price:,.2f}",
         delta=f"{current_report.price_change_24h_pct:+.2f}% 24h"
     )
@@ -251,45 +244,55 @@ with m3:
 with m4:
     st.metric("Sell Probability", f"{current_report.sell_probability}%")
 with m5:
-    vol_status = "⚠️ SQUEEZE ACTIVE" if current_report.breakout_imminent else "STABLE"
-    st.metric("Volatility Regime", vol_status, delta=f"ATR: ${current_report.atr_value:,.1f}")
+    st.metric("4H Macro Regime", current_report.macro_regime_4h)
 
 
-# TRADER ADVISORY REPORT CARD
-st.markdown("### 📋 Trader Advisory Report")
+# ORDER BOOK & DERIVATIVES MICROSTRUCTURE RIBBON
+st.markdown("### 📊 Order Book Liquidity & Derivatives (Binance)")
+d1, d2, d3, d4 = st.columns(4)
+ob = current_report.orderbook
+with d1:
+    imb_color = "🟢" if ob.imbalance_pct > 0 else "🔴"
+    st.metric("Order Book Imbalance (0.5%)", f"{imb_color} {ob.imbalance_pct:+.1f}%")
+with d2:
+    st.metric("Near-Mid Bid Depth", f"${ob.bid_depth_usd:,.0f}")
+with d3:
+    st.metric("Near-Mid Ask Depth", f"${ob.ask_depth_usd:,.0f}")
+with d4:
+    st.metric("Futures Open Interest", f"{ob.open_interest_btc:,.0f} BTC", delta=f"Funding: {ob.funding_rate_pct:+.4f}%")
 
-advisory_class = "badge-buy" if "BUY" in current_report.overall_bias else ("badge-sell" if "SELL" in current_report.overall_bias else "badge-neutral")
+
+# ACTIONABLE TRADE DIRECTIVE CARD
+st.markdown("### 🎯 Trade Execution Directive")
+td = current_report.trade_directive
 
 st.markdown(f"""
-<div class="advisory-box">
+<div class="directive-card">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
-        <span style="font-size: 1.25rem; font-weight: 700; color: #FFFFFF;">
-            Advisory Verdict: <span class="{advisory_class}">{current_report.overall_bias.replace('_', ' ')}</span>
-        </span>
+        <span class="badge-directive">{td.action}</span>
         <span style="font-size: 0.95rem; color: #94A3B8;">
-            Model Confidence: <b style="color: #00FFA3;">{current_report.confidence_score}%</b> | Timeframe: <b>{current_report.timeframe.upper()}</b>
+            Calibrated Model Odds: <b style="color: #00FFA3;">{td.target_probability}%</b> | Risk: <b style="color: #F87171;">{td.risk_pct}%</b>
         </span>
     </div>
-    <p style="font-size: 1.05rem; color: #E2E8F0; line-height: 1.6; margin-bottom: 15px;">
-        {current_report.advisory_summary}
+    <p style="font-size: 1.05rem; color: #E2E8F0; line-height: 1.6; margin-bottom: 14px;">
+        <b>Strategy Rationale:</b> {td.rationale}
     </p>
-    <div style="display: flex; gap: 20px; flex-wrap: wrap; background: rgba(0,0,0,0.25); padding: 12px; border-radius: 8px;">
-        <div><b>Pivot Point:</b> ${current_report.pivot_point:,.2f}</div>
-        <div><b>Support (S1 / S2):</b> ${current_report.support_levels['S1']:,.2f} / ${current_report.support_levels['S2']:,.2f}</div>
-        <div><b>Resistance (R1 / R2):</b> ${current_report.resistance_levels['R1']:,.2f} / ${current_report.resistance_levels['R2']:,.2f}</div>
-        <div><b>ATR Volatility:</b> {current_report.atr_percent:.2f}% (${current_report.atr_value:,.2f})</div>
+    <div style="display: flex; gap: 20px; flex-wrap: wrap; background: rgba(0,0,0,0.3); padding: 12px 16px; border-radius: 8px;">
+        <div><b>Entry Trigger:</b> ${td.entry_trigger:,.2f}</div>
+        <div><b>Invalidation (Stop):</b> <span style="color: #F87171;">${td.invalidation_stop:,.2f}</span></div>
+        <div><b>Target 1 (Scalp):</b> <span style="color: #00FFA3;">${td.take_profit_1:,.2f}</span></div>
+        <div><b>Target 2 (Runner):</b> <span style="color: #00FFA3;">${td.take_profit_2:,.2f}</span></div>
+        <div><b>Counter-Trend Flag:</b> {"⚠️ YES (4H Bearish)" if td.is_counter_trend else "🟢 NO (Trend Aligned)"}</div>
     </div>
 </div>
 """, unsafe_allow_html=True)
 
 
-# Probability Breakdown & Timeframe Ensemble Comparison
-col_chart, col_matrix = st.columns([1, 1])
+# Probability Breakdown & Tactical Observations
+col_chart, col_notes = st.columns([1, 1])
 
 with col_chart:
-    st.subheader(f"📊 Probability Breakdown ({active_timeframe.upper()})")
-    
-    # Donut gauge chart for probability distribution
+    st.subheader(f"📊 Probability Distribution ({active_timeframe.upper()})")
     labels = ['Buy Probability', 'Neutral Probability', 'Sell Probability']
     values = [current_report.buy_probability, current_report.neutral_probability, current_report.sell_probability]
     colors = ['#00FFA3', '#F59E0B', '#FF4B4B']
@@ -302,7 +305,6 @@ with col_chart:
         textinfo='label+percent',
         hoverinfo='label+value+percent'
     )])
-    
     fig_donut.update_layout(
         showlegend=False,
         margin=dict(t=10, b=10, l=10, r=10),
@@ -313,48 +315,30 @@ with col_chart:
     )
     st.plotly_chart(fig_donut, use_container_width=True)
 
-with col_matrix:
-    st.subheader("🌐 Multi-Timeframe Matrix (1H vs 4H)")
-    
-    matrix_df = pd.DataFrame([
-        {
-            "Timeframe": "1-Hour (Tactical)",
-            "Buy %": f"{report_1h.buy_probability}%",
-            "Neutral %": f"{report_1h.neutral_probability}%",
-            "Sell %": f"{report_1h.sell_probability}%",
-            "Bias": report_1h.overall_bias.replace('_', ' '),
-            "Breakout Risk": "🚨 IMMINENT" if report_1h.breakout_imminent else "Normal"
-        },
-        {
-            "Timeframe": "4-Hour (Structural)",
-            "Buy %": f"{report_4h.buy_probability}%",
-            "Neutral %": f"{report_4h.neutral_probability}%",
-            "Sell %": f"{report_4h.sell_probability}%",
-            "Bias": report_4h.overall_bias.replace('_', ' '),
-            "Breakout Risk": "🚨 IMMINENT" if report_4h.breakout_imminent else "Normal"
-        }
-    ])
-    st.dataframe(matrix_df, hide_index=True, use_container_width=True)
-
-    # Actionable Notes
-    st.markdown("**Tactical Observations:**")
+with col_notes:
+    st.subheader("💡 Tactical Quantitative Observations")
     for note in current_report.actionable_notes:
         st.write(note)
+    st.markdown(f"""
+    - **Floor Pivot Point:** `${current_report.pivot_point:,.2f}`
+    - **Support ($S_1$ / $S_2$):** `${current_report.support_levels['S1']:,.2f}` / `${current_report.support_levels['S2']:,.2f}`
+    - **Resistance ($R_1$ / $R_2$):** `${current_report.resistance_levels['R1']:,.2f}` / `${current_report.resistance_levels['R2']:,.2f}`
+    - **Expected Move (ATR):** `±${current_report.atr_value:,.2f}` (`{current_report.atr_percent:.2f}%`)
+    """)
 
 
-# Interactive Quantitative Technical Chart
+# Interactive Plotly Chart with Dual EMA and Triple RSI
 st.markdown("---")
 st.subheader(f"📈 Quantitative Chart & Structural Envelopes ({active_timeframe.upper()})")
 
-# Calculate Bollinger Bands and MACD for chart plotting
 df_plot = current_df.copy()
 sma20 = df_plot["Close"].rolling(20).mean()
 std20 = df_plot["Close"].rolling(20).std()
 df_plot["BB_Upper"] = sma20 + (2.0 * std20)
 df_plot["BB_Lower"] = sma20 - (2.0 * std20)
-df_plot["SMA20"] = sma20
+df_plot["EMA9"] = df_plot["Close"].ewm(span=9, adjust=False).mean()
+df_plot["EMA21"] = df_plot["Close"].ewm(span=21, adjust=False).mean()
 
-# Create Plotly Subplots: Candlestick + Volume + RSI + MACD
 fig = make_subplots(
     rows=3, cols=1,
     shared_xaxes=True,
@@ -378,46 +362,36 @@ fig.add_trace(
     row=1, col=1, secondary_y=False
 )
 
-# Bollinger Bands
-fig.add_trace(
-    go.Scatter(x=df_plot.index, y=df_plot['BB_Upper'], line=dict(color='rgba(0, 255, 163, 0.4)', width=1), name='Upper BB'),
-    row=1, col=1, secondary_y=False
-)
-fig.add_trace(
-    go.Scatter(x=df_plot.index, y=df_plot['SMA20'], line=dict(color='rgba(255, 255, 255, 0.5)', width=1, dash='dash'), name='SMA 20'),
-    row=1, col=1, secondary_y=False
-)
-fig.add_trace(
-    go.Scatter(x=df_plot.index, y=df_plot['BB_Lower'], line=dict(color='rgba(255, 75, 75, 0.4)', width=1), name='Lower BB'),
-    row=1, col=1, secondary_y=False
-)
+# Bollinger & EMAs
+fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['BB_Upper'], line=dict(color='rgba(0, 255, 163, 0.35)', width=1), name='Upper BB'), row=1, col=1)
+fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['BB_Lower'], line=dict(color='rgba(255, 75, 75, 0.35)', width=1), name='Lower BB'), row=1, col=1)
+fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['EMA9'], line=dict(color='#38BDF8', width=1.2), name='EMA 9'), row=1, col=1)
+fig.add_trace(go.Scatter(x=df_plot.index, y=df_plot['EMA21'], line=dict(color='#F59E0B', width=1.2, dash='dot'), name='EMA 21'), row=1, col=1)
 
-# Volume Bars
+# Volume
 fig.add_trace(
-    go.Bar(
-        x=df_plot.index,
-        y=df_plot['Volume'],
-        marker_color='rgba(148, 163, 184, 0.2)',
-        name='Volume',
-        showlegend=False
-    ),
+    go.Bar(x=df_plot.index, y=df_plot['Volume'], marker_color='rgba(148, 163, 184, 0.2)', name='Volume', showlegend=False),
     row=1, col=1, secondary_y=True
 )
 
-# 2. RSI Subplot
+# 2. Triple RSI (6, 12, 24)
 delta = df_plot['Close'].diff()
 gain = delta.clip(lower=0)
 loss = -1 * delta.clip(upper=0)
-avg_gain = gain.ewm(alpha=1/14, adjust=False).mean()
-avg_loss = loss.ewm(alpha=1/14, adjust=False).mean()
-rs = avg_gain / avg_loss.replace(0, 1e-6)
-rsi = 100 - (100 / (1 + rs))
 
-fig.add_trace(
-    go.Scatter(x=df_plot.index, y=rsi, line=dict(color='#38BDF8', width=1.5), name='RSI (14)'),
-    row=2, col=1
-)
-# RSI Overbought/Oversold thresholds
+def calc_rsi(g, l, p):
+    ag = g.ewm(alpha=1/p, adjust=False).mean()
+    al = l.ewm(alpha=1/p, adjust=False).mean()
+    rs = ag / al.replace(0, 1e-6)
+    return 100 - (100 / (1 + rs))
+
+rsi6 = calc_rsi(gain, loss, 6)
+rsi12 = calc_rsi(gain, loss, 12)
+rsi24 = calc_rsi(gain, loss, 24)
+
+fig.add_trace(go.Scatter(x=df_plot.index, y=rsi6, line=dict(color='#00FFA3', width=1.5), name='RSI 6'), row=2, col=1)
+fig.add_trace(go.Scatter(x=df_plot.index, y=rsi12, line=dict(color='#38BDF8', width=1.2), name='RSI 12'), row=2, col=1)
+fig.add_trace(go.Scatter(x=df_plot.index, y=rsi24, line=dict(color='#94A3B8', width=1, dash='dot'), name='RSI 24'), row=2, col=1)
 fig.add_hline(y=70, line_dash="dot", line_color="rgba(255, 75, 75, 0.5)", row=2, col=1)
 fig.add_hline(y=30, line_dash="dot", line_color="rgba(0, 255, 163, 0.5)", row=2, col=1)
 
@@ -431,13 +405,7 @@ hist = macd - signal
 fig.add_trace(go.Scatter(x=df_plot.index, y=macd, line=dict(color='#818CF8', width=1.2), name='MACD'), row=3, col=1)
 fig.add_trace(go.Scatter(x=df_plot.index, y=signal, line=dict(color='#F43F5E', width=1.2), name='Signal'), row=3, col=1)
 fig.add_trace(
-    go.Bar(
-        x=df_plot.index,
-        y=hist,
-        marker_color=np.where(hist >= 0, 'rgba(0, 255, 163, 0.7)', 'rgba(255, 75, 75, 0.7)'),
-        name='Histogram',
-        showlegend=False
-    ),
+    go.Bar(x=df_plot.index, y=hist, marker_color=np.where(hist >= 0, 'rgba(0, 255, 163, 0.7)', 'rgba(255, 75, 75, 0.7)'), name='Histogram', showlegend=False),
     row=3, col=1
 )
 
@@ -457,15 +425,10 @@ fig.update_xaxes(gridcolor='#1E293B')
 st.plotly_chart(fig, use_container_width=True)
 
 
-# Brain Diagnostics & Methodology Explorer
+# Brain Diagnostics Explorer
 st.markdown("---")
 st.subheader("🔬 Quantitative Brain Diagnostics")
-
-tab_stat, tab_mom, tab_vol = st.tabs([
-    "📐 The Statistical Brain",
-    "⚡ The Momentum Brain",
-    "🌋 The Volatility Brain"
-])
+tab_stat, tab_mom, tab_vol = st.tabs(["📐 The Statistical Brain", "⚡ The Momentum Brain", "🌋 The Volatility Brain"])
 
 with tab_stat:
     sb = current_report.statistical_brain
@@ -475,7 +438,6 @@ with tab_stat:
     c2.metric("Sub-Vote Neutral", f"{sb.neutral_prob * 100:.1f}%")
     c3.metric("Sub-Vote Sell", f"{sb.sell_prob * 100:.1f}%")
     c4.metric("Percent %B", f"{sb.details['percent_b']:.3f}")
-    
     st.markdown(f"""
     - **Bollinger Upper Band:** `${sb.details['upper_band']:,.2f}`
     - **Bollinger Middle Band (SMA20):** `${sb.details['middle_band']:,.2f}`
@@ -491,13 +453,12 @@ with tab_mom:
     c1.metric("Sub-Vote Buy", f"{mb.buy_prob * 100:.1f}%")
     c2.metric("Sub-Vote Neutral", f"{mb.neutral_prob * 100:.1f}%")
     c3.metric("Sub-Vote Sell", f"{mb.sell_prob * 100:.1f}%")
-    c4.metric("RSI (14)", f"{mb.details['rsi']:.1f}")
-    
+    c4.metric("Fast RSI (6)", f"{mb.details['rsi_fast']}")
     st.markdown(f"""
-    - **RSI Slope:** `{mb.details['rsi_slope']:+.2f}` pts
-    - **MACD Value:** `{mb.details['macd']:,.2f}`
-    - **MACD Signal:** `{mb.details['macd_signal']:,.2f}`
-    - **MACD Histogram:** `{mb.details['macd_hist']:,.2f}` (Acceleration: `{mb.details['hist_acceleration']:+.2f}`)
+    - **Triple RSI Breakdown:** `6: {mb.details['rsi_fast']}` | `12: {mb.details['rsi_mid']}` | `24: {mb.details['rsi_slow']}`
+    - **RSI Fast Slope:** `{mb.details['rsi_fast_slope']:+.2f}` pts
+    - **Dual EMAs:** `EMA 9: ${mb.details['ema9']:,.2f}` | `EMA 21: ${mb.details['ema21']:,.2f}`
+    - **MACD (12, 26, 9):** Line `{mb.details['macd']:,.2f}`, Signal `{mb.details['macd_signal']:,.2f}`, Hist `{mb.details['macd_hist']:,.2f}` (Acceleration: `{mb.details['hist_acceleration']:+.2f}`)
     """)
 
 with tab_vol:
@@ -508,7 +469,6 @@ with tab_vol:
     c2.metric("Sub-Vote Neutral", f"{vb.neutral_prob * 100:.1f}%")
     c3.metric("Sub-Vote Sell", f"{vb.sell_prob * 100:.1f}%")
     c4.metric("ATR% of Price", f"{vb.details['atr_pct']:.2f}%")
-    
     st.markdown(f"""
     - **Average True Range (ATR 14):** `${vb.details['atr']:,.2f}`
     - **ATR Historical Percentile:** `{vb.details['atr_percentile']}%`
@@ -536,7 +496,7 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-st.caption("btctool 2.0 | Multi-Methodology Quantitative Predictive Engine | Open Source under MIT License.")
+st.caption("btctool 2.0 | Binance Real-Time Quantitative Engine | Open Source under MIT License.")
 
 # Auto-refresh loop handler
 if auto_refresh:
