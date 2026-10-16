@@ -238,7 +238,7 @@ st.markdown("---")
 m1, m2, m3, m4, m5 = st.columns(5)
 with m1:
     st.metric(
-        "Binance Spot Price",
+        "BTC/USDT Spot Price",
         f"${current_report.latest_price:,.2f}",
         delta=f"{current_report.price_change_24h_pct:+.2f}% 24h"
     )
@@ -254,7 +254,7 @@ with m5:
 
 
 # ORDER BOOK & DERIVATIVES MICROSTRUCTURE RIBBON
-st.markdown("### 📊 Order Book Liquidity & Derivatives (Binance)")
+st.markdown("### 📊 Order Book Liquidity & Derivatives (Bybit + OKX)")
 d1, d2, d3, d4 = st.columns(4)
 ob = current_report.orderbook
 with d1:

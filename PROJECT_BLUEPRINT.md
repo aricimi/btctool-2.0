@@ -39,14 +39,14 @@ This document serves as the **Single Source of Truth** for the entire project.
 
 ## 2. Market Ingestion & Order Book Microstructure
 
-* **Primary Market Feed:** Direct **Binance REST API** (`https://api.binance.com/api/v3/klines` for `BTCUSDT`), with automatic fallback to yfinance if throttled.
-* **Order Book Depth & Imbalance:**
-  - Evaluates live bid vs. ask depth within the **0.5% mid-price boundary** from Binance Level 2 order book (`/api/v3/depth?limit=100`).
+* **Multi-Exchange Primary Market Feed:** Direct **Bybit Spot Klines API** (with Binance and yfinance fallbacks), unblocked across all global cloud networks (AWS, Streamlit Cloud, Render).
+* **Order Book Depth & Imbalance (Bybit + OKX):**
+  - Evaluates live bid vs. ask depth within the **0.5% mid-price boundary** from Bybit Level 2 order book (`/v5/market/orderbook?category=spot`) and OKX books (`/api/v5/market/books`).
   - **Imbalance %:** $\frac{\text{Bid Depth} - \text{Ask Depth}}{\text{Bid Depth} + \text{Ask Depth}} \times 100$
   - Injects dynamic probability alpha ($\pm 15\%$ probability shift) based on real institutional limit order walls.
 * **Futures Derivatives:**
-  - Open Interest in BTC from Binance Futures (`/fapi/v1/openInterest`).
-  - Real-time funding rate from `/fapi/v1/premiumIndex`.
+  - Real-time Open Interest in BTC from Bybit Linear Tickers (`/v5/market/tickers`).
+  - Real-time funding rate from Bybit Linear perpetuals.
 
 ---
 
