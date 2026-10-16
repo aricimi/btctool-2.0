@@ -60,6 +60,7 @@
 
 ## 🖥️ Web Dashboard Features
 
+- **Persistent Legal & Compliance Notices**: Prominent disclaimers across the header, sidebar, and footer.
 - **Real-Time Market Ribbon**: Current BTC/USDT spot price, 24-hour delta, and instant ensemble probabilities.
 - **Trader Advisory Report Card**: Directional percentages, primary bias verdict, confidence index, pivot levels (Pivot, S1, S2, R1, R2), and actionable trade notes.
 - **Interactive Technical Candlestick Chart**: Plotly chart featuring Bollinger Bands, volume, RSI subplots, and MACD histograms.
@@ -108,5 +109,11 @@ This repository includes a pre-configured `render.yaml` blueprint and `Procfile`
 
 ---
 
-## ⚖️ Disclaimer
-*btctool 2.0 is a quantitative market advisory engine designed to calculate mathematical probabilities and market regimes. It does not provide financial or investment advice, nor does it automatically execute trades. All trading decisions remain the sole responsibility of the human user.*
+## ⚖️ Legal Disclaimer & Terms of Use
+
+> **CRITICAL NOTICE: NOT FINANCIAL, INVESTMENT, LEGAL, OR TAX ADVICE.**
+>
+> 1. **Educational & Research Purpose Only:** *btctool 2.0* is an open-source quantitative research software designed to calculate statistical distributions and mathematical indicators on public market data. None of the content, calculations, directional percentages, pivot points, or commentary constitutes financial, trading, investment, tax, or legal advice.
+> 2. **No Warranties & Limitation of Liability:** This software is provided under the **MIT License** on an "AS IS" and "AS AVAILABLE" basis, without warranty of any kind, express or implied. Under no circumstances shall the author, developers, or copyright holders be liable for any claim, loss, damages, or financial loss arising from the use of or reliance upon this software.
+> 3. **Market Risk Acknowledgment:** Cryptocurrency trading and digital asset markets exhibit extreme price volatility and carry a substantial risk of total financial loss. Past performance and statistical modeling are no guarantee of future market results. 
+> 4. **User Responsibility:** The application does not provide trade execution or custody services. Any trading or financial decisions are executed solely and independently at the user's own discretion and risk.

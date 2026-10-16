@@ -24,7 +24,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom High-Tech Styling
+# Custom High-Tech Styling & Persistent Legal Banners
 st.markdown("""
 <style>
     /* Metric Card Styling */
@@ -100,6 +100,61 @@ st.markdown("""
         color: #00FFA3 !important;
         border-bottom: 2px solid #00FFA3 !important;
     }
+
+    /* Top Persistent Disclaimer Banner */
+    .top-disclaimer-pill {
+        background: rgba(245, 158, 11, 0.10);
+        border: 1px solid rgba(245, 158, 11, 0.35);
+        color: #FCD34D;
+        border-radius: 6px;
+        padding: 8px 14px;
+        font-size: 0.84rem;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 16px;
+    }
+
+    /* Bottom Comprehensive Legal Disclaimer Box */
+    .disclaimer-box {
+        background: linear-gradient(135deg, rgba(30, 41, 59, 0.9) 0%, rgba(15, 23, 42, 0.95) 100%);
+        border: 1px solid rgba(245, 158, 11, 0.4);
+        border-left: 5px solid #F59E0B;
+        border-radius: 8px;
+        padding: 16px 20px;
+        margin: 25px 0 20px 0;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.35);
+    }
+    
+    .disclaimer-title {
+        color: #F59E0B;
+        font-weight: 700;
+        font-size: 0.9rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin-bottom: 8px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    
+    .disclaimer-body {
+        color: #CBD5E1;
+        font-size: 0.82rem;
+        line-height: 1.55;
+        margin: 0;
+    }
+
+    .disclaimer-sidebar {
+        background: rgba(245, 158, 11, 0.08);
+        border: 1px solid rgba(245, 158, 11, 0.3);
+        border-radius: 6px;
+        padding: 10px;
+        font-size: 0.78rem;
+        color: #CBD5E1;
+        line-height: 1.4;
+        margin-top: 15px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -127,6 +182,14 @@ st.sidebar.markdown("""
 - **Momentum Brain**: RSI exhaustion & MACD acceleration.
 - **Volatility Brain**: ATR compression & Squeeze Breakout alert.
 """)
+
+# Persistent Sidebar Legal Notice
+st.sidebar.markdown("""
+<div class="disclaimer-sidebar">
+    <b>⚖️ Legal Notice:</b><br>
+    This software is strictly for educational & quantitative research purposes. It is <b>NOT</b> financial, investment, or trading advice.
+</div>
+""", unsafe_allow_html=True)
 
 st.sidebar.markdown("---")
 st.sidebar.caption("🚀 Architecture: Python / Streamlit / yfinance")
@@ -160,6 +223,14 @@ with col_title:
 with col_time:
     st.markdown(f"**Last Sync:** `{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}`")
     st.markdown(f"**Active Bar:** `{current_report.timestamp}`")
+
+# Top Persistent Disclaimer Pill
+st.markdown("""
+<div class="top-disclaimer-pill">
+    <span>⚠️</span>
+    <span><b>EDUCATIONAL & RESEARCH USE ONLY — NOT FINANCIAL ADVICE (NFA):</b> All outputs represent automated statistical probabilities. No automated trade execution. You assume full responsibility for your capital and trading decisions.</span>
+</div>
+""", unsafe_allow_html=True)
 
 st.markdown("---")
 
@@ -445,8 +516,27 @@ with tab_vol:
     - **Warning Classification:** `{vb.details['warning_level']}`
     """)
 
-st.markdown("---")
-st.caption("btctool 2.0 | Built with Python, Streamlit, and quantitative statistical models.")
+# Comprehensive Persistent Legal Disclaimer Box
+st.markdown("""
+<div class="disclaimer-box">
+    <div class="disclaimer-title">
+        <span>⚖️</span>
+        <span>IMPORTANT LEGAL DISCLAIMER & TERMS OF USE — NOT FINANCIAL ADVICE</span>
+    </div>
+    <p class="disclaimer-body">
+        <b>btctool 2.0</b> is provided strictly for educational, informational, and quantitative research purposes only. 
+        None of the data, probabilistic calculations, indicator outputs, scores, pivot levels, or commentary provided by this application 
+        constitutes financial, investment, legal, tax, or trading advice. 
+        <br><br>
+        Cryptocurrency assets and digital asset markets exhibit extreme volatility and carry a substantial risk of total financial loss. 
+        Past statistical performance, mathematical models, or historical distributions do not guarantee or predict future market results. 
+        This application does not provide order execution or custodial services; all trading decisions and actions are executed solely at the user's independent discretion and risk. 
+        Under no circumstances shall the creators, authors, developers, or contributors of this software be held liable for any direct, indirect, incidental, or consequential losses, damages, or claims arising from the use of or reliance upon this software.
+    </p>
+</div>
+""", unsafe_allow_html=True)
+
+st.caption("btctool 2.0 | Multi-Methodology Quantitative Predictive Engine | Open Source under MIT License.")
 
 # Auto-refresh loop handler
 if auto_refresh:
