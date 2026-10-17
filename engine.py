@@ -7,10 +7,15 @@ Architecture: Tri-Brain Quantitative Consensus + Order Book Liquidity + Macro Co
 from dataclasses import dataclass, field
 from typing import Dict, Any, Tuple, Optional, List
 import datetime
+import collections
+import time
+import gc
 import numpy as np
 import pandas as pd
 import requests
 import yfinance as yf
+from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.calibration import CalibratedClassifierCV
 
 
 @dataclass
@@ -23,6 +28,8 @@ class OrderBookMetrics:
     spread_bps: float
     open_interest_btc: float
     funding_rate_pct: float
+    taker_delta: float = 0.0
+    confirmed_delta_p: float = 0.0
 
 
 @dataclass
@@ -79,6 +86,252 @@ class AdvisoryReport:
     volatility_brain: BrainVote
     advisory_summary: str
     actionable_notes: List[str]
+    adx_value: float = 0.0
+    squeeze_state: str = "IDLE"
+    squeeze_label: str = ""
+    funding_warning: Optional[str] = None
+    oi_confluence: str = "NEUTRAL"
+    crowded_long_risk: bool = False
+
+
+# ============================================================================
+# STEP 2 — ADX(14) INDICATOR HELPER
+# ============================================================================
+def compute_adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """Computes ADX(14) with defensive column lookup."""
+    high  = df['High']  if 'High'  in df.columns else df['high']
+    low   = df['Low']   if 'Low'   in df.columns else df['low']
+    close = df['Close'] if 'Close' in df.columns else df['close']
+    plus_dm  = high.diff().clip(lower=0)
+    minus_dm = (-low.diff()).clip(lower=0)
+    plus_dm[plus_dm < minus_dm]   = 0
+    minus_dm[minus_dm < plus_dm]  = 0
+    tr = pd.concat([
+        high - low,
+        (high - close.shift()).abs(),
+        (low  - close.shift()).abs()
+    ], axis=1).max(axis=1)
+    atr_w    = tr.ewm(alpha=1/period, adjust=False).mean()
+    plus_di  = 100 * plus_dm.ewm(alpha=1/period, adjust=False).mean() / atr_w
+    minus_di = 100 * minus_dm.ewm(alpha=1/period, adjust=False).mean() / atr_w
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di + 1e-10)
+    return dx.ewm(alpha=1/period, adjust=False).mean()
+
+
+# ============================================================================
+# STEP 3C — ORDER BOOK ANTI-SPOOFING PERSISTENCE
+# ============================================================================
+_ob_snapshot_history: list = []
+
+def get_confirmed_ob_delta_p(ob_imbalance_ratio: float) -> float:
+    """Requires 3 consecutive snapshots of same-sign imbalance before applying alpha."""
+    _ob_snapshot_history.append(ob_imbalance_ratio)
+    if len(_ob_snapshot_history) > 5:
+        _ob_snapshot_history.pop(0)
+    last_3 = _ob_snapshot_history[-3:]
+    if len(last_3) < 3:
+        return 0.0
+    if all(v > 0 for v in last_3) or all(v < 0 for v in last_3):
+        return 0.15 * float(np.tanh(3.0 * ob_imbalance_ratio))
+    return 0.0
+
+
+# ============================================================================
+# STEP 4 — TAKER DELTA (BYBIT RECENT TRADES)
+# ============================================================================
+def fetch_taker_delta() -> float:
+    """Returns taker delta ratio [-1.0, +1.0]. Returns nan on failure."""
+    try:
+        url    = "https://api.bybit.com/v5/market/recent-trade"
+        params = {"category": "spot", "symbol": "BTCUSDT", "limit": 200}
+        resp   = requests.get(url, params=params, timeout=5)
+        trades = resp.json().get("result", {}).get("list", [])
+        buy_vol  = sum(float(t['size']) for t in trades if t['side'] == 'Buy')
+        sell_vol = sum(float(t['size']) for t in trades if t['side'] == 'Sell')
+        total    = buy_vol + sell_vol
+        return (buy_vol - sell_vol) / total if total > 0 else float('nan')
+    except Exception:
+        return float('nan')
+
+
+# ============================================================================
+# STEP 5 — TRI-BRAIN META-LEARNER ROLLING STORAGE & FUNCTIONS
+# ============================================================================
+_oi_history:           collections.deque = collections.deque(maxlen=100)
+_retail_ratio_history: collections.deque = collections.deque(maxlen=96)
+_feature_history:      collections.deque = collections.deque(maxlen=600)
+_label_history:        collections.deque = collections.deque(maxlen=600)
+_last_train_time:      float = 0.0
+_RETRAIN_INTERVAL:     float = 60.0
+_meta_learner_model           = None
+
+
+def compute_oi_zscore(current_oi: float) -> float:
+    """Computes Z-Score of 20-period OI changes."""
+    _oi_history.append(current_oi)
+    if len(_oi_history) < 21:
+        return float('nan')
+    oi_series      = pd.Series(list(_oi_history))
+    oi_changes     = oi_series.diff().dropna()
+    mean_20        = oi_changes.iloc[-20:].mean()
+    std_20         = oi_changes.iloc[-20:].std()
+    current_change = oi_series.iloc[-1] - oi_series.iloc[-2]
+    return (current_change - mean_20) / std_20 if std_20 > 0 else float('nan')
+
+
+def train_meta_learner():
+    """Trains calibrated gradient boosting classifier on collected feature/label history."""
+    X = pd.DataFrame(list(_feature_history)[:len(_label_history)])
+    y = np.array(list(_label_history))
+    if len(y) < 200:
+        return None   # cold start — not enough data yet
+
+    base = HistGradientBoostingClassifier(
+        max_depth=3, max_iter=35,
+        min_samples_leaf=20, l2_regularization=1.0,
+        random_state=42
+    )
+    if len(y) < 300:
+        base.fit(X.iloc[:-20], y[:-20])
+        model = CalibratedClassifierCV(estimator=base, method='sigmoid', cv='prefit')
+        model.fit(X.iloc[-20:], y[-20:])
+    else:
+        model = CalibratedClassifierCV(estimator=base, method='sigmoid', cv=3)
+        model.fit(X, y)
+
+    del X, y
+    gc.collect()
+    return model
+
+
+def maybe_retrain():
+    """Retrains meta learner if interval elapsed."""
+    global _meta_learner_model, _last_train_time
+    if time.time() - _last_train_time < _RETRAIN_INTERVAL:
+        return
+    new_model = train_meta_learner()
+    if new_model is not None:
+        _meta_learner_model = new_model
+        _last_train_time    = time.time()
+
+
+REGIME_WEIGHTS = {
+    'Range':      {'stat': 0.55, 'mom': 0.25, 'vol': 0.20},
+    'Trend Up':   {'stat': 0.20, 'mom': 0.60, 'vol': 0.20},
+    'Trend Down': {'stat': 0.20, 'mom': 0.60, 'vol': 0.20},
+    'Breakout':   {'stat': 0.15, 'mom': 0.25, 'vol': 0.60},
+    'Chop':       {'stat': 0.40, 'mom': 0.30, 'vol': 0.30},
+}
+
+
+def get_combined_probability(stat_score: float, mom_score: float, vol_score: float,
+                              macro_regime: str, adx_14: float, squeeze_state: str,
+                              ob_imbalance_ratio: float, funding_rate_decimal: float,
+                              oi_zscore: float, taker_delta: float) -> float:
+    """Combines tri-brain outputs using Level 2 Meta-Learner (or regime fallback)."""
+    if _meta_learner_model is not None:
+        features = pd.DataFrame([{
+            'stat_score': stat_score, 'mom_score': mom_score,
+            'vol_score':  vol_score,  'ob_imbalance': ob_imbalance_ratio,
+            'funding_rate': funding_rate_decimal,
+            'oi_zscore': 0.0 if np.isnan(oi_zscore) else oi_zscore,
+            'taker_delta': 0.0 if np.isnan(taker_delta) else taker_delta,
+        }])
+        prob = float(_meta_learner_model.predict_proba(features)[0][1])
+        gc.collect()
+        return prob
+    else:
+        regime_key = 'Breakout' if squeeze_state == 'FIRING' else \
+                     'Chop' if adx_14 <= 22 else macro_regime
+        w = REGIME_WEIGHTS.get(regime_key, REGIME_WEIGHTS['Chop'])
+        return float(w['stat'] * stat_score + w['mom'] * mom_score + w['vol'] * vol_score)
+
+
+# ============================================================================
+# STEP 6 — SQUEEZE STATE MACHINE
+# ============================================================================
+_squeeze_state:   str = 'IDLE'
+_squeeze_counter: int = 0
+
+def update_squeeze_state(bb_width: float, bb_width_sma20: float,
+                          bb_inside_kc: bool, timeframe: str) -> str:
+    """5-State Squeeze Machine tracking compression across cycles."""
+    global _squeeze_state, _squeeze_counter
+
+    loaded_threshold = 5 if timeframe in ('1m', '5m') else 3
+
+    if bb_inside_kc:
+        _squeeze_counter += 1
+    else:
+        _squeeze_counter = 0
+
+    prev = _squeeze_state
+
+    if bb_inside_kc:
+        new_state = 'LOADED' if _squeeze_counter >= loaded_threshold else 'BUILDING'
+    elif prev in ('LOADED', 'BUILDING'):
+        new_state = 'FIRING'
+    elif prev in ('FIRING', 'TRENDING'):
+        new_state = 'IDLE' if bb_width < bb_width_sma20 else 'TRENDING'
+    else:
+        new_state = 'IDLE'
+
+    _squeeze_state = new_state
+    return new_state
+
+
+SQUEEZE_LABELS = {
+    'IDLE': '',
+    'BUILDING': '⚪ SQUEEZE BUILDING',
+    'LOADED': '🟡 SQUEEZE LOADED — WATCH FOR BREAK',
+    'FIRING': '🔴 SQUEEZE FIRING — BREAKOUT ACTIVE',
+    'TRENDING': '🟢 POST-SQUEEZE TREND — TRAIL STOP',
+}
+
+
+# ============================================================================
+# STEP 9 — SCENARIO CONFLICT RESOLUTION HIERARCHY
+# ============================================================================
+def resolve_scenario(candidate_directive: str,
+                      macro_regime: str, adx_14: float,
+                      squeeze_state: str, ob_delta_p: float,
+                      percent_b: float,
+                      suppress_longs: bool, suppress_shorts: bool) -> str:
+    """Enforces 5-gate conflict resolution hierarchy on trade directives."""
+    # Gate 1 — Derivatives pre-filter (highest authority)
+    if suppress_longs and 'ENTER LONG NOW' in candidate_directive:
+        candidate_directive = candidate_directive.replace(
+            'ENTER LONG NOW', 'SET BUY LIMIT ORDER')
+
+    if suppress_shorts and 'ENTER SHORT NOW' in candidate_directive:
+        candidate_directive = candidate_directive.replace(
+            'ENTER SHORT NOW', 'SET SELL LIMIT ORDER')
+
+    # Gate 2 — 4H Macro Regime + ADX
+    if macro_regime == 'Trend Down' and adx_14 > 22:
+        if 'ENTER LONG NOW' in candidate_directive:
+            candidate_directive = 'COUNTER-TREND SCALP: BUY PULLBACK LIMIT'
+
+    # Gate 3 — Squeeze FIRING overrules trend-fade scenarios
+    if squeeze_state == 'FIRING':
+        if 'BEARISH FADE' in candidate_directive or 'RESISTANCE' in candidate_directive:
+            candidate_directive = 'SQUEEZE FIRING — AWAIT DIRECTION CONFIRMATION'
+
+    # Gate 4 — OB imbalance tiebreaker (Scenario 1 vs Scenario 4)
+    if ob_delta_p > 0.08 and 'SELL LIMIT' in candidate_directive \
+            and macro_regime != 'Trend Down':
+        candidate_directive = 'TREND FOLLOWING: SET BUY LIMIT AT SUPPORT'
+    elif ob_delta_p < -0.08 and 'BUY LIMIT' in candidate_directive \
+            and macro_regime != 'Trend Up':
+        candidate_directive = 'SET SELL LIMIT AT RESISTANCE (BEARISH FADE)'
+
+    # Gate 5 — %B final boundary validation
+    if percent_b > 0.90 and 'ENTER LONG NOW' in candidate_directive:
+        candidate_directive = 'SET SELL LIMIT AT RESISTANCE (BEARISH FADE)'
+    if percent_b < 0.10 and 'ENTER SHORT NOW' in candidate_directive:
+        candidate_directive = 'COUNTER-TREND SCALP: BUY PULLBACK LIMIT'
+
+    return candidate_directive
 
 
 class MarketDataService:
@@ -165,7 +418,7 @@ class MarketDataService:
 
     @classmethod
     def fetch_orderbook_and_derivatives(cls, symbol: str = "BTCUSDT") -> OrderBookMetrics:
-        """Calculates Order Book depth (0.5% boundary), imbalance, and Futures Open Interest from Bybit + OKX."""
+        """Calculates distance-weighted Order Book depth, tanh imbalance alpha, taker delta, and Futures OI."""
         bid_depth_usd = 0.0
         ask_depth_usd = 0.0
         imbalance_pct = 0.0
@@ -175,7 +428,7 @@ class MarketDataService:
         oi_btc = 0.0
         funding_rate = 0.0
 
-        # 1. Primary: Bybit Spot Order Book
+        # 1. Primary: Bybit Spot Order Book with Exponential Distance Weighting
         try:
             r = requests.get(cls.BYBIT_DEPTH_URL, params={"category": "spot", "symbol": symbol, "limit": 50}, timeout=4)
             if r.status_code == 200:
@@ -187,19 +440,16 @@ class MarketDataService:
                     best_ask = float(asks[0][0])
                     spread_bps = ((best_ask - best_bid) / best_bid) * 10000.0
                     mid_price = (best_bid + best_ask) / 2.0
-                    threshold = mid_price * 0.005  # 0.5% depth window
 
-                    for b in bids:
-                        price = float(b[0])
-                        qty = float(b[1])
-                        if price >= (mid_price - threshold):
-                            bid_depth_usd += (price * qty)
+                    bid_prices = np.array([float(l[0]) for l in bids], dtype=float)
+                    bid_sizes = np.array([float(l[1]) * float(l[0]) for l in bids], dtype=float)
+                    bid_weights = np.exp(-40.0 * np.abs(bid_prices - mid_price) / mid_price)
+                    bid_depth_usd = float(np.sum(bid_sizes * bid_weights))
 
-                    for a in asks:
-                        price = float(a[0])
-                        qty = float(a[1])
-                        if price <= (mid_price + threshold):
-                            ask_depth_usd += (price * qty)
+                    ask_prices = np.array([float(l[0]) for l in asks], dtype=float)
+                    ask_sizes = np.array([float(l[1]) * float(l[0]) for l in asks], dtype=float)
+                    ask_weights = np.exp(-40.0 * np.abs(ask_prices - mid_price) / mid_price)
+                    ask_depth_usd = float(np.sum(ask_sizes * ask_weights))
         except Exception:
             pass
 
@@ -215,25 +465,29 @@ class MarketDataService:
                         best_bid = float(bids[0][0])
                         best_ask = float(asks[0][0])
                         mid_price = (best_bid + best_ask) / 2.0
-                        threshold = mid_price * 0.005
 
-                        for b in bids:
-                            p = float(b[0])
-                            q = float(b[1])
-                            if p >= (mid_price - threshold):
-                                bid_depth_usd += (p * q)
-                        for a in asks:
-                            p = float(a[0])
-                            q = float(a[1])
-                            if p <= (mid_price + threshold):
-                                ask_depth_usd += (p * q)
+                        bid_prices = np.array([float(l[0]) for l in bids], dtype=float)
+                        bid_sizes = np.array([float(l[1]) * float(l[0]) for l in bids], dtype=float)
+                        bid_weights = np.exp(-40.0 * np.abs(bid_prices - mid_price) / mid_price)
+                        bid_depth_usd = float(np.sum(bid_sizes * bid_weights))
+
+                        ask_prices = np.array([float(l[0]) for l in asks], dtype=float)
+                        ask_sizes = np.array([float(l[1]) * float(l[0]) for l in asks], dtype=float)
+                        ask_weights = np.exp(-40.0 * np.abs(ask_prices - mid_price) / mid_price)
+                        ask_depth_usd = float(np.sum(ask_sizes * ask_weights))
             except Exception:
                 pass
 
-        # Calculate Imbalance
+        # Calculate Distance-Weighted Imbalance Ratio
         total_depth = bid_depth_usd + ask_depth_usd
-        if total_depth > 0:
-            imbalance_pct = ((bid_depth_usd - ask_depth_usd) / total_depth) * 100.0
+        ob_imbalance_ratio = (bid_depth_usd - ask_depth_usd) / total_depth if total_depth > 0 else 0.0
+        imbalance_pct = ob_imbalance_ratio * 100.0
+
+        # Taker delta from Bybit recent trades
+        taker_delta = fetch_taker_delta()
+
+        # Confirmed anti-spoofing delta_P
+        confirmed_delta_p = get_confirmed_ob_delta_p(ob_imbalance_ratio)
 
         # 3. Derivatives: Bybit Linear Tickers (Open Interest & Funding Rate)
         try:
@@ -254,7 +508,9 @@ class MarketDataService:
             best_ask=round(best_ask, 2),
             spread_bps=round(spread_bps, 2),
             open_interest_btc=round(oi_btc, 1),
-            funding_rate_pct=round(funding_rate, 4)
+            funding_rate_pct=round(funding_rate, 4),
+            taker_delta=round(0.0 if np.isnan(taker_delta) else taker_delta, 4),
+            confirmed_delta_p=round(confirmed_delta_p, 4)
         )
 
 
@@ -498,7 +754,7 @@ class VolatilityBrain:
         return tr.rolling(window=period).mean()
 
     @classmethod
-    def analyze(cls, df: pd.DataFrame, macro_regime: str = "Range / Consolidation") -> BrainVote:
+    def analyze(cls, df: pd.DataFrame, macro_regime: str = "Range / Consolidation", timeframe: str = "1h") -> BrainVote:
         close = df["Close"]
         atr = cls._compute_atr(df, period=14)
 
@@ -510,33 +766,42 @@ class VolatilityBrain:
         upper_kc = sma20 + (1.5 * atr)
         lower_kc = sma20 - (1.5 * atr)
 
-        squeeze_on = (upper_bb < upper_kc) & (lower_bb > lower_kc)
-
         curr_atr = atr.iloc[-1]
         curr_close = close.iloc[-1]
         atr_pct = (curr_atr / curr_close) * 100.0
 
+        # Step 6: Squeeze State Machine (BB vs KC)
+        kc_width = 2.0 * 1.5 * curr_atr
+        curr_upper_bb = upper_bb.iloc[-1]
+        curr_lower_bb = lower_bb.iloc[-1]
+        bb_width = curr_upper_bb - curr_lower_bb
+        bb_inside_kc = bb_width < kc_width
+        bb_width_sma20 = (upper_bb - lower_bb).rolling(20).mean().iloc[-1]
+
+        squeeze_state = update_squeeze_state(bb_width, bb_width_sma20, bb_inside_kc, timeframe=timeframe)
+        squeeze_label = SQUEEZE_LABELS.get(squeeze_state, "")
+
         atr_rolling = atr.dropna()
         atr_percentile = (atr_rolling < curr_atr).mean() * 100.0 if len(atr_rolling) >= 30 else 50.0
 
-        is_squeeze = bool(squeeze_on.iloc[-1])
+        is_squeeze = bb_inside_kc
+        breakout_imminent = squeeze_state in ('LOADED', 'FIRING')
 
-        if is_squeeze or atr_percentile < 15.0:
+        if squeeze_state == 'FIRING':
+            warning_level = "SQUEEZE_FIRING"
+            compression_state = "BREAKOUT_FIRING"
+        elif squeeze_state == 'LOADED':
             warning_level = "CRITICAL_BREAKOUT_IMMINENT"
             compression_state = "EXTREME_COMPRESSION"
-            breakout_imminent = True
-        elif atr_percentile < 30.0:
+        elif squeeze_state == 'BUILDING':
             warning_level = "HIGH_COMPRESSION"
             compression_state = "MODERATE_COMPRESSION"
-            breakout_imminent = True
-        elif atr_percentile > 80.0:
+        elif squeeze_state == 'TRENDING':
             warning_level = "VOLATILITY_EXPANSION"
-            compression_state = "HIGH_VOLATILITY"
-            breakout_imminent = False
+            compression_state = "POST_SQUEEZE_TREND"
         else:
             warning_level = "NORMAL_VOLATILITY"
             compression_state = "EQUILIBRIUM"
-            breakout_imminent = False
 
         dist_from_sma = (curr_close - sma20.iloc[-1]) / (curr_atr if curr_atr > 0 else 1.0)
         
@@ -580,8 +845,10 @@ class VolatilityBrain:
                 "atr_pct": round(atr_pct, 2),
                 "atr_percentile": round(atr_percentile, 1),
                 "is_squeeze": is_squeeze,
+                "squeeze_state": squeeze_state,
+                "squeeze_label": squeeze_label,
                 "compression_state": compression_state,
-                "warning_level": warning_level,
+                "warning_level": squeeze_label if squeeze_label else warning_level,
                 "breakout_imminent": breakout_imminent
             }
         )
@@ -598,44 +865,95 @@ class PredictiveEnsembleEngine:
         # 1. Ingest Market Data
         df = MarketDataService.fetch_klines(symbol=symbol, interval=timeframe, limit=120)
         orderbook = MarketDataService.fetch_orderbook_and_derivatives(symbol=symbol)
-
-        # 2. Ingest 4H Structure for Macro Confluence
-        df_4h = MarketDataService.fetch_klines(symbol=symbol, interval="4h", limit=60)
-        close_4h = df_4h["Close"]
-        ema21_4h = close_4h.ewm(span=21, adjust=False).mean().iloc[-1]
         curr_price = float(df["Close"].iloc[-1])
 
-        if curr_price > ema21_4h * 1.002:
-            macro_regime_4h = "Trend Up"
-        elif curr_price < ema21_4h * 0.998:
-            macro_regime_4h = "Trend Down"
-        else:
-            macro_regime_4h = "Range / Consolidation"
+        # 2. Ingest 4H Structure with ADX(14) (Step 2)
+        df_4h = MarketDataService.fetch_klines(symbol=symbol, interval="4h", limit=60)
+        close_4h = df_4h["Close"] if "Close" in df_4h.columns else df_4h["close"]
+        fast_ema_4h = close_4h.ewm(span=9, adjust=False).mean().iloc[-1]
+        slow_ema_4h = close_4h.ewm(span=21, adjust=False).mean().iloc[-1]
 
-        # 3. Analyze Brains with Macro Context
+        adx_series = compute_adx(df_4h, period=14)
+        adx_14 = float(adx_series.iloc[-1]) if not adx_series.empty else 20.0
+        delta_adx = float(adx_series.iloc[-1] - adx_series.iloc[-2]) if len(adx_series) >= 2 else 0.0
+
+        if adx_14 > 22 or delta_adx > 0:
+            macro_regime_4h = 'Trend Up' if fast_ema_4h > slow_ema_4h else 'Trend Down'
+        else:
+            macro_regime_4h = 'Range'
+
+        # 3. Analyze Brains with Macro Context & Timeframe
         stat_vote = StatisticalBrain.analyze(df, macro_regime=macro_regime_4h)
         mom_vote = MomentumBrain.analyze(df, macro_regime=macro_regime_4h, timeframe=timeframe)
-        vol_vote = VolatilityBrain.analyze(df, macro_regime=macro_regime_4h)
+        vol_vote = VolatilityBrain.analyze(df, macro_regime=macro_regime_4h, timeframe=timeframe)
 
-        # 4. Integrate Dynamic Weights & Order Book Microstructure
-        w_stat, w_mom, w_vol = 0.35, 0.40, 0.25
-        if vol_vote.details["breakout_imminent"]:
-            w_stat, w_mom, w_vol = 0.20, 0.45, 0.35
+        atr_val = vol_vote.details["atr"]
+        pct_b = stat_vote.details["percent_b"]
+        squeeze_state = vol_vote.details.get("squeeze_state", "IDLE")
+        squeeze_label = vol_vote.details.get("squeeze_label", "")
 
-        raw_buy = (stat_vote.buy_prob * w_stat) + (mom_vote.buy_prob * w_mom) + (vol_vote.buy_prob * w_vol)
-        raw_neutral = (stat_vote.neutral_prob * w_stat) + (mom_vote.neutral_prob * w_mom) + (vol_vote.neutral_prob * w_vol)
-        raw_sell = (stat_vote.sell_prob * w_stat) + (mom_vote.sell_prob * w_mom) + (vol_vote.sell_prob * w_vol)
+        ob_imbalance_ratio = orderbook.imbalance_pct / 100.0
+        funding_rate_decimal = orderbook.funding_rate_pct / 100.0
+        oi_zscore = compute_oi_zscore(orderbook.open_interest_btc)
+        taker_delta = orderbook.taker_delta
 
-        # Institutional Order Book Imbalance Alpha (Up to ±15% probability shift based on real limit walls)
-        # Positive imbalance (> +15%) = Bid wall support
-        # Negative imbalance (< -15%) = Heavy ask wall overhead (like -46.5%)
-        ob_shift = (orderbook.imbalance_pct / 100.0) * 0.15
-        raw_buy = max(0.05, raw_buy + ob_shift)
-        raw_sell = max(0.05, raw_sell - ob_shift)
+        # 4. STEP 5 — Meta-Learner Feature & Label Collection
+        feature_row = {
+            'stat_score':   stat_vote.buy_prob,
+            'mom_score':    mom_vote.buy_prob,
+            'vol_score':    vol_vote.buy_prob,
+            'ob_imbalance': ob_imbalance_ratio,
+            'funding_rate': funding_rate_decimal,
+            'oi_zscore':    0.0 if np.isnan(oi_zscore) else oi_zscore,
+            'taker_delta':  0.0 if np.isnan(taker_delta) else taker_delta,
+        }
+        _feature_history.append(feature_row)
 
-        total_p = raw_buy + raw_neutral + raw_sell
-        buy_pct = round((raw_buy / total_p) * 100.0, 1)
-        sell_pct = round((raw_sell / total_p) * 100.0, 1)
+        # Label generated 3 completed candles later
+        if len(df) >= 4 and len(_feature_history) >= 4 and len(_label_history) < (len(_feature_history) - 3):
+            close_curr = float(df['Close'].iloc[-1])
+            close_3_ago = float(df['Close'].iloc[-4])
+            label = 1 if (close_curr - close_3_ago) >= (0.3 * atr_val) else 0
+            _label_history.append(label)
+
+        maybe_retrain()
+
+        # Step 5E / Meta-Learner probability inference
+        buy_prob_combined = get_combined_probability(
+            stat_score=stat_vote.buy_prob,
+            mom_score=mom_vote.buy_prob,
+            vol_score=vol_vote.buy_prob,
+            macro_regime=macro_regime_4h,
+            adx_14=adx_14,
+            squeeze_state=squeeze_state,
+            ob_imbalance_ratio=ob_imbalance_ratio,
+            funding_rate_decimal=funding_rate_decimal,
+            oi_zscore=0.0 if np.isnan(oi_zscore) else oi_zscore,
+            taker_delta=0.0 if np.isnan(taker_delta) else taker_delta
+        )
+
+        # Step 3B & 3C: tanh Alpha Curve with Anti-Spoofing Confirmation
+        ob_delta_p = get_confirmed_ob_delta_p(ob_imbalance_ratio)
+        buy_prob_combined = max(0.05, min(0.95, buy_prob_combined + ob_delta_p))
+
+        sell_prob_combined = get_combined_probability(
+            stat_score=stat_vote.sell_prob,
+            mom_score=mom_vote.sell_prob,
+            vol_score=vol_vote.sell_prob,
+            macro_regime=macro_regime_4h,
+            adx_14=adx_14,
+            squeeze_state=squeeze_state,
+            ob_imbalance_ratio=-ob_imbalance_ratio,
+            funding_rate_decimal=-funding_rate_decimal,
+            oi_zscore=-oi_zscore if not np.isnan(oi_zscore) else 0.0,
+            taker_delta=-taker_delta if not np.isnan(taker_delta) else 0.0
+        )
+        sell_prob_combined = max(0.05, min(0.95, sell_prob_combined - ob_delta_p))
+
+        neutral_prob_combined = max(0.05, 1.0 - buy_prob_combined - sell_prob_combined)
+        total_p = buy_prob_combined + sell_prob_combined + neutral_prob_combined
+        buy_pct = round((buy_prob_combined / total_p) * 100.0, 1)
+        sell_pct = round((sell_prob_combined / total_p) * 100.0, 1)
         neutral_pct = round(100.0 - buy_pct - sell_pct, 1)
 
         # Overall Bias
@@ -650,111 +968,171 @@ class PredictiveEnsembleEngine:
         else:
             overall_bias = "NEUTRAL_CONSOLIDATION"
 
-        # 5. Price Envelopes and Technical Levels
+        # 5. Price Envelopes and High/Low
         high_24h = float(df["High"].iloc[-24:].max())
         low_24h = float(df["Low"].iloc[-24:].min())
         bounce_from_low = curr_price - low_24h
         bounce_pct = (bounce_from_low / low_24h) * 100.0 if low_24h > 0 else 0.0
 
-        atr_val = vol_vote.details["atr"]
-        pct_b = stat_vote.details["percent_b"]
         upper_bb = stat_vote.details["upper_band"]
         lower_bb = stat_vote.details["lower_band"]
         middle_bb = stat_vote.details["middle_band"]
-        ema21 = mom_vote.details["ema21"]
 
-        # 6. INSTITUTIONAL BOT DIRECTIVE DECISION MATRIX (ZERO CONTRADICTION)
+        # 6. STEP 8 — DERIVATIVES PRE-FILTER & LIQUIDATION TRAP
+        FUNDING_LONG_SUPPRESS  =  0.0005   # = +0.05%
+        FUNDING_SHORT_SUPPRESS = -0.0003   # = -0.03%
+
+        suppress_longs  = False
+        suppress_shorts = False
+        funding_warning = None
+
+        if funding_rate_decimal > FUNDING_LONG_SUPPRESS:
+            funding_warning = "⚠️ OVERLEVERAGED LONG MARKET — Longs paying high premium"
+            suppress_longs  = True
+        elif funding_rate_decimal < FUNDING_SHORT_SUPPRESS:
+            funding_warning = "📈 SHORT SQUEEZE POTENTIAL — Shorts paying longs"
+            suppress_shorts = True
+
+        # OI Confluence
+        oi_confluence = "NEUTRAL"
+        tp_scale = 1.0
+        if not np.isnan(oi_zscore):
+            if oi_zscore > 2.0:
+                oi_confluence = "CONFIRMS_TREND"
+            elif oi_zscore < -2.0:
+                oi_confluence = "EXHAUSTION_SIGNAL"
+                tp_scale = 0.75  # Tighten TP targets by 25% on exhaustion signal
+
+        # Step 7C: Unified ATR Stop/Target Standard across all scenarios
+        stop_long  = round(curr_price - 1.5 * atr_val, 2)
+        stop_short = round(curr_price + 1.5 * atr_val, 2)
+        tp1_long   = round(curr_price + 0.5 * atr_val * tp_scale, 2)
+        tp2_long   = round(curr_price + 1.0 * atr_val * tp_scale, 2)
+        tp1_short  = round(curr_price - 0.5 * atr_val * tp_scale, 2)
+        tp2_short  = round(curr_price - 1.0 * atr_val * tp_scale, 2)
+
+        # Step 8C: Adaptive Liquidation Trap Filter
+        retail_long_ratio = 0.50
+        _retail_ratio_history.append(retail_long_ratio)
+        crowded_long_risk_active = False
+
+        if len(_retail_ratio_history) >= 96:
+            rolling_mean_24h = float(np.mean(list(_retail_ratio_history)))
+            adaptive_threshold = rolling_mean_24h + 0.08
+            nearest_liq_cluster_price = round(curr_price - 1.0 * atr_val, 2)
+            liq_distance = abs(curr_price - nearest_liq_cluster_price)
+            if retail_long_ratio > adaptive_threshold and liq_distance < 1.5 * atr_val:
+                stop_long = min(stop_long, nearest_liq_cluster_price - 0.01)
+                crowded_long_risk_active = True
+
+        # 7. INSTITUTIONAL BOT DIRECTIVE DECISION MATRIX (SCENARIOS 1-5)
         is_counter_trend = (macro_regime_4h == "Trend Down")
 
-        # SCENARIO 1: Bearish Macro (4H Down) + Price testing Upper Channel / Resistance (%B >= 0.60) + Overhead Ask Wall
+        # SCENARIO 1: Bearish Macro + Upper Channel Resistance (%B >= 0.58) + Overhead Ask Wall
         if macro_regime_4h == "Trend Down" and pct_b >= 0.58 and orderbook.imbalance_pct < -10.0:
-            action = "SET SELL LIMIT AT RESISTANCE (BEARISH FADE)"
+            candidate_action = "SET SELL LIMIT AT RESISTANCE (BEARISH FADE)"
             rationale = (
                 f"4H Macro structure is in a Trend Down and price is testing upper channel resistance (%B: {pct_b:.3f}). "
                 f"Heavy overhead ask wall ({orderbook.imbalance_pct:.1f}% imbalance, ${orderbook.ask_depth_usd:,.0f} asks) "
                 f"caps upward moves. Algorithmic bot directives favor selling the upper band fade."
             )
             entry = curr_price
-            invalidation = round(upper_bb + (0.25 * atr_val), 2)
-            tp1 = round(middle_bb, 2)
-            tp2 = round(lower_bb, 2)
+            invalidation = stop_short
+            tp1 = tp1_short
+            tp2 = tp2_short
             target_prob = sell_pct
 
-        # SCENARIO 2: Bearish Macro (4H Down) + Downward Breakdown / Acceleration
+        # SCENARIO 2: Bearish Macro + Downward Breakdown / Acceleration
         elif macro_regime_4h == "Trend Down" and (sell_pct > 55.0 or (pct_b < 0.40 and orderbook.imbalance_pct < -20.0)):
-            action = "TREND CONTINUATION: ENTER SHORT ON RETEST"
+            candidate_action = "TREND CONTINUATION: ENTER SHORT ON RETEST"
             rationale = (
                 f"4H Macro trend is Down with confirmed downward order flow. Sellers are absorbing the bid depth. "
                 f"Targeting continuation toward lower support."
             )
-            entry = round(curr_price, 2)
-            invalidation = round(curr_price + (0.6 * atr_val), 2)
-            tp1 = round(curr_price - (0.8 * atr_val), 2)
-            tp2 = round(curr_price - (1.6 * atr_val), 2)
+            entry = curr_price
+            invalidation = stop_short
+            tp1 = tp1_short
+            tp2 = tp2_short
             target_prob = sell_pct
 
-        # SCENARIO 3: Liquidity Sweep Rebound (Bottom swept + Rebound > $120 + Bid Imbalance > +15%)
-        elif bounce_from_low >= 120.0 and orderbook.imbalance_pct > 15.0 and mom_vote.details["rsi_fast_slope"] > 0:
-            if is_counter_trend:
-                action = "COUNTER-TREND SCALP: BUY PULLBACK LIMIT"
-                rationale = (
-                    f"Bottom liquidity swept to ${low_24h:,.0f} with +${bounce_from_low:.0f} (+{bounce_pct:.2f}%) rebound "
-                    f"and +{orderbook.imbalance_pct}% bid wall. 4H Macro is Bearish: take tight scalp targets only."
-                )
-                entry = round(curr_price, 2)
-                invalidation = round(low_24h - (0.2 * atr_val), 2)
-                tp1 = round(curr_price + (0.5 * atr_val), 2)
-                tp2 = round(curr_price + (0.9 * atr_val), 2)
-                target_prob = buy_pct
-            else:
-                action = "ENTER LONG NOW (MOMENTUM REBOUND)"
-                rationale = (
-                    f"Liquidity swept to ${low_24h:,.0f} and reclaimed with strong bid-side imbalance (+{orderbook.imbalance_pct}%). "
-                    f"4H Macro trend is aligned."
-                )
-                entry = round(curr_price, 2)
-                invalidation = round(low_24h - (0.2 * atr_val), 2)
-                tp1 = round(curr_price + (0.8 * atr_val), 2)
-                tp2 = round(curr_price + (1.6 * atr_val), 2)
-                target_prob = buy_pct
+        # SCENARIO 3: Liquidity Sweep Rebound (Step 7A ATR trigger + Step 7B volume climax)
+        elif bounce_from_low >= (0.5 * atr_val) and (orderbook.imbalance_pct > 15.0 or mom_vote.details.get("rsi_fast_slope", 0) > 0):
+            vol_col = 'Volume' if 'Volume' in df.columns else 'volume'
+            volume_sma_20 = float(df[vol_col].rolling(20).mean().iloc[-1]) if len(df) >= 20 else float(df[vol_col].mean())
+            sweep_candle_volume = float(df[vol_col].iloc[-1])
 
-        # SCENARIO 4: Bullish Macro (4H Up) + Dip to Support
+            if sweep_candle_volume >= 1.8 * volume_sma_20:
+                candidate_action = "COUNTER-TREND SCALP: BUY PULLBACK LIMIT" if macro_regime_4h == 'Trend Down' else "ENTER LONG NOW (MOMENTUM REBOUND)"
+            else:
+                candidate_action = "LOW-VOLUME RETEST: SET PULLBACK LIMIT"
+
+            rationale = (
+                f"Bottom liquidity swept to ${low_24h:,.0f} with dynamic rebound (>= 0.5x ATR: +${bounce_from_low:.0f}) "
+                f"and order book bid support ({orderbook.imbalance_pct:+.1f}%). Macro regime is {macro_regime_4h}."
+            )
+            entry = curr_price
+            invalidation = stop_long
+            tp1 = tp1_long
+            tp2 = tp2_long
+            target_prob = buy_pct
+
+        # SCENARIO 4: Bullish Macro + Dip to Support
         elif macro_regime_4h == "Trend Up" and pct_b <= 0.45 and orderbook.imbalance_pct > -10.0:
-            action = "TREND FOLLOWING: SET BUY LIMIT AT SUPPORT"
+            candidate_action = "TREND FOLLOWING: SET BUY LIMIT AT SUPPORT"
             rationale = (
                 f"4H Macro is in a Trend Up. Price has pulled back to support (%B: {pct_b:.3f}). "
                 f"Algorithmic model buys the dip aligned with macro momentum."
             )
-            entry = round(curr_price, 2)
-            invalidation = round(lower_bb - (0.25 * atr_val), 2)
-            tp1 = round(middle_bb, 2)
-            tp2 = round(upper_bb, 2)
+            entry = curr_price
+            invalidation = stop_long
+            tp1 = tp1_long
+            tp2 = tp2_long
             target_prob = buy_pct
 
-        # SCENARIO 5: Range-Bound Ping-Pong (Mid-Channel / Compression)
+        # SCENARIO 5: Range-Bound Ping-Pong
         else:
             if pct_b >= 0.50:
-                action = "RANGE DEFENSE: SET SELL LIMIT AT UPPER BAND"
+                candidate_action = "RANGE DEFENSE: SET SELL LIMIT AT UPPER BAND"
                 rationale = (
                     f"Range-bound consolidation (%B: {pct_b:.3f}). Price is in upper half of range. "
                     f"Set limit sell order near upper band (${upper_bb:,.2f}) rather than chasing market."
                 )
-                entry = round(curr_price, 2)
-                invalidation = round(upper_bb + (0.25 * atr_val), 2)
-                tp1 = round(middle_bb, 2)
-                tp2 = round(lower_bb, 2)
+                entry = curr_price
+                invalidation = stop_short
+                tp1 = tp1_short
+                tp2 = tp2_short
                 target_prob = sell_pct
             else:
-                action = "RANGE DEFENSE: SET BUY LIMIT AT LOWER BAND"
+                candidate_action = "RANGE DEFENSE: SET BUY LIMIT AT LOWER BAND"
                 rationale = (
                     f"Range-bound consolidation (%B: {pct_b:.3f}). Price is in lower half of range. "
                     f"Set limit buy order near lower band (${lower_bb:,.2f}) rather than chasing market."
                 )
-                entry = round(curr_price, 2)
-                invalidation = round(lower_bb - (0.25 * atr_val), 2)
-                tp1 = round(middle_bb, 2)
-                tp2 = round(upper_bb, 2)
+                entry = curr_price
+                invalidation = stop_long
+                tp1 = tp1_long
+                tp2 = tp2_long
                 target_prob = buy_pct
+
+        # 8. STEP 9 — CONFLICT RESOLUTION HIERARCHY
+        action = resolve_scenario(
+            candidate_directive=candidate_action,
+            macro_regime=macro_regime_4h,
+            adx_14=adx_14,
+            squeeze_state=squeeze_state,
+            ob_delta_p=ob_delta_p,
+            percent_b=pct_b,
+            suppress_longs=suppress_longs,
+            suppress_shorts=suppress_shorts
+        )
+
+        # Harmonize invalidation / targets if directive flipped
+        if "BUY" in action or "LONG" in action:
+            invalidation = stop_long
+            tp1, tp2 = tp1_long, tp2_long
+        elif "SELL" in action or "SHORT" in action or "BEARISH" in action:
+            invalidation = stop_short
+            tp1, tp2 = tp1_short, tp2_short
 
         # Risk & Reward Metrics
         risk_dist = abs(curr_price - invalidation)
@@ -775,30 +1153,39 @@ class PredictiveEnsembleEngine:
             is_counter_trend=is_counter_trend
         )
 
-        # 7. Floor Pivots
+        # 9. Floor Pivots
         pivot = (high_24h + low_24h + curr_price) / 3.0
         r1 = (2 * pivot) - low_24h
         r2 = pivot + (high_24h - low_24h)
         s1 = (2 * pivot) - high_24h
         s2 = pivot - (high_24h - low_24h)
 
-        # 8. Actionable Notes
+        # 10. Actionable Notes
         notes = []
         if is_counter_trend:
             notes.append("⚠️ MACRO WARNING: 4H structure is in a Trend Down. Long positions carry counter-trend risk.")
-        if orderbook.imbalance_pct > 15.0:
-            notes.append(f"🟢 ORDER BOOK SUPPORT: Bid depth exceeds asks by +{orderbook.imbalance_pct}% (${orderbook.bid_depth_usd:,.0f} bids).")
-        elif orderbook.imbalance_pct < -15.0:
-            notes.append(f"🔴 ORDER BOOK RESISTANCE: Ask wall exceeds bids by {abs(orderbook.imbalance_pct)}% (${orderbook.ask_depth_usd:,.0f} asks).")
+        if funding_warning:
+            notes.append(funding_warning)
+        if crowded_long_risk_active:
+            notes.append("⚠️ CROWDED LONG RISK: Sweep toward liquidation pool likely before sustained reversal.")
+        if oi_confluence == "EXHAUSTION_SIGNAL":
+            notes.append("📉 OI EXHAUSTION SIGNAL: Targets tightened by 25% due to declining open interest.")
+        elif oi_confluence == "CONFIRMS_TREND":
+            notes.append("📈 OI EXPANSION: Aggressive open interest expansion confirms current move.")
 
-        if vol_vote.details["breakout_imminent"]:
-            notes.append("🚨 VOLATILITY ALERT: Bollinger Bands compressed inside Keltner Channels. A major expansion is coiling.")
+        if squeeze_label:
+            notes.append(f"⚡ VOLATILITY STATUS: {squeeze_label}")
+
+        if orderbook.imbalance_pct > 15.0:
+            notes.append(f"🟢 ORDER BOOK SUPPORT: Bid depth exceeds asks by +{orderbook.imbalance_pct:.1f}% (${orderbook.bid_depth_usd:,.0f} bids).")
+        elif orderbook.imbalance_pct < -15.0:
+            notes.append(f"🔴 ORDER BOOK RESISTANCE: Ask wall exceeds bids by {abs(orderbook.imbalance_pct):.1f}% (${orderbook.ask_depth_usd:,.0f} asks).")
 
         notes.append("⚖️ COMPLIANCE: Algorithmic statistical model. All decisions remain the responsibility of the human trader.")
 
         summary = (
-            f"Binance Live Feed: Model indicates {buy_pct}% BUY / {neutral_pct}% NEUTRAL / {sell_pct}% SELL odds on {timeframe.upper()}. "
-            f"4H Macro is {macro_regime_4h.upper()} with orderbook imbalance at {orderbook.imbalance_pct:+.1f}%. Directive: {action}."
+            f"Multi-Exchange Feed: Model indicates {buy_pct}% BUY / {neutral_pct}% NEUTRAL / {sell_pct}% SELL odds on {timeframe.upper()}. "
+            f"4H Macro is {macro_regime_4h.upper()} (ADX: {adx_14:.1f}) with orderbook imbalance at {orderbook.imbalance_pct:+.1f}%. Directive: {action}."
         )
 
         return AdvisoryReport(
@@ -829,7 +1216,13 @@ class PredictiveEnsembleEngine:
             momentum_brain=mom_vote,
             volatility_brain=vol_vote,
             advisory_summary=summary,
-            actionable_notes=notes
+            actionable_notes=notes,
+            adx_value=round(adx_14, 1),
+            squeeze_state=squeeze_state,
+            squeeze_label=squeeze_label,
+            funding_warning=funding_warning,
+            oi_confluence=oi_confluence,
+            crowded_long_risk=crowded_long_risk_active
         )
 
 

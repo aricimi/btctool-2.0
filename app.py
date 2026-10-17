@@ -198,11 +198,14 @@ st.sidebar.markdown("---")
 st.sidebar.caption("🚀 Architecture: Python / Streamlit / Binance REST")
 
 
-# Load Live Data
-@st.cache_data(ttl=20)
+import gc
+
+# Load Live Data with 15s TTL and memory hygiene
+@st.cache_data(ttl=15)
 def load_market_data(symbol: str, timeframe: str):
     report = PredictiveEnsembleEngine.generate_advisory(symbol=symbol, timeframe=timeframe)
     df = MarketDataService.fetch_klines(symbol=symbol, interval=timeframe, limit=120)
+    gc.collect()
     return report, df
 
 
@@ -250,7 +253,7 @@ with m3:
 with m4:
     st.metric("Sell Probability", f"{current_report.sell_probability}%")
 with m5:
-    st.metric("4H Macro Regime", current_report.macro_regime_4h)
+    st.metric("4H Macro Regime", current_report.macro_regime_4h, delta=f"ADX: {current_report.adx_value}")
 
 
 # ORDER BOOK & DERIVATIVES MICROSTRUCTURE RIBBON
@@ -259,13 +262,23 @@ d1, d2, d3, d4 = st.columns(4)
 ob = current_report.orderbook
 with d1:
     imb_color = "🟢" if ob.imbalance_pct > 0 else "🔴"
-    st.metric("Order Book Imbalance (0.5%)", f"{imb_color} {ob.imbalance_pct:+.1f}%")
+    delta_p_str = f" | α: {ob.confirmed_delta_p:+.2f}" if ob.confirmed_delta_p != 0 else ""
+    st.metric("Order Book Imbalance (0.5%)", f"{imb_color} {ob.imbalance_pct:+.1f}%{delta_p_str}")
 with d2:
     st.metric("Near-Mid Bid Depth", f"${ob.bid_depth_usd:,.0f}")
 with d3:
     st.metric("Near-Mid Ask Depth", f"${ob.ask_depth_usd:,.0f}")
 with d4:
-    st.metric("Futures Open Interest", f"{ob.open_interest_btc:,.0f} BTC", delta=f"Funding: {ob.funding_rate_pct:+.4f}%")
+    delta_str = f"Funding: {ob.funding_rate_pct:+.4f}%"
+    if current_report.funding_warning:
+        delta_str = "⚠️ " + delta_str
+    st.metric("Futures Open Interest", f"{ob.open_interest_btc:,.0f} BTC", delta=delta_str)
+
+if current_report.funding_warning:
+    st.warning(current_report.funding_warning)
+
+if current_report.squeeze_label:
+    st.info(f"⚡ **Squeeze State:** {current_report.squeeze_label}")
 
 
 # ACTIONABLE TRADE DIRECTIVE CARD

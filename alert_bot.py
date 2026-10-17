@@ -14,6 +14,7 @@ import json
 import time
 import datetime
 import threading
+import gc
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Dict, Any, Optional
 import requests
@@ -153,21 +154,31 @@ class ScalpAlertEngine:
         if (now - self.last_alert_time) < self.alert_cooldown_seconds:
             return
 
+        # Step 10A: Target Calculation using dynamic ATR
+        target_1_long  = round(curr_price + 0.5 * atr, 2)
+        target_2_long  = round(curr_price + 1.0 * atr, 2)
+        stop_long      = round(curr_price - 1.5 * atr, 2)
+
+        target_1_short = round(curr_price - 0.5 * atr, 2)
+        target_2_short = round(curr_price - 1.0 * atr, 2)
+        stop_short     = round(curr_price + 1.5 * atr, 2)
+
+        long_gain_pct = ((target_1_long - curr_price) / curr_price) * 100.0 if curr_price > 0 else 0.0
+        short_gain_pct = ((curr_price - target_1_short) / curr_price) * 100.0 if curr_price > 0 else 0.0
+
         # PING-PONG LONG SCALP CONDITIONS:
         # 1. Price is in lower channel (%B <= 0.35) or swept bottom low
         # 2. Order book shows bid absorption (imbalance > +12%)
         # 3. Target 1 offers at least min_scalp_pct gain
-        long_target_pct = ((td.take_profit_1 - curr_price) / curr_price) * 100.0 if curr_price > 0 else 0.0
-        
-        if pct_b <= 0.35 and ob.imbalance_pct >= 12.0 and long_target_pct >= self.min_scalp_pct:
+        if pct_b <= 0.35 and ob.imbalance_pct >= 12.0 and long_gain_pct >= self.min_scalp_pct:
             self._trigger_entry_alert(
-                direction="LONG",
+                direction="long",
                 timeframe=timeframe,
                 price=curr_price,
-                tp1=td.take_profit_1,
-                tp2=td.take_profit_2,
-                stop=td.invalidation_stop,
-                gain_pct=long_target_pct,
+                tp1=target_1_long,
+                tp2=target_2_long,
+                stop=stop_long,
+                gain_pct=long_gain_pct,
                 imbalance=ob.imbalance_pct,
                 bid_depth=ob.bid_depth_usd,
                 rationale=td.rationale,
@@ -179,17 +190,15 @@ class ScalpAlertEngine:
         # 1. Price is in upper channel (%B >= 0.65) or testing ceiling
         # 2. Order book shows heavy overhead ask wall (imbalance < -12%)
         # 3. Target 1 offers at least min_scalp_pct gain
-        short_target_pct = ((curr_price - td.take_profit_1) / curr_price) * 100.0 if curr_price > 0 else 0.0
-
-        if pct_b >= 0.65 and ob.imbalance_pct <= -12.0 and short_target_pct >= self.min_scalp_pct:
+        if pct_b >= 0.65 and ob.imbalance_pct <= -12.0 and short_gain_pct >= self.min_scalp_pct:
             self._trigger_entry_alert(
-                direction="SHORT",
+                direction="short",
                 timeframe=timeframe,
                 price=curr_price,
-                tp1=td.take_profit_1,
-                tp2=td.take_profit_2,
-                stop=td.invalidation_stop,
-                gain_pct=short_target_pct,
+                tp1=target_1_short,
+                tp2=target_2_short,
+                stop=stop_short,
+                gain_pct=short_gain_pct,
                 imbalance=ob.imbalance_pct,
                 bid_depth=ob.ask_depth_usd,
                 rationale=td.rationale,
@@ -202,13 +211,13 @@ class ScalpAlertEngine:
                              imbalance: float, bid_depth: float, rationale: str,
                              is_counter_trend: bool) -> None:
         """Builds and sends the entry signal."""
-        color_emoji = "🟢" if direction == "LONG" else "🔴"
+        color_emoji = "🟢" if direction.lower() == "long" else "🔴"
         trend_warning = "⚠️ <i>Counter-trend (4H Bearish). Strict scalp.</i>" if is_counter_trend else "✅ <i>Aligned with higher structure.</i>"
 
         msg = (
             f"🚨 <b>BTCTOOL PING-PONG SCALP ALERT!</b>\n"
             f"━━━━━━━━━━━━━━━━━━\n"
-            f"Direction: {color_emoji} <b>{direction} SCALP</b>\n"
+            f"Direction: {color_emoji} <b>{direction.upper()} SCALP</b>\n"
             f"Timeframe: <b>{timeframe.upper()}</b>\n"
             f"Current Price: <b>${price:,.2f}</b>\n\n"
             f"🎯 <b>Target 1:</b> ${tp1:,.2f} (<b>+{gain_pct:.2f}%</b>)\n"
@@ -224,35 +233,36 @@ class ScalpAlertEngine:
         sent = self.notifier.send_message(msg)
         if sent:
             self.last_alert_time = time.time()
+            # Step 10B: Synchronized active_trade keys
             self.active_trade = {
-                "direction": direction,
-                "entry_price": price,
-                "tp1": tp1,
-                "tp2": tp2,
-                "stop": stop,
-                "tp1_hit": False,
-                "timestamp": time.time()
+                'direction':    direction.lower(),
+                'entry':        price,
+                'target_1':     tp1,
+                'target_2':     tp2,
+                'stop':         stop,
+                'target_1_hit': False,
+                'timestamp':    time.time()
             }
 
     def _check_trade_exits(self, curr_price: float) -> None:
-        """Evaluates price against active scalp targets and stops."""
+        """Evaluates price against active scalp targets and stops (strictly synced with active_trade keys)."""
         t = self.active_trade
         if not t:
             return
 
-        direction = t["direction"]
-        entry = t["entry_price"]
+        direction = t['direction']
+        entry = t['entry']
 
         # 1. Target 1 Hit
-        if not t["tp1_hit"]:
-            hit_tp1 = (curr_price >= t["tp1"]) if direction == "LONG" else (curr_price <= t["tp1"])
+        if not t['target_1_hit']:
+            hit_tp1 = (curr_price >= t['target_1']) if direction == 'long' else (curr_price <= t['target_1'])
             if hit_tp1:
-                t["tp1_hit"] = True
+                t['target_1_hit'] = True
                 gain_pct = abs((curr_price - entry) / entry) * 100.0
                 msg = (
                     f"🎯 <b>PING-PONG TARGET 1 HIT!</b>\n"
                     f"━━━━━━━━━━━━━━━━━━\n"
-                    f"Direction: <b>{direction}</b>\n"
+                    f"Direction: <b>{direction.upper()}</b>\n"
                     f"Exit Price: <b>${curr_price:,.2f}</b>\n"
                     f"Gain: <b>+{gain_pct:.2f}% PROFIT</b> ✅\n\n"
                     f"Action: <i>Take profit or move your stop to breakeven (${entry:,.2f}) to ride Target 2!</i>"
@@ -260,7 +270,7 @@ class ScalpAlertEngine:
                 self.notifier.send_message(msg)
 
         # 2. Target 2 Hit (Final Exit)
-        hit_tp2 = (curr_price >= t["tp2"]) if direction == "LONG" else (curr_price <= t["tp2"])
+        hit_tp2 = (curr_price >= t['target_2']) if direction == 'long' else (curr_price <= t['target_2'])
         if hit_tp2:
             gain_pct = abs((curr_price - entry) / entry) * 100.0
             msg = (
@@ -275,7 +285,7 @@ class ScalpAlertEngine:
             return
 
         # 3. Stop Invalidation Hit
-        hit_stop = (curr_price <= t["stop"]) if direction == "LONG" else (curr_price >= t["stop"])
+        hit_stop = (curr_price <= t['stop']) if direction == 'long' else (curr_price >= t['stop'])
         if hit_stop:
             loss_pct = abs((curr_price - entry) / entry) * 100.0
             msg = (
@@ -362,6 +372,9 @@ def run_bot(interval_seconds: int = 20, min_scalp: float = 0.20):
             break
         except Exception as e:
             print(f"[Loop Exception] {e}")
+
+        # Step 10C: Garbage collection after each scan cycle
+        gc.collect()
 
         time.sleep(interval_seconds)
 

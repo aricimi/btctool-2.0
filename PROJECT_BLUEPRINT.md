@@ -40,57 +40,69 @@ This document serves as the **Single Source of Truth** for the entire project.
 ## 2. Market Ingestion & Order Book Microstructure
 
 * **Multi-Exchange Primary Market Feed:** Direct **Bybit Spot Klines API** (with Binance and yfinance fallbacks), unblocked across all global cloud networks (AWS, Streamlit Cloud, Render).
-* **Order Book Depth & Imbalance (Bybit + OKX):**
-  - Evaluates live bid vs. ask depth within the **0.5% mid-price boundary** from Bybit Level 2 order book (`/v5/market/orderbook?category=spot`) and OKX books (`/api/v5/market/books`).
-  - **Imbalance %:** $\frac{\text{Bid Depth} - \text{Ask Depth}}{\text{Bid Depth} + \text{Ask Depth}} \times 100$
-  - Injects dynamic probability alpha ($\pm 15\%$ probability shift) based on real institutional limit order walls.
-* **Futures Derivatives:**
+* **Distance-Weighted Order Book Depth & tanh Imbalance (Bybit + OKX):**
+  - Evaluates live bid vs. ask depth with exponential distance decay: $w_i = \exp\left(-40.0 \times \frac{|\text{price}_i - \text{mid}|}{\text{mid}}\right)$.
+  - **Weighted Imbalance Ratio:** $\frac{\sum \text{bid\_usd} \times w_{\text{bid}} - \sum \text{ask\_usd} \times w_{\text{ask}}}{\sum \text{bid\_usd} \times w_{\text{bid}} + \sum \text{ask\_usd} \times w_{\text{ask}}}$.
+  - **tanh Probability Alpha:** $\Delta P = 0.15 \times \tanh(3.0 \times \text{ob\_imbalance\_ratio})$.
+  - **Anti-Spoofing Filter:** Requires 3 consecutive snapshots of same-sign imbalance before applying $\Delta P$.
+* **Taker Delta:** Real-time taker flow ratio $[-1.0, +1.0]$ via Bybit recent trades (`/v5/market/recent-trade`).
+* **Futures Derivatives & Z-Score:**
   - Real-time Open Interest in BTC from Bybit Linear Tickers (`/v5/market/tickers`).
-  - Real-time funding rate from Bybit Linear perpetuals.
+  - Rolling 20-period OI change Z-score: $Z_{\text{OI}} = \frac{\Delta \text{OI} - \mu_{20}}{\sigma_{20}}$. Confluence gates: $Z > 2.0$ confirms trend; $Z < -2.0$ triggers exhaustion and tightens targets by 25%.
+  - Real-time funding rate from Bybit Linear perpetuals in raw decimal format.
 
 ---
 
-## 3. Trading Formulas & Quantitative Brains
+## 3. Trading Formulas, Quantitative Brains & Meta-Learner
 
 ### 3.1. The Statistical Brain (`StatisticalBrain`)
 - Bollinger Bands ($N=20, K=2.0$).
 - $\%B = \frac{\text{Close} - \text{Lower}}{\text{Upper} - \text{Lower}}$
 - **Regime-Aware Envelopes:**
-  - When 4H Macro is `Trend Down` and $\%B \ge 0.60$ (upper half of band): Evaluated as a **Bearish Retest Resistance Zone** (`sell_prob = 0.55`, `buy_prob = 0.20`), preventing buy traps into overhead resistance.
-  - When 4H Macro is `Trend Up` and $\%B \le 0.40$ (lower half of band): Evaluated as a **Bullish Dip Support Zone** (`buy_prob = 0.55`, `sell_prob = 0.20`).
+  - When 4H Macro is `Trend Down` and $\%B \ge 0.60$: Evaluated as a **Bearish Retest Resistance Zone** (`sell_prob = 0.55`, `buy_prob = 0.20`), preventing buy traps into overhead resistance.
+  - When 4H Macro is `Trend Up` and $\%B \le 0.40$: Evaluated as a **Bullish Dip Support Zone** (`buy_prob = 0.55`, `sell_prob = 0.20`).
 
 ### 3.2. The Momentum Brain (`MomentumBrain`)
 - **Triple-Period Dynamic RSI:** Tailored periods `(6, 12, 24)` on 1H/15M to detect fast micro-reversals before 14-period RSI catches up.
 - **Dual EMA Envelopes:** Fast EMA(9) and Slow EMA(21).
 - **MACD (12, 26, 9):** Histogram slope derivative $\Delta \text{Hist} = \text{Hist}_t - \text{Hist}_{t-1}$ to track momentum acceleration.
 
-### 3.3. The Volatility Brain (`VolatilityBrain`)
+### 3.3. The Volatility Brain (`VolatilityBrain`) & Squeeze State Machine
 - True Range & 14-period smoothed ATR.
-- **Squeeze Detection:** Bollinger Bands compressing inside Keltner Channels ($1.5 \times \text{ATR}$).
-- Flags `CRITICAL_BREAKOUT_IMMINENT` when compressed.
+- **5-State Squeeze Machine:** Evaluates Bollinger Bands compressing inside Keltner Channels ($1.5 \times \text{ATR}$).
+  - `IDLE`: Normal volatility ($BB \ge KC$).
+  - `BUILDING`: $BB < KC$ for $< 3$ cycles (or $< 5$ on $1\text{m}/5\text{m}$).
+  - `LOADED`: $BB < KC$ sustained for $\ge 3$ cycles (`🟡 SQUEEZE LOADED — WATCH FOR BREAK`).
+  - `FIRING`: Breakout active as BB expands outside KC (`🔴 SQUEEZE FIRING — BREAKOUT ACTIVE`). Overrules trend-fade scenarios.
+  - `TRENDING`: Post-squeeze expansion with trailing stop (`🟢 POST-SQUEEZE TREND — TRAIL STOP`).
+
+### 3.4. Level 2 Meta-Learner & Macro ADX(14)
+- **ADX(14) Macro Gating:** Computed on 4H klines. If $\text{ADX}_{14} > 22$ or $\Delta \text{ADX} > 0$: Trend Up / Down based on EMA 9/21. Otherwise: Range regime.
+- **Stacked Meta-Learner:** Calibrated `HistGradientBoostingClassifier` with sigmoid calibration sitting above all 3 brains.
+- **Cold-Start Fallback:** `REGIME_WEIGHTS` (Breakout, Chop, Range, Trend Up, Trend Down) until 200 labeled observations are collected.
 
 ---
 
-## 4. Institutional Algorithmic Bot Decision Matrix (Zero Contradictions)
+## 4. Institutional Algorithmic Bot Decision Matrix & Pre-Filter
 
-The engine acts as a professional algorithmic trading bot where all parameters are strictly co-aligned:
+### 4.1. Derivatives Pre-Filter (Raw Bybit Decimals)
+- **Funding Rate Gate:**
+  - $\text{Funding} > +0.0005$ (+0.05%): Suppresses aggressive `ENTER LONG NOW`, converting to `SET BUY LIMIT ORDER`.
+  - $\text{Funding} < -0.0003$ (-0.03%): Suppresses aggressive `ENTER SHORT NOW`, converting to `SET SELL LIMIT ORDER`.
+- **Adaptive Liquidation Trap:** Activates after 24h history if retail long ratio $> \text{mean}_{24h} + 0.08$ and distance to liquidation cluster $< 1.5 \times \text{ATR}$.
 
-1. **Scenario 1 (Downtrend Resistance Fade):**
-   - **Trigger:** 4H Macro is `Trend Down` + $\%B \ge 0.58$ (price in upper channel) + Order Book Imbalance $< -10\%$ (overhead ask wall).
-   - **Directive:** `SET SELL LIMIT AT RESISTANCE (BEARISH FADE)`
-   - **Levels:** Invalidation strictly above Upper BB ($+0.25 \times \text{ATR}$); $TP_1$ at Middle Band; $TP_2$ at Lower Band.
-2. **Scenario 2 (Downtrend Continuation):**
-   - **Trigger:** 4H Macro is `Trend Down` + Breakdown momentum or $\%B < 0.40$ with heavy sell flow.
-   - **Directive:** `TREND CONTINUATION: ENTER SHORT ON RETEST`
-3. **Scenario 3 (Bottom Sweep Rebound):**
-   - **Trigger:** 24h Low swept + Rebound $\ge \$120$ + Bid Imbalance $> +15\%$.
-   - **Directive:** If 4H is Down: `COUNTER-TREND SCALP: BUY PULLBACK LIMIT` (tight scalp targets, explicit counter-trend flag). If 4H is Up: `ENTER LONG NOW (MOMENTUM REBOUND)`.
-4. **Scenario 4 (Uptrend Dip Buy):**
-   - **Trigger:** 4H Macro is `Trend Up` + $\%B \le 0.45$ + Order Book has bid support.
-   - **Directive:** `TREND FOLLOWING: SET BUY LIMIT AT SUPPORT`
-5. **Scenario 5 (Range-Bound Ping-Pong):**
-   - **Trigger:** Consolidation / Equilibrium.
-   - **Directive:** If $\%B \ge 0.50$: `RANGE DEFENSE: SET SELL LIMIT AT UPPER BAND`. If $\%B < 0.50$: `RANGE DEFENSE: SET BUY LIMIT AT LOWER BAND`. Never buys the top of the range.
+### 4.2. Unified ATR Stops & Targets Standard
+- **Longs:** Stop = $\text{Entry} - 1.5 \times \text{ATR}$; $TP_1 = \text{Entry} + 0.5 \times \text{ATR}$; $TP_2 = \text{Entry} + 1.0 \times \text{ATR}$.
+- **Shorts:** Stop = $\text{Entry} + 1.5 \times \text{ATR}$; $TP_1 = \text{Entry} - 0.5 \times \text{ATR}$; $TP_2 = \text{Entry} - 1.0 \times \text{ATR}$.
+- Exhaustion modifier: targets tightened by 25% if $Z_{\text{OI}} < -2.0$.
+
+### 4.3. 5 Scenarios & Conflict Resolution Hierarchy
+1. **Scenario 1 (Downtrend Resistance Fade):** 4H Trend Down + $\%B \ge 0.58$ + Ask Imbalance $< -10\% \rightarrow$ `SET SELL LIMIT AT RESISTANCE (BEARISH FADE)`.
+2. **Scenario 2 (Downtrend Continuation):** 4H Trend Down + Breakdown momentum $\rightarrow$ `TREND CONTINUATION: ENTER SHORT ON RETEST`.
+3. **Scenario 3 (Bottom Sweep Rebound):** Low swept + Rebound $\ge 0.5 \times \text{ATR}$ + Bid Imbalance $> +15\%$. If Volume $\ge 1.8 \times \text{SMA}_{20}$: `ENTER LONG NOW` or `COUNTER-TREND SCALP`. Else: `LOW-VOLUME RETEST: SET PULLBACK LIMIT`.
+4. **Scenario 4 (Uptrend Dip Buy):** 4H Trend Up + $\%B \le 0.45 \rightarrow$ `TREND FOLLOWING: SET BUY LIMIT AT SUPPORT`.
+5. **Scenario 5 (Range-Bound Ping-Pong):** Consolidation $\rightarrow$ Limit Buy at Lower Band / Limit Sell at Upper Band.
+- **Conflict Resolution Pipeline:** 5 sequential gates (Derivatives $\rightarrow$ Macro ADX $\rightarrow$ Squeeze FIRING $\rightarrow$ OB tiebreaker $\rightarrow$ %B boundaries).
 
 ---
 
@@ -107,15 +119,14 @@ The engine acts as a professional algorithmic trading bot where all parameters a
 ## 6. Telegram Mobile Alert Bot (`alert_bot.py`)
 
 * **Execution Copilot Architecture:** Scans 5M/15M Bybit/OKX order books and price action every 15–20s for ping-pong scalps $\ge +0.20\%$.
-* **Push Notifications Dispatched:**
-  1. **Entry Alert:** Direction (Long/Short), Entry Price, Target 1 (+0.25%), Target 2 (+0.50%), Stop Invalidation, and Order Book depth.
-  2. **Target 1 Hit Alert:** Reached target, suggests moving stop to breakeven.
-  3. **Target 2 Hit Alert:** Full profit reached.
-  4. **Stop Loss Alert:** Capital preservation exit.
-* **Security & Configuration:** Secrets stored in git-ignored `telegram_config.json` or environment variables (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`).
-* **Execution Command:** `python alert_bot.py` (or `python alert_bot.py --setup` for interactive wizard).
+* **ATR Targets & Synced Hit Detection:**
+  - $TP_1 = \text{Entry} \pm 0.5 \times \text{ATR}_{14}$ (Scalp Exit / Move stop to breakeven).
+  - $TP_2 = \text{Entry} \pm 1.0 \times \text{ATR}_{14}$ (Full Runner Exit).
+  - $\text{Stop} = \text{Entry} \mp 1.5 \times \text{ATR}_{14}$ (Capital preservation exit).
+  - Alert message and hit detection strictly share the same synchronized dictionary variables.
+  - Cycle memory hygiene: `gc.collect()` at end of each iteration.
 * **24/7 Cloud Architecture (Render + UptimeRobot):**
-  - Integrated HTTP Health Check endpoint on `$PORT` (default 10000).
+  - Integrated HTTP Health Check endpoint on `$PORT` (default 10000) supporting both `HEAD` and `GET`.
   - Keeps Render free service permanently awake via UptimeRobot 5-minute HTTP keep-alive pings.
   - Zero local PC dependency: runs 24/7/365 in the cloud without sleeping.
 
