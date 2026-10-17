@@ -6,9 +6,15 @@ Dispatches instant push alerts for entries, target hits (>= +0.20%), and stop in
 
 import os
 import sys
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 import json
 import time
 import datetime
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Dict, Any, Optional
 import requests
 
@@ -16,6 +22,36 @@ from engine import MarketDataService, PredictiveEnsembleEngine, AdvisoryReport
 
 
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "telegram_config.json")
+
+
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    """Responds to Render and UptimeRobot HTTP pings to keep service alive 24/7."""
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "application/json")
+        self.end_headers()
+        payload = {
+            "status": "online",
+            "service": "btctool 2.0 Telegram Scalping Alert Engine",
+            "utc_time": datetime.datetime.now(datetime.timezone.utc).isoformat()
+        }
+        self.wfile.write(json.dumps(payload).encode("utf-8"))
+
+    def log_message(self, format, *args):
+        # Silence default access logging to keep console clean
+        return
+
+
+def start_health_server(port: int = 10000) -> Optional[HTTPServer]:
+    try:
+        server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        print(f"📡 Web Health Check Server running on port {port} (Listening for UptimeRobot pings)")
+        return server
+    except Exception as e:
+        print(f"[Warning] Could not start HTTP health server on port {port}: {e}")
+        return None
 
 
 class TelegramNotifier:
@@ -287,6 +323,9 @@ def setup_wizard():
 
 
 def run_bot(interval_seconds: int = 20, min_scalp: float = 0.20):
+    port = int(os.environ.get("PORT", "10000"))
+    start_health_server(port)
+
     notifier = TelegramNotifier()
     if not notifier.is_configured:
         print("\n⚠️ Telegram credentials not configured yet.")
@@ -299,6 +338,14 @@ def run_bot(interval_seconds: int = 20, min_scalp: float = 0.20):
     print(f"Minimum Scalp Trigger: >= +{min_scalp:.2f}%")
     print(f"Polling Cadence: every {interval_seconds}s")
     print("="*50 + "\n")
+
+    # If running on cloud (Render or PORT specified), send boot confirmation
+    if os.environ.get("RENDER") or os.environ.get("PORT"):
+        notifier.send_message(
+            "⚡ <b>btctool 2.0 · Cloud Engine Active</b>\n\n"
+            "Alert bot is online 24/7 on Render!\n"
+            "Monitoring BTC/USDT order book liquidity sweeps and ping-pong scalps."
+        )
 
     engine = ScalpAlertEngine(notifier, min_scalp_pct=min_scalp)
 

@@ -112,4 +112,9 @@ The engine acts as a professional algorithmic trading bot where all parameters a
   4. **Stop Loss Alert:** Capital preservation exit.
 * **Security & Configuration:** Secrets stored in git-ignored `telegram_config.json` or environment variables (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`).
 * **Execution Command:** `python alert_bot.py` (or `python alert_bot.py --setup` for interactive wizard).
+* **24/7 Cloud Architecture (Render + UptimeRobot):**
+  - Integrated HTTP Health Check endpoint on `$PORT` (default 10000).
+  - Keeps Render free service permanently awake via UptimeRobot 5-minute HTTP keep-alive pings.
+  - Zero local PC dependency: runs 24/7/365 in the cloud without sleeping.
+
 
