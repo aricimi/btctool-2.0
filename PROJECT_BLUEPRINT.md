@@ -98,6 +98,8 @@ The engine acts as a professional algorithmic trading bot where all parameters a
 
 - **Local Dashboard:** `http://localhost:8501`
 - **Cloudflare Edge Tunnel:** `https://oven-internationally-denver-salem.trycloudflare.com`
+- **Streamlit Cloud Dashboard:** `https://btctool-2-0.streamlit.app`
+- **24/7 Telegram Alert Bot (Render Cloud):** `https://btctool-alerts.onrender.com`
 - **GitHub Repository:** [https://github.com/aricimi/btctool-2.0](https://github.com/aricimi/btctool-2.0)
 
 ---
