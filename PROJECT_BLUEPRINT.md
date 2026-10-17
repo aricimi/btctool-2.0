@@ -99,3 +99,17 @@ The engine acts as a professional algorithmic trading bot where all parameters a
 - **Local Dashboard:** `http://localhost:8501`
 - **Cloudflare Edge Tunnel:** `https://oven-internationally-denver-salem.trycloudflare.com`
 - **GitHub Repository:** [https://github.com/aricimi/btctool-2.0](https://github.com/aricimi/btctool-2.0)
+
+---
+
+## 6. Telegram Mobile Alert Bot (`alert_bot.py`)
+
+* **Execution Copilot Architecture:** Scans 5M/15M Bybit/OKX order books and price action every 15–20s for ping-pong scalps $\ge +0.20\%$.
+* **Push Notifications Dispatched:**
+  1. **Entry Alert:** Direction (Long/Short), Entry Price, Target 1 (+0.25%), Target 2 (+0.50%), Stop Invalidation, and Order Book depth.
+  2. **Target 1 Hit Alert:** Reached target, suggests moving stop to breakeven.
+  3. **Target 2 Hit Alert:** Full profit reached.
+  4. **Stop Loss Alert:** Capital preservation exit.
+* **Security & Configuration:** Secrets stored in git-ignored `telegram_config.json` or environment variables (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`).
+* **Execution Command:** `python alert_bot.py` (or `python alert_bot.py --setup` for interactive wizard).
+
