@@ -26,6 +26,11 @@ CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "telegram
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
     """Responds to Render and UptimeRobot HTTP pings to keep service alive 24/7."""
+    def do_HEAD(self):
+        self.send_response(200)
+        self.send_header("Content-type", "application/json")
+        self.end_headers()
+
     def do_GET(self):
         self.send_response(200)
         self.send_header("Content-type", "application/json")
