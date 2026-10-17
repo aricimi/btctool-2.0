@@ -97,5 +97,5 @@ The engine acts as a professional algorithmic trading bot where all parameters a
 ## 5. Active Endpoints & Live Deployment
 
 - **Local Dashboard:** `http://localhost:8501`
-- **Cloudflare Edge Tunnel:** `https://conflicts-bright-investigate-steam.trycloudflare.com`
+- **Cloudflare Edge Tunnel:** `https://oven-internationally-denver-salem.trycloudflare.com`
 - **GitHub Repository:** [https://github.com/aricimi/btctool-2.0](https://github.com/aricimi/btctool-2.0)
