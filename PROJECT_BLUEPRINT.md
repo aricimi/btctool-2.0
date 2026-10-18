@@ -118,17 +118,21 @@ This document serves as the **Single Source of Truth** for the entire project.
 
 ## 6. Telegram Mobile Spot Execution Copilot (`alert_bot.py`)
 
-* **Spot-Only Execution Copilot Architecture (`SpotExecutionCopilot`):**
-  - Designed specifically for spot traders (e.g. Revolut X with 0.00% maker fee, or OKX spot).
-  - Eliminates micro-scalp fee drag by targeting high-conviction trend breakouts, compression coils, and liquidity reversals (+1.5% to +3.5%+).
-* **Complete Spot Trade Lifecycle:**
-  1. **Early Trend Ignition (Phase 1 -> Phase 2 Coil):** Squeeze `LOADED` or `FIRING` with order book absorption $\ge +8\%$ and $\%B \le 0.55$. Enters *before* the impulse candle accelerates.
-  2. **Bottom Sweep Rebound:** Channel sweep ($\%B \le 0.30$) with heavy bid wall ($\ge +15\%$).
-  3. **Bullish Dip Support:** 4H Macro Trend Up + Pullback to dynamic support ($0.35 \le \%B \le 0.48$).
-  4. **Target 1 Milestone & Breakeven Protection:** When price reaches Target 1 ($1.0 \times \text{ATR}$), moves stop to entry $+ 0.15 \times \text{ATR}$ for guaranteed breakeven.
-  5. **Parabolic Trailing Ratchet:** Follows new higher swing lows, ratcheting stop up behind price ($0.9 \times \text{ATR}$ under peak) to lock in profit up to the trend crest.
-  6. **Emergency Whale Invalidation Shield:** If price is near breakeven and the order book violently flips (imbalance $\le -25\%$), sends immediate market exit alert to protect capital.
-  7. **Hard Stop Capital Defense:** Server-synced ATR stop loss ($1.2 \times \text{ATR}$) strictly caps risk on unexpected flash flushes.
+* **Continuous Multi-Timeframe Confluence Architecture (`SpotExecutionCopilot`):**
+  - **No Rigid Single-Timeframe Limits:** Ingests the continuous market spectrum concurrently on every cycle:
+    - **1M & 5M Ultra-Micro:** Detects bottom wick rejections, 1-minute volume climaxes, micro-momentum, and instant entries (+0.35% to +1.5%+).
+    - **15M & 1H Intermediate Structure:** Tracks the 5-state Volatility Squeeze machine, channel bounds, and dynamic ATR risk/target envelopes.
+    - **4H & 1D Macro Context:** Monitors the macro trend anchor (EMA 9/21 + ADX(14)) to avoid buying into major overhead resistance ceilings.
+    - **Live Tape & Order Flow:** Integrates real-time Bybit/OKX order book depth and live trade ticks (Taker Delta $\ge +0.25$).
+* **Complete Multi-Scale Spot Trade Lifecycle:**
+  1. **1M/5M Micro-Momentum Taker Ignition:** Fires instantly when Taker Delta surges ($\ge +0.25$), a 1M candle wicks/reverses, and order book shows bid absorption ($\ge +5\%$).
+  2. **15M Early Trend Ignition:** Squeeze `LOADED` or `FIRING` with order book absorption $\ge +8\%$ and $\%B \le 0.55$. Enters *before* the impulse candle accelerates.
+  3. **Multi-Scale Bottom Sweep Rebound:** Channel sweep ($\%B \le 0.30$ on 1M, 5M, or 15M) with heavy institutional bid wall ($\ge +15\%$).
+  4. **Bullish Dip Support:** 4H Macro Trend Up + Pullback to dynamic support on 15M or 5M ($0.35 \le \%B \le 0.50$).
+  5. **Target 1 Milestone & Breakeven Protection:** When price reaches Target 1 ($1.0 \times \text{ATR}$), moves stop to entry $+ 0.15 \times \text{ATR}$ for guaranteed breakeven.
+  6. **Parabolic Trailing Ratchet:** Follows new higher swing lows, ratcheting stop up behind price ($0.9 \times \text{ATR}$ under peak) to lock in profit up to the trend crest.
+  7. **Emergency Whale Invalidation Shield:** If price is near breakeven and the order book violently flips (imbalance $\le -25\%$), sends immediate market exit alert to protect capital.
+  8. **Hard Stop Capital Defense:** Server-synced ATR stop loss ($1.2 \times \text{ATR}$) strictly caps risk on unexpected flash flushes.
 * **24/7 Cloud Architecture (Render + UptimeRobot):**
   - Integrated HTTP Health Check endpoint on `$PORT` (default 10000) supporting both `HEAD` and `GET`.
   - Keeps Render service permanently awake via UptimeRobot 5-minute HTTP keep-alive pings.

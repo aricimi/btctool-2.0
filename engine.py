@@ -350,9 +350,12 @@ class MarketDataService:
 
     @classmethod
     def fetch_klines(cls, symbol: str = "BTCUSDT", interval: str = "1h", limit: int = 150) -> pd.DataFrame:
-        """Pulls klines from Bybit with Binance and yfinance fallbacks."""
-        # 1. Primary: Bybit Spot Klines (Unblocked globally)
-        bybit_interval_map = {"15m": "15", "1h": "60", "4h": "240", "1d": "D"}
+        """Pulls klines from Bybit with Binance and yfinance fallbacks across full timeframe ladder."""
+        # 1. Primary: Bybit Spot Klines (Unblocked globally, full scale)
+        bybit_interval_map = {
+            "1m": "1", "3m": "3", "5m": "5", "15m": "15", "30m": "30",
+            "1h": "60", "2h": "120", "4h": "240", "1d": "D", "1w": "W"
+        }
         b_interval = bybit_interval_map.get(interval, "60")
 
         try:
@@ -379,7 +382,10 @@ class MarketDataService:
             pass
 
         # 2. Secondary: Binance
-        binance_interval_map = {"15m": "15m", "1h": "1h", "4h": "4h", "1d": "1d"}
+        binance_interval_map = {
+            "1m": "1m", "3m": "3m", "5m": "5m", "15m": "15m", "30m": "30m",
+            "1h": "1h", "2h": "2h", "4h": "4h", "1d": "1d", "1w": "1w"
+        }
         try:
             params = {"symbol": symbol, "interval": binance_interval_map.get(interval, "1h"), "limit": limit}
             r = requests.get(cls.BINANCE_KLINES_URL, params=params, timeout=5)

@@ -135,22 +135,31 @@ class SpotExecutionCopilot:
         self.last_alert_time: float = 0.0
         self.alert_cooldown_seconds: int = 180  # 3 min cooldown between entry alerts
 
-    def evaluate_market_cycle(self, timeframe: str = "15m") -> None:
-        """Runs a quantitative cycle scan and executes the spot trade lifecycle."""
+    def evaluate_market_cycle(self) -> None:
+        """
+        Runs continuous Multi-Timeframe Confluence across the full spectrum:
+        - 1M / 5M: Micro-ignitions, lower wick rejections, and volume climaxes.
+        - 15M / 1H: Squeeze compression state, channels, and dynamic ATR targets.
+        - 4H / 1D: Macro structural bias and major overhead barriers.
+        - Live Tape: Bybit/OKX order book depth and real-time Taker Delta.
+        """
         try:
-            report: AdvisoryReport = PredictiveEnsembleEngine.generate_advisory(symbol="BTCUSDT", timeframe=timeframe)
+            # 1. Fetch multi-scale reports concurrently
+            report_15m: AdvisoryReport = PredictiveEnsembleEngine.generate_advisory(symbol="BTCUSDT", timeframe="15m")
+            df_1m = MarketDataService.fetch_klines("BTCUSDT", "1m", limit=30)
+            df_5m = MarketDataService.fetch_klines("BTCUSDT", "5m", limit=30)
         except Exception as e:
-            print(f"[Engine Scan Error] {e}")
+            print(f"[Multi-Timeframe Scan Error] {e}")
             return
 
-        curr_price = report.latest_price
-        ob = report.orderbook
-        td = report.trade_directive
-        pct_b = report.statistical_brain.details["percent_b"]
-        atr = report.atr_value
-        squeeze = report.squeeze_state
-        macro = report.macro_regime_4h
-        oi_conf = report.oi_confluence
+        curr_price = report_15m.latest_price
+        ob = report_15m.orderbook
+        td = report_15m.trade_directive
+        pct_b_15m = report_15m.statistical_brain.details["percent_b"]
+        atr = report_15m.atr_value
+        squeeze = report_15m.squeeze_state
+        macro = report_15m.macro_regime_4h
+        oi_conf = report_15m.oi_confluence
 
         # 1. Manage Active Spot Position Lifecycle first (Ratchets, Exits, Whale Defense)
         if self.active_trade is not None:
@@ -162,10 +171,7 @@ class SpotExecutionCopilot:
         if (now - self.last_alert_time) < self.alert_cooldown_seconds:
             return
 
-        # 3. Dynamic ATR Stop and Targets
-        # TP1: 0.8 to 1.0 ATR (initial profit milestone / breakeven trigger)
-        # TP2: 1.8 to 2.5 ATR (trend expansion runner)
-        # Hard Stop: 1.2 to 1.5 ATR (strict risk boundary)
+        # 3. Dynamic Targets & Stops based on current volatility
         stop_price = round(curr_price - 1.2 * atr, 2)
         tp1_price  = round(curr_price + 1.0 * atr, 2)
         tp2_price  = round(curr_price + 2.2 * atr, 2)
@@ -174,13 +180,57 @@ class SpotExecutionCopilot:
         tp2_gain_pct = ((tp2_price - curr_price) / curr_price) * 100.0 if curr_price > 0 else 0.0
         risk_pct     = ((curr_price - stop_price) / curr_price) * 100.0 if curr_price > 0 else 0.0
 
+        # Compute Micro-Scale Indicators (1M and 5M)
+        # 1M metrics
+        c_1m = df_1m["Close"]
+        h_1m = df_1m["High"]
+        l_1m = df_1m["Low"]
+        o_1m = df_1m["Open"]
+        v_1m = df_1m["Volume"]
+        mean_1m = c_1m.rolling(20).mean()
+        std_1m  = c_1m.rolling(20).std()
+        pct_b_1m = float((c_1m.iloc[-1] - (mean_1m.iloc[-1] - 2*std_1m.iloc[-1])) / (4*std_1m.iloc[-1])) if std_1m.iloc[-1] > 0 else 0.5
+        
+        # 1M candle shape (detect bottom wick rejection: lower shadow > body)
+        lower_shadow_1m = min(o_1m.iloc[-1], c_1m.iloc[-1]) - l_1m.iloc[-1]
+        body_1m = abs(c_1m.iloc[-1] - o_1m.iloc[-1])
+        wick_rejection_1m = (lower_shadow_1m > body_1m) and (c_1m.iloc[-1] > l_1m.iloc[-1])
+        vol_surge_1m = v_1m.iloc[-1] > (v_1m.iloc[-10:].mean() * 1.5)
+
+        # 5M metrics
+        c_5m = df_5m["Close"]
+        mean_5m = c_5m.rolling(20).mean()
+        std_5m  = c_5m.rolling(20).std()
+        pct_b_5m = float((c_5m.iloc[-1] - (mean_5m.iloc[-1] - 2*std_5m.iloc[-1])) / (4*std_5m.iloc[-1])) if std_5m.iloc[-1] > 0 else 0.5
+
         # ====================================================================
-        # SPOT ENTRY SIGNAL 1: EARLY TREND IGNITION (Phase 1 -> Phase 2 Coil)
+        # SIGNAL 1: ULTRA-FAST 1M/5M MICRO-MOMENTUM & TAKER ACCELERATION
+        # Catches the exact 0.35% - 1.5%+ micro scalps as volume rushes in
+        # Conditions: Taker Delta positive (> +0.25) + 1M wick bounce or 5M turn
+        # ====================================================================
+        if ob.taker_delta >= 0.25 and (pct_b_1m <= 0.65 or pct_b_5m <= 0.60) and ob.imbalance_pct >= 5.0:
+            if wick_rejection_1m or vol_surge_1m or (c_1m.iloc[-1] > o_1m.iloc[-1]):
+                self._trigger_entry(
+                    setup_name="1M/5M MICRO-MOMENTUM TAKER IGNITION",
+                    price=curr_price,
+                    tp1=tp1_price,
+                    tp2=tp2_price,
+                    stop=stop_price,
+                    tp1_gain=tp1_gain_pct,
+                    tp2_gain=tp2_gain_pct,
+                    risk_pct=risk_pct,
+                    rationale=f"Live Taker Delta surge ({ob.taker_delta:+.2f}) with 1M/5M micro-reversal and bid depth support (+{ob.imbalance_pct:.1f}%).",
+                    timeframe="1M/5M Live"
+                )
+                return
+
+        # ====================================================================
+        # SIGNAL 2: EARLY TREND IGNITION (15M Squeeze Volatility Coil)
         # Conditions: Squeeze LOADED or FIRING, Bid absorption > +8%, %B <= 0.55
         # ====================================================================
-        if squeeze in ["LOADED", "FIRING"] and ob.imbalance_pct >= 8.0 and pct_b <= 0.55:
+        if squeeze in ["LOADED", "FIRING"] and ob.imbalance_pct >= 8.0 and pct_b_15m <= 0.55:
             self._trigger_entry(
-                setup_name="EARLY TREND IGNITION (VOLATILITY COIL)",
+                setup_name="15M EARLY TREND IGNITION (VOLATILITY COIL)",
                 price=curr_price,
                 tp1=tp1_price,
                 tp2=tp2_price,
@@ -188,16 +238,16 @@ class SpotExecutionCopilot:
                 tp1_gain=tp1_gain_pct,
                 tp2_gain=tp2_gain_pct,
                 risk_pct=risk_pct,
-                rationale="Volatility compression loaded/firing with order book absorption. Early entry before trend acceleration.",
-                timeframe=timeframe
+                rationale="15M Volatility compression loaded/firing with order book absorption. Early entry before trend acceleration.",
+                timeframe="15M Squeeze"
             )
             return
 
         # ====================================================================
-        # SPOT ENTRY SIGNAL 2: BOTTOM LIQUIDITY SWEEP & REVERSAL (Scenario 3)
-        # Conditions: Lower channel sweep (%B <= 0.30) + strong bid wall (>= +15%)
+        # SIGNAL 3: MULTI-SCALE BOTTOM LIQUIDITY SWEEP REBOUND (Scenario 3)
+        # Conditions: Lower channel sweep (%B <= 0.30 on 1M, 5M, or 15M) + strong bid wall (>= +15%)
         # ====================================================================
-        if pct_b <= 0.30 and ob.imbalance_pct >= 15.0:
+        if (pct_b_15m <= 0.30 or pct_b_5m <= 0.25 or pct_b_1m <= 0.20) and ob.imbalance_pct >= 15.0:
             self._trigger_entry(
                 setup_name="BOTTOM LIQUIDITY SWEEP REBOUND",
                 price=curr_price,
@@ -207,16 +257,16 @@ class SpotExecutionCopilot:
                 tp1_gain=tp1_gain_pct,
                 tp2_gain=tp2_gain_pct,
                 risk_pct=risk_pct,
-                rationale="Lower channel liquidity swept with heavy institutional bid wall absorption. Mean reversion rebound active.",
-                timeframe=timeframe
+                rationale="Lower channel liquidity swept with heavy institutional bid wall absorption across micro/intermediate frames.",
+                timeframe="Multi-Scale"
             )
             return
 
         # ====================================================================
-        # SPOT ENTRY SIGNAL 3: BULLISH DIP SUPPORT (Uptrend Pullback)
-        # Conditions: 4H Macro Trend Up + Pullback to support (%B between 0.35 - 0.48) + Bids supporting
+        # SIGNAL 4: BULLISH DIP SUPPORT (Uptrend Pullback)
+        # Conditions: 4H Macro Trend Up + Pullback to support (%B between 0.35 - 0.50 on 15M or 5M)
         # ====================================================================
-        if macro == "Trend Up" and (0.35 <= pct_b <= 0.48) and ob.imbalance_pct >= 5.0:
+        if macro == "Trend Up" and ((0.35 <= pct_b_15m <= 0.50) or (0.35 <= pct_b_5m <= 0.50)) and ob.imbalance_pct >= 5.0:
             self._trigger_entry(
                 setup_name="BULLISH TREND PULLBACK (DIP BUY)",
                 price=curr_price,
@@ -227,12 +277,12 @@ class SpotExecutionCopilot:
                 tp2_gain=tp2_gain_pct,
                 risk_pct=risk_pct,
                 rationale="Healthy pullback into dynamic support within established 4H uptrend. Buying the dip.",
-                timeframe=timeframe
+                timeframe="Multi-Scale Dip"
             )
             return
 
         # ====================================================================
-        # SPOT ENTRY SIGNAL 4: DIRECTIVE CONFLUENCE (Scenario Matrix Buy Trigger)
+        # SIGNAL 5: DIRECTIVE CONFLUENCE (Scenario Matrix Buy Trigger)
         # ====================================================================
         if "BUY" in td.action.upper() and td.target_probability >= 55.0 and ob.imbalance_pct > 0:
             self._trigger_entry(
@@ -245,7 +295,7 @@ class SpotExecutionCopilot:
                 tp2_gain=tp2_gain_pct,
                 risk_pct=risk_pct,
                 rationale=td.rationale,
-                timeframe=timeframe
+                timeframe="Ensemble Matrix"
             )
             return
 
@@ -473,7 +523,7 @@ def run_bot(interval_seconds: int = 20):
 
     while True:
         try:
-            engine.evaluate_market_cycle(timeframe="15m")
+            engine.evaluate_market_cycle()
         except KeyboardInterrupt:
             print("\nBot stopped by user.")
             break
