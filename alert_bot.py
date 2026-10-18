@@ -223,8 +223,19 @@ class AutonomousExecutionEngine:
         except Exception as e:
             print(f"[State] Load error: {e}")
 
-    def _handle_on_demand_status(self, curr_price: float, macro: str, s_total: float, ob: Any, td: Any) -> None:
+    def _handle_on_demand_status(self, curr_price: Optional[float] = None, macro: Optional[str] = None,
+                                 s_total: Optional[float] = None, ob: Any = None, td: Any = None) -> None:
         """Sends an on-demand status report in direct response to a user's Telegram command (/status)."""
+        curr_price = curr_price or getattr(self, "latest_price", 0.0)
+        macro = macro or getattr(self, "latest_macro", "Range")
+        s_total = s_total if s_total is not None else getattr(self, "last_s_total", 0.0)
+        ob = ob or getattr(self, "latest_ob", None)
+        td = td or getattr(self, "latest_td", None)
+
+        delta_str = f"{ob.taker_delta:+.2f}" if ob else "+0.00"
+        depth_str = f"{ob.imbalance_pct:+.1f}%" if ob else "+0.0%"
+        action_str = td.action if td else "SCANNING"
+
         if self.active_trade:
             t = self.active_trade
             gain_pct = ((curr_price - t['entry']) / t['entry']) * 100.0 if t['entry'] > 0 else 0.0
@@ -250,8 +261,8 @@ class AutonomousExecutionEngine:
             f"📊 <b>State:</b> <b>{self.market_state}</b> | 4H Macro: <b>{macro}</b>\n"
             f"🧮 <b>Confluence Score:</b> <b>{s_total:.1f} / 100</b> "
             f"{'🟢 NEAR SIGNAL' if s_total >= 55 else '🟡 BUILDING' if s_total >= 40 else '⚪ QUIET'}\n"
-            f"⚡ <b>Order Flow:</b> Taker Delta: <b>{ob.taker_delta:+.2f}</b> | Depth: <b>{ob.imbalance_pct:+.1f}%</b>\n"
-            f"🎯 <b>Advisory:</b> {td.action}\n\n"
+            f"⚡ <b>Order Flow:</b> Taker Delta: <b>{delta_str}</b> | Depth: <b>{depth_str}</b>\n"
+            f"🎯 <b>Advisory:</b> {action_str}\n\n"
             f"{pos_str}\n\n"
             f"💡 <i>Running 24/7 in pure Event-Driven mode (Zero clock spam).</i>"
         )
@@ -306,6 +317,12 @@ class AutonomousExecutionEngine:
         squeeze = report_15m.squeeze_state
         macro = report_15m.macro_regime_4h
         oi_conf = report_15m.oi_confluence
+
+        # Cache latest metrics for sub-second on-demand status responses
+        self.latest_price = curr_price
+        self.latest_macro = macro
+        self.latest_ob = ob
+        self.latest_td = td
 
         # 1. Extract Micro-Scale Metrics (1M and 5M)
         c_1m = df_1m["Close"]
@@ -756,7 +773,15 @@ def run_bot(interval_seconds: int = 20):
         # Garbage collection after each scan cycle
         gc.collect()
 
-        time.sleep(interval_seconds)
+        # Responsive 1-second cadence command listener during sleep interval
+        for _ in range(interval_seconds):
+            try:
+                cmd = notifier.poll_incoming_command()
+                if cmd:
+                    engine._handle_on_demand_status()
+            except Exception:
+                pass
+            time.sleep(1)
 
 
 if __name__ == "__main__":
