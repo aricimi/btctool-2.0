@@ -6,6 +6,7 @@ Dispatches instant push alerts for entries, target hits (>= +0.20%), and stop in
 
 import os
 import sys
+from typing import Optional, Dict, Any, Tuple, List
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -318,13 +319,20 @@ class AutonomousExecutionEngine:
 
     def _compute_confluence_score(self, ob: Any, pct_b_1m: float, pct_b_5m: float, pct_b_15m: float,
                                   has_rejection: bool, vol_surge: bool, squeeze: str, macro: str) -> Tuple[float, Dict[str, float]]:
-        """Computes pure continuous S_total confluence scoring model (0.0 to 100.0) without macro vetoes."""
-        # S_tape: Continuous sigmoid of taker delta (0.0 to 35.0)
-        s_tape = 17.5 * (1.0 + float(np.tanh(2.5 * ob.taker_delta)))
+        """Computes continuous S_total confluence scoring model (0.0 to 100.0) without macro vetoes."""
+        # S_tape: Points earned for net taker buying (0.0 to 35.0).
+        # Sellers in control (taker_delta <= 0.04) earns zero tape points.
+        if ob.taker_delta > 0.04:
+            s_tape = min(35.0, 35.0 * float(np.tanh(2.2 * ob.taker_delta)))
+        else:
+            s_tape = 0.0
 
-        # S_depth: tanh of order book imbalance (0.0 to 25.0)
-        imbalance_ratio = ob.imbalance_pct / 100.0
-        s_depth = 12.5 * (1.0 + float(np.tanh(3.0 * imbalance_ratio)))
+        # S_depth: Points earned for positive bid depth support (0.0 to 25.0).
+        # Ask-heavy books (imbalance_pct <= 2.0%) earns zero depth points.
+        if ob.imbalance_pct > 2.0:
+            s_depth = min(25.0, 25.0 * float(np.tanh(2.5 * (ob.imbalance_pct / 100.0))))
+        else:
+            s_depth = 0.0
 
         # S_micro: Structural swing rejection + micro-trend inflection (0.0 to 25.0)
         s_micro_wick = 15.0 if has_rejection else (8.0 if vol_surge else 0.0)
@@ -340,13 +348,13 @@ class AutonomousExecutionEngine:
         # S_structure: Dynamic structure (0.0 to 15.0) - Squeeze firing OR exhaustion dip recovery
         if squeeze in ["FIRING", "LOADED"]:
             s_structure = 15.0
-        elif pct_b_avg <= 0.35 and ob.taker_delta > 0.10:
+        elif pct_b_avg <= 0.35 and ob.taker_delta > 0.08:
             # Exhaustion dip recovery in expanded volatility gets high structural points
             s_structure = 14.0
         elif squeeze == "TRENDING":
-            s_structure = 12.0
+            s_structure = 11.0
         else:
-            s_structure = 8.0
+            s_structure = 6.0
 
         s_total = s_tape + s_depth + s_micro + s_structure
         sub_scores = {
@@ -400,9 +408,9 @@ class AutonomousExecutionEngine:
 
         # 1M candle shape dynamics & dynamic swing structure
         swing_low_1m = l_1m.min()
-        recent_has_wick = any((min(o_1m.iloc[i], c_1m.iloc[i]) - l_1m.iloc[i]) > abs(c_1m.iloc[i] - o_1m.iloc[i]) for i in range(-5, 0))
-        has_rejection = recent_has_wick or ((curr_price - swing_low_1m) <= (1.2 * atr) and c_1m.iloc[-1] > o_1m.iloc[-1])
-        vol_surge_1m = v_1m.iloc[-1] > (v_1m.iloc[-10:].mean() * 1.3)
+        recent_has_wick = any((min(o_1m.iloc[i], c_1m.iloc[i]) - l_1m.iloc[i]) >= (abs(c_1m.iloc[i] - o_1m.iloc[i]) * 0.85) for i in range(-5, 0))
+        vol_surge_1m = v_1m.iloc[-1] > (v_1m.iloc[-10:].mean() * 1.25)
+        has_rejection = recent_has_wick or ((curr_price - swing_low_1m) <= (1.5 * atr) and c_1m.iloc[-1] > o_1m.iloc[-1] and vol_surge_1m)
 
         now = time.time()
 
@@ -631,49 +639,10 @@ class AutonomousExecutionEngine:
         highest = max(t['highest_price'], curr_price)
         t['highest_price'] = highest
 
-        # POLICY 1: WHALE EMERGENCY DEFENSE / VIOLENT BOOK COLLAPSE
-        if curr_price >= entry and ob.imbalance_pct <= -25.0:
-            gain_pct = ((curr_price - entry) / entry) * 100.0
-            okx_exec_str = ""
-            if self.okx.is_configured:
-                self.okx.execute_slippage_capped_exit(best_bid=curr_price, sz="100%")
-                okx_exec_str = "\n⚡ <b>OKX Auto-Exited at Market.</b>"
-            msg = (
-                f"⚠️ <b>SELL SPOT NOW (WHALE DUMP DEFENSE)</b>\n"
-                f"━━━━━━━━━━━━━━━━━━\n"
-                f"🚨 <b>Microstructure Warning:</b> Heavy overhead ask wall collapse (Imbalance {ob.imbalance_pct:.1f}%).\n"
-                f"💵 <b>Current Price:</b> <b>${curr_price:,.2f}</b> ({gain_pct:+.2f}%)\n"
-                f"👉 <b>Action:</b> <b>SELL SPOT AT MARKET NOW.</b> Preserve full capital.{okx_exec_str}"
-            )
-            self.notifier.send_message(msg)
-            self.active_trade = None
-            self.market_state = "SCANNING"
-            self._save_state()
-            return
+        in_profit = curr_price > entry
+        gain_pct = ((curr_price - entry) / entry) * 100.0 if entry > 0 else 0.0
 
-        # POLICY 2: EARLY BAIL (CUT BEFORE STOP LOSS)
-        # If price is in negative territory and order book bids vanish or takers dump heavily
-        if curr_price < (entry - 0.0008 * entry):
-            if ob.imbalance_pct <= -18.0 or ob.taker_delta <= -0.40:
-                loss_pct = ((entry - curr_price) / entry) * 100.0
-                okx_exec_str = ""
-                if self.okx.is_configured:
-                    self.okx.execute_slippage_capped_exit(best_bid=curr_price, sz="100%")
-                    okx_exec_str = "\n⚡ <b>OKX Auto-Exited at Market.</b>"
-                msg = (
-                    f"⚠️ <b>SELL SPOT NOW (EXIT TRADE EARLY)</b>\n"
-                    f"━━━━━━━━━━━━━━━━━━\n"
-                    f"💵 <b>Current Price:</b> <b>${curr_price:,.2f}</b> (<b>-{loss_pct:.2f}%</b>)\n"
-                    f"📉 <b>Reason:</b> Order book bid support evaporated (Depth {ob.imbalance_pct:.1f}% / Delta {ob.taker_delta:+.2f}).\n"
-                    f"👉 <b>Action:</b> <b>SELL AT MARKET IMMEDIATELY.</b> Cut now to protect cash before hard stop is reached.{okx_exec_str}"
-                )
-                self.notifier.send_message(msg)
-                self.active_trade = None
-                self.market_state = "SCANNING"
-                self._save_state()
-                return
-
-        # POLICY 3: HOLD AND STRETCH (MOMENTUM SURGING - DO NOT SELL YET)
+        # POLICY 1: HOLD AND STRETCH (MOMENTUM SURGING - DO NOT SELL YET)
         if curr_price >= t['target_1'] and ob.taker_delta >= 0.20:
             new_target = round(curr_price + 1.8 * atr, 2)
             new_stop = round(max(t['current_stop'], entry + 0.15 * atr), 2)
@@ -695,7 +664,7 @@ class AutonomousExecutionEngine:
                 self.notifier.send_message(msg)
                 self._save_state()
 
-        # POLICY 4: SCALE-IN (BUY MORE SPOT - TRANCHE 2)
+        # POLICY 2: SCALE-IN (BUY MORE SPOT - TRANCHE 2)
         if t.get('breakeven_set') and not t.get('tranche_2_added') and ob.taker_delta >= 0.35 and curr_price >= (entry + 0.45 * atr):
             t['tranche_2_added'] = True
             okx_exec_str = ""
@@ -724,7 +693,6 @@ class AutonomousExecutionEngine:
             t['breakeven_set'] = True
             new_stop = round(entry + 0.15 * atr, 2)
             t['current_stop'] = max(t['current_stop'], new_stop)
-            gain_pct = ((curr_price - entry) / entry) * 100.0
             msg = (
                 f"🛡️ <b>UPDATE: MOVE STOP TO BREAKEVEN</b>\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
@@ -751,13 +719,10 @@ class AutonomousExecutionEngine:
                 self.notifier.send_message(msg)
                 self._save_state()
 
-        # POLICY 5: BANK PROFIT / MICRO-EXHAUSTION (FLOW WITH THE MARKET)
+        # POLICY 3: BANK PROFIT / MICRO-EXHAUSTION (FLOW WITH THE MARKET)
         # Exits when:
-        # A) Price is in profit and 1M chart shows volume/thrust exhaustion at resistance
+        # A) Price is in meaningful profit (>= +0.18% to ensure profit net of fees) and 1M chart shows volume/thrust exhaustion at resistance
         # B) Trailing stop touched after breakeven locked
-        in_profit = curr_price > entry
-        gain_pct = ((curr_price - entry) / entry) * 100.0 if entry > 0 else 0.0
-
         v_exhausted = False
         range_stalled = False
         if df_1m is not None and len(df_1m) >= 10:
@@ -767,7 +732,7 @@ class AutonomousExecutionEngine:
             v_exhausted = v_1m.iloc[-1] < (v_1m.iloc[-10:].mean() * 0.40)
             range_stalled = abs(c_1m.iloc[-1] - o_1m.iloc[-1]) < (0.20 * atr)
 
-        is_micro_stalled = in_profit and (gain_pct >= 0.15) and (pct_b_1m >= 0.75 or pct_b_5m >= 0.75) and (v_exhausted or range_stalled or ob.taker_delta <= -0.15)
+        is_micro_stalled = in_profit and (gain_pct >= 0.18) and (pct_b_1m >= 0.75 or pct_b_5m >= 0.75) and (v_exhausted or range_stalled or ob.taker_delta <= -0.20)
         trailing_stop_touched = (curr_price <= t['current_stop'] and t.get('breakeven_set'))
 
         if is_micro_stalled or trailing_stop_touched:
@@ -781,7 +746,7 @@ class AutonomousExecutionEngine:
                 f"━━━━━━━━━━━━━━━━━━\n"
                 f"💵 <b>Exit Price:</b> <b>${curr_price:,.2f}</b>\n"
                 f"💰 <b>Final Realized Gain:</b> <b>+{realized_gain:.2f}% PROFIT</b> 🏆\n"
-                f"📊 <b>Exit Reason:</b> {'1M Volume/Thrust Stalled at Ceiling' if is_micro_stalled else 'Trailing Stop Protected Profit'}\n"
+                f"📊 <b>Exit Reason:</b> {'1M Volume/Thrust Stalled at Resistance' if is_micro_stalled else 'Trailing Stop Protected Profit'}\n"
                 f"👉 <b>Action:</b> <b>SELL SPOT AT MARKET NOW.</b> Bank cash. Bot is actively tracking dip reload.{okx_exec_str}"
             )
             self.notifier.send_message(msg)
@@ -793,7 +758,30 @@ class AutonomousExecutionEngine:
             self._save_state()
             return
 
-        # POLICY 6: MEMORY-BASED SOFT STOP (DECISION ZONE)
+        # POLICY 4: CATASTROPHIC STRUCTURAL BREAKDOWN (BEFORE STOP)
+        # Only triggers if trade has lost > 65% of risk distance AND order book + tape confirm violent collapse
+        risk_distance = entry - t['current_stop'] if entry > t['current_stop'] else atr
+        loss_distance = entry - curr_price
+        if loss_distance >= (0.65 * risk_distance) and ob.imbalance_pct <= -35.0 and ob.taker_delta <= -0.55:
+            loss_pct = abs(loss_distance / entry) * 100.0
+            okx_exec_str = ""
+            if self.okx.is_configured:
+                self.okx.execute_slippage_capped_exit(best_bid=curr_price, sz="100%")
+                okx_exec_str = "\n⚡ <b>OKX Auto-Exited at Market.</b>"
+            msg = (
+                f"⚠️ <b>SELL SPOT NOW (CATASTROPHIC ORDER BOOK COLLAPSE)</b>\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"💵 <b>Current Price:</b> <b>${curr_price:,.2f}</b> (<b>-{loss_pct:.2f}%</b>)\n"
+                f"🚨 <b>Microstructure Warning:</b> Severe institutional selling (Imbalance {ob.imbalance_pct:.1f}% / Delta {ob.taker_delta:+.2f}).\n"
+                f"👉 <b>Action:</b> <b>SELL SPOT AT MARKET NOW.</b> Cut loss early to protect capital.{okx_exec_str}"
+            )
+            self.notifier.send_message(msg)
+            self.active_trade = None
+            self.market_state = "SCANNING"
+            self._save_state()
+            return
+
+        # POLICY 5: MEMORY-BASED SOFT STOP (DECISION ZONE)
         if curr_price <= t['current_stop'] and not t['target_1_hit']:
             # Inspect order flow: Is it being absorbed by buyers on a wick sweep?
             is_absorbing = (ob.taker_delta >= 0.15 or ob.imbalance_pct >= 8.0)

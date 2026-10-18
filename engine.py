@@ -137,21 +137,45 @@ def get_confirmed_ob_delta_p(ob_imbalance_ratio: float) -> float:
 
 
 # ============================================================================
-# STEP 4 — TAKER DELTA (BYBIT RECENT TRADES)
-# ============================================================================
+_rolling_trade_cache: Dict[str, Tuple[int, str, float]] = {}
+
 def fetch_taker_delta() -> float:
-    """Returns taker delta ratio [-1.0, +1.0]. Returns nan on failure."""
+    """
+    Returns sustained volume-weighted taker delta ratio [-1.0, +1.0] across rolling 90s window.
+    Filters out micro-noise, illiquidity skews, and 10-second quote flickers.
+    """
+    global _rolling_trade_cache
     try:
         url    = "https://api.bybit.com/v5/market/recent-trade"
-        params = {"category": "spot", "symbol": "BTCUSDT", "limit": 200}
+        params = {"category": "spot", "symbol": "BTCUSDT", "limit": 60}
         resp   = requests.get(url, params=params, timeout=5)
         trades = resp.json().get("result", {}).get("list", [])
-        buy_vol  = sum(float(t['size']) for t in trades if t['side'] == 'Buy')
-        sell_vol = sum(float(t['size']) for t in trades if t['side'] == 'Sell')
+        now_ms = int(time.time() * 1000)
+
+        for t in trades:
+            exec_id = t.get('execId')
+            if exec_id:
+                _rolling_trade_cache[exec_id] = (int(t.get('time', now_ms)), t.get('side', ''), float(t.get('size', 0.0)))
+
+        # Prune trades older than 90 seconds
+        cutoff = now_ms - 90000
+        for k in list(_rolling_trade_cache.keys()):
+            if _rolling_trade_cache[k][0] < cutoff:
+                del _rolling_trade_cache[k]
+
+        buy_vol  = sum(v[2] for v in _rolling_trade_cache.values() if v[1] == 'Buy')
+        sell_vol = sum(v[2] for v in _rolling_trade_cache.values() if v[1] == 'Sell')
         total    = buy_vol + sell_vol
-        return (buy_vol - sell_vol) / total if total > 0 else float('nan')
+
+        if total <= 0:
+            return 0.0
+
+        raw_delta = (buy_vol - sell_vol) / total
+        # Liquidity damping: If total 90s volume is less than 2.5 BTC, dampen delta to prevent micro-illiquidity skew
+        vol_confidence = min(1.0, total / 2.5)
+        return float(raw_delta * vol_confidence)
     except Exception:
-        return float('nan')
+        return 0.0
 
 
 # ============================================================================
@@ -164,6 +188,7 @@ _label_history:        collections.deque = collections.deque(maxlen=600)
 _last_train_time:      float = 0.0
 _RETRAIN_INTERVAL:     float = 60.0
 _meta_learner_model           = None
+_imbalance_history:    collections.deque = collections.deque(maxlen=6)
 
 
 def compute_oi_zscore(current_oi: float) -> float:
@@ -484,10 +509,12 @@ class MarketDataService:
             except Exception:
                 pass
 
-        # Calculate Distance-Weighted Imbalance Ratio
+        # Calculate Distance-Weighted Imbalance Ratio (Anti-Spoofing Smoothed)
         total_depth = bid_depth_usd + ask_depth_usd
         ob_imbalance_ratio = (bid_depth_usd - ask_depth_usd) / total_depth if total_depth > 0 else 0.0
-        imbalance_pct = ob_imbalance_ratio * 100.0
+        raw_imbalance_pct = ob_imbalance_ratio * 100.0
+        _imbalance_history.append(raw_imbalance_pct)
+        imbalance_pct = float(np.median(_imbalance_history)) if len(_imbalance_history) > 0 else raw_imbalance_pct
 
         # Taker delta from Bybit recent trades
         taker_delta = fetch_taker_delta()

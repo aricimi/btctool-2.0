@@ -71,6 +71,9 @@ The bot does not treat every market environment the same way. It shifts its expe
    * Never put the bot in a "cooldown timeout" after an exit. The next opportunity can appear 30 seconds after a flush.
 4. **NO Stale Historical Anchors:**
    * Never calculate local high ceilings or dip floors from hours in the past. Projections must be strictly anchored in current price action, and projected dip floors must always be mathematically lower than the current price.
+5. **NO Single-Snapshot Order Book Fidget Exits (Anti-Churn):**
+   * Never dump a profitable trade on a 5-second ask wall flicker or quote spoof. Trades in profit exit on genuine 1M volume/thrust exhaustion at resistance or trailing stops.
+   * Never panic-sell on shallow normal pullbacks. Give the trade room to breathe; invalidation is assessed at the Memory-Based Soft Stop.
 
 ---
 
