@@ -116,23 +116,23 @@ This document serves as the **Single Source of Truth** for the entire project.
 
 ---
 
-## 6. Telegram Mobile Spot Execution Copilot (`alert_bot.py`)
+## 6. Telegram Mobile Autonomous Execution Engine (`alert_bot.py`)
 
-* **Continuous Multi-Timeframe Confluence Architecture (`SpotExecutionCopilot`):**
-  - **No Rigid Single-Timeframe Limits:** Ingests the continuous market spectrum concurrently on every cycle:
-    - **1M & 5M Ultra-Micro:** Detects bottom wick rejections, 1-minute volume climaxes, micro-momentum, and instant entries (+0.35% to +1.5%+).
-    - **15M & 1H Intermediate Structure:** Tracks the 5-state Volatility Squeeze machine, channel bounds, and dynamic ATR risk/target envelopes.
-    - **4H & 1D Macro Context:** Monitors the macro trend anchor (EMA 9/21 + ADX(14)) to avoid buying into major overhead resistance ceilings.
-    - **Live Tape & Order Flow:** Integrates real-time Bybit/OKX order book depth and live trade ticks (Taker Delta $\ge +0.25$).
-* **Complete Multi-Scale Spot Trade Lifecycle:**
-  1. **1M/5M Micro-Momentum Taker Ignition:** Fires instantly when Taker Delta surges ($\ge +0.25$), a 1M candle wicks/reverses, and order book shows bid absorption ($\ge +5\%$).
-  2. **15M Early Trend Ignition:** Squeeze `LOADED` or `FIRING` with order book absorption $\ge +8\%$ and $\%B \le 0.55$. Enters *before* the impulse candle accelerates.
-  3. **Multi-Scale Bottom Sweep Rebound:** Channel sweep ($\%B \le 0.30$ on 1M, 5M, or 15M) with heavy institutional bid wall ($\ge +15\%$).
-  4. **Bullish Dip Support:** 4H Macro Trend Up + Pullback to dynamic support on 15M or 5M ($0.35 \le \%B \le 0.50$).
-  5. **Target 1 Milestone & Breakeven Protection:** When price reaches Target 1 ($1.0 \times \text{ATR}$), moves stop to entry $+ 0.15 \times \text{ATR}$ for guaranteed breakeven.
-  6. **Parabolic Trailing Ratchet:** Follows new higher swing lows, ratcheting stop up behind price ($0.9 \times \text{ATR}$ under peak) to lock in profit up to the trend crest.
-  7. **Emergency Whale Invalidation Shield:** If price is near breakeven and the order book violently flips (imbalance $\le -25\%$), sends immediate market exit alert to protect capital.
-  8. **Hard Stop Capital Defense:** Server-synced ATR stop loss ($1.2 \times \text{ATR}$) strictly caps risk on unexpected flash flushes.
+* **Continuous Multi-Scale Autonomous Architecture (`AutonomousExecutionEngine`):**
+  - **Zero Rigid Static Limits:** Replaces arbitrary single-timeframe thresholds with aggregate multi-scale confluence across 1M, 5M, 15M, 1H, 4H, and live order flow tape ticks.
+  - **4-Phase Market State Machine:**
+    1. **`ACCUMULATING / SCANNING`:** Quiet volatility compression, bid absorption, and tape acceleration monitoring.
+    2. **`EXPANDING`:** Real-time trend impulse active with Parabolic ATR Trailing Ratchet to the peak.
+    3. **`STALLING / EXHAUSTION`:** Upper resistance reached, 1M/5M momentum flattening, asks building. Alerts immediately with dynamic regression projections and advice to lock profits.
+    4. **`REGRESSING (DYNAMIC REPOSITIONING)`:** Actively tracks price descent toward support floor. If buyers absorb earlier than projected, dynamically recalculates and raises the Limit Buy price so entries are never missed.
+* **Complete Multi-Scale Alert Spectrum:**
+  1. **Spot Buy Signal:** Multi-scale green-light entry with pre-calculated ATR Target 1, Target 2 Runner, and Hard Stop.
+  2. **Target 1 & Breakeven Protection:** Automatic notification to ratchet stop to entry $+ 0.15 \times \text{ATR}$ (100% risk-free trade).
+  3. **Stalling & Regression Alert:** Tells you to tighten stops/bank profits if holding, and advises cash holders of the projected dip reload target.
+  4. **Dynamic Dip Repositioning:** Alerts when buyers absorb early during a pullback, repositioning the limit buy order higher.
+  5. **Parabolic Trailing Ratchet:** Follows new higher swing lows candle-by-candle with zero upper profit cap.
+  6. **Whale Emergency Defense:** Exits immediately at market if order book depth violently flips ($\le -25\%$).
+  7. **Periodic Status Telemetry (Every 15 min):** Transmits active market phase, live taker delta, and current strategy to guarantee zero blind silence.
 * **24/7 Cloud Architecture (Render + UptimeRobot):**
   - Integrated HTTP Health Check endpoint on `$PORT` (default 10000) supporting both `HEAD` and `GET`.
   - Keeps Render service permanently awake via UptimeRobot 5-minute HTTP keep-alive pings.
