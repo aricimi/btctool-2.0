@@ -116,18 +116,33 @@ This document serves as the **Single Source of Truth** for the entire project.
 
 ---
 
-## 6. Telegram Mobile Alert Bot (`alert_bot.py`)
+## 6. Telegram Mobile Spot Execution Copilot (`alert_bot.py`)
 
-* **Execution Copilot Architecture:** Scans 5M/15M Bybit/OKX order books and price action every 15–20s for ping-pong scalps $\ge +0.20\%$.
-* **ATR Targets & Synced Hit Detection:**
-  - $TP_1 = \text{Entry} \pm 0.5 \times \text{ATR}_{14}$ (Scalp Exit / Move stop to breakeven).
-  - $TP_2 = \text{Entry} \pm 1.0 \times \text{ATR}_{14}$ (Full Runner Exit).
-  - $\text{Stop} = \text{Entry} \mp 1.5 \times \text{ATR}_{14}$ (Capital preservation exit).
-  - Alert message and hit detection strictly share the same synchronized dictionary variables.
-  - Cycle memory hygiene: `gc.collect()` at end of each iteration.
+* **Spot-Only Execution Copilot Architecture (`SpotExecutionCopilot`):**
+  - Designed specifically for spot traders (e.g. Revolut X with 0.00% maker fee, or OKX spot).
+  - Eliminates micro-scalp fee drag by targeting high-conviction trend breakouts, compression coils, and liquidity reversals (+1.5% to +3.5%+).
+* **Complete Spot Trade Lifecycle:**
+  1. **Early Trend Ignition (Phase 1 -> Phase 2 Coil):** Squeeze `LOADED` or `FIRING` with order book absorption $\ge +8\%$ and $\%B \le 0.55$. Enters *before* the impulse candle accelerates.
+  2. **Bottom Sweep Rebound:** Channel sweep ($\%B \le 0.30$) with heavy bid wall ($\ge +15\%$).
+  3. **Bullish Dip Support:** 4H Macro Trend Up + Pullback to dynamic support ($0.35 \le \%B \le 0.48$).
+  4. **Target 1 Milestone & Breakeven Protection:** When price reaches Target 1 ($1.0 \times \text{ATR}$), moves stop to entry $+ 0.15 \times \text{ATR}$ for guaranteed breakeven.
+  5. **Parabolic Trailing Ratchet:** Follows new higher swing lows, ratcheting stop up behind price ($0.9 \times \text{ATR}$ under peak) to lock in profit up to the trend crest.
+  6. **Emergency Whale Invalidation Shield:** If price is near breakeven and the order book violently flips (imbalance $\le -25\%$), sends immediate market exit alert to protect capital.
+  7. **Hard Stop Capital Defense:** Server-synced ATR stop loss ($1.2 \times \text{ATR}$) strictly caps risk on unexpected flash flushes.
 * **24/7 Cloud Architecture (Render + UptimeRobot):**
   - Integrated HTTP Health Check endpoint on `$PORT` (default 10000) supporting both `HEAD` and `GET`.
-  - Keeps Render free service permanently awake via UptimeRobot 5-minute HTTP keep-alive pings.
+  - Keeps Render service permanently awake via UptimeRobot 5-minute HTTP keep-alive pings.
   - Zero local PC dependency: runs 24/7/365 in the cloud without sleeping.
+
+---
+
+## 7. OKX Auto-Execution Architecture & Roadmap (`okx_trader.py`)
+
+* **Target Account:** OKX Spot BTC/USDT starting with €50 (~$54) with 0.08% Maker Fee.
+* **4 Defensive Engineering Shields:**
+  1. **Anti-Hanging Order Shield:** Auto-cancels limit buy orders after 3 minutes or if price escapes $> 0.35 \times \text{ATR}$.
+  2. **Dynamic Partial Fill Tracking:** Queries `get_order_details()` on fill and binds trailing stop strictly to actual `filled_sz`.
+  3. **Server-Side Trigger Stops & API Backoff:** Places hard stops natively on OKX's servers (OCO/Trigger orders) with exponential backoff on HTTP 429.
+  4. **Slippage-Capped Emergency Exits:** Uses Immediate-Or-Cancel (IOC) limit sells at `best_bid - 0.05%` to prevent slippage during whale dumps.
 
 
