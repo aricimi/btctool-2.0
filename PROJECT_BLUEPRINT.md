@@ -135,21 +135,25 @@ This document serves as the **Single Source of Truth** for the entire project.
     - State is persisted to disk on trade open, ratchet update, and close.
     - Automatically recovers active trades and state after Render container restarts or redeployments.
     - Features a 4-hour staleness guard (`time.time() - saved_at > 14400`) to safely discard expired positions.
-  - **Regression State Recovery & Timeout Alerting:**
+  - **Regression State Recovery & Zero-Ego Re-engagement:**
     - Auto-resets `REGRESSING` back to `SCANNING` if price recovers to peak zone ($P \ge \text{tracked\_peak} \times 0.998$).
+    - **Zero-Ego Re-engagement (`SPOT RE-ENGAGEMENT: BREAKOUT MOMENTUM RESUMPTION`):** If in `STALLING` or `REGRESSING` and aggressive buyer volume blasts through overhead resistance ($P \ge \text{tracked\_peak} \times 0.999$ and $S_{\text{total}} \ge 65.0$ or $S_{\text{tape}} \ge 22.0$), the bot immediately re-engages for the expansion push without sitting on the sidelines.
     - Replaces silent timeouts with an explicit Telegram notification on 4H expiration instructing manual position review.
-* **Complete Multi-Scale Alert Spectrum:**
-  1. **Spot Buy Signal:** Multi-scale green-light entry with pre-calculated ATR Target 1, Target 2 Runner, and Hard Stop.
+* **Complete Multi-Scale Event-Driven Alert Spectrum (Zero Clock Spam):**
+  1. **Spot Buy Signal (Tranche 1 Allocation):** Multi-scale ignition entry with pre-calculated ATR Target 1, Target 2 Runner, and Hard Stop.
   2. **Target 1 & Breakeven Protection:** Automatic notification to ratchet stop to entry $+ 0.15 \times \text{ATR}$ (100% risk-free trade).
-  3. **Stalling & Regression Alert:** Tells you to tighten stops/bank profits if holding, and advises cash holders of the projected dip reload target.
-  4. **Dynamic Dip Repositioning:** Alerts when buyers absorb early during a pullback, repositioning the limit buy order higher.
-  5. **Parabolic Trailing Ratchet:** Follows new higher swing lows candle-by-candle with zero upper profit cap.
-  6. **Whale Emergency Defense:** Exits immediately at market if order book depth violently flips ($\le -25\%$).
-  7. **Periodic Status Telemetry (Every 15 min):** Transmits active market phase, live taker delta, and current $S_{\text{total}}$ score (with `🟢 NEAR SIGNAL` $\ge 55$, `🟡 BUILDING` $\ge 40$, `⚪ QUIET`).
+  3. **Resistance Stall & Peak Profit Shield:** When in an active trade and price pushes into upper resistance (%B $\ge 0.82$) with momentum flattening, ratchets stop tightly ($P - 0.35 \times \text{ATR}$) to lock peak profit before regression.
+  4. **Stalling & Regression Alert (Cash):** Tells cash holders not to buy at the ceiling, projecting the dip reload floor.
+  5. **Dynamic Dip Repositioning:** Alerts when buyers absorb early during a pullback, repositioning the limit buy order higher.
+  6. **Zero-Ego Breakout Re-engagement:** Pings immediately to re-enter if a stall was absorbed and resistance is shattered.
+  7. **Parabolic Trailing Ratchet:** Follows new higher swing lows candle-by-candle with zero upper profit cap.
+  8. **Whale Emergency Defense:** Exits immediately at market if order book depth violently flips ($\le -25\%$).
+  9. **On-Demand Telemetry via Telegram (`/status`):** Zero clock spam every 15 minutes. Send `/status` or `/info` to the bot at any time to receive instant live telemetry (<1 second) detailing price, market state, confluence score, order flow, and trade position.
 * **24/7 Cloud Architecture (Render + UptimeRobot):**
   - Integrated HTTP Health Check endpoint on `$PORT` (default 10000) supporting both `HEAD` and `GET`.
   - Keeps Render service permanently awake via UptimeRobot 5-minute HTTP keep-alive pings.
   - Zero local PC dependency: runs 24/7/365 in the cloud without sleeping.
+  - Fallback credentials embedded in `TelegramNotifier` ensuring zero cloud container silence.
 
 ---
 

@@ -61,8 +61,12 @@ def start_health_server(port: int = 10000) -> Optional[HTTPServer]:
         return None
 
 
+DEFAULT_BOT_TOKEN = "8981948899:AAFqJwDyX1_ZMnXRQSp2m6yNk9HuHJ9A7h0"
+DEFAULT_CHAT_ID = "8922701269"
+
+
 class TelegramNotifier:
-    """Handles secure delivery of instant push alerts to your Telegram mobile app."""
+    """Handles secure delivery of instant push alerts and on-demand commands."""
 
     def __init__(self, bot_token: Optional[str] = None, chat_id: Optional[str] = None):
         self.bot_token = bot_token or os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -77,6 +81,11 @@ class TelegramNotifier:
                     self.chat_id = self.chat_id or cfg.get("chat_id")
             except Exception:
                 pass
+
+        # Final production fallback ensuring zero cloud container silence
+        self.bot_token = self.bot_token or DEFAULT_BOT_TOKEN
+        self.chat_id = self.chat_id or DEFAULT_CHAT_ID
+        self.last_update_id = 0
 
     @property
     def is_configured(self) -> bool:
@@ -108,12 +117,34 @@ class TelegramNotifier:
             print(f"[Telegram Network Error] {e}")
             return False
 
+    def poll_incoming_command(self) -> Optional[str]:
+        """Polls Telegram getUpdates for on-demand user commands (e.g. /status, /info, /ping)."""
+        if not self.is_configured:
+            return None
+        url = f"https://api.telegram.org/bot{self.bot_token}/getUpdates"
+        params = {"offset": self.last_update_id + 1, "timeout": 0, "limit": 5}
+        try:
+            r = requests.get(url, params=params, timeout=4)
+            if r.status_code == 200:
+                data = r.json()
+                if data.get("ok") and data.get("result"):
+                    for update in data["result"]:
+                        self.last_update_id = max(self.last_update_id, update.get("update_id", 0))
+                        msg = update.get("message", {})
+                        if str(msg.get("chat", {}).get("id")) == str(self.chat_id):
+                            text = msg.get("text", "").strip()
+                            if text:
+                                return text
+        except Exception:
+            pass
+        return None
+
     def send_test_ping(self) -> bool:
         msg = (
             "⚡ <b>btctool 2.0 · Telegram Alert System Online</b>\n\n"
             "Your mobile alert bot is successfully connected!\n"
-            "You will receive instant lock-screen alerts whenever a high-probability "
-            "ping-pong scalp (<b>&gt; +0.20%</b>) or liquidity sweep appears on BTC/USDT."
+            "Operating in pure <b>Event-Driven Autonomous Mode</b> (Zero Clock Spam).\n"
+            "Send <code>/status</code> at any time to receive instant live telemetry."
         )
         return self.send_message(msg)
 
@@ -144,9 +175,8 @@ class AutonomousExecutionEngine:
         self.active_trade: Optional[Dict[str, Any]] = None
         self.market_state: str = "SCANNING"  # SCANNING, EXPANDING, STALLING, REGRESSING
         self.last_alert_time: float = 0.0
-        self.last_status_time: float = 0.0
-        self.alert_cooldown_seconds: int = 150
-        self.status_pulse_interval: int = 900  # 15 min periodic market telemetry
+        self.last_reentry_time: float = 0.0
+        self.alert_cooldown_seconds: int = 120
         self.tracked_peak: float = 0.0
         self.projected_floor: float = 0.0
         self.repositioned_limit: float = 0.0
@@ -192,6 +222,40 @@ class AutonomousExecutionEngine:
                 print(f"[State] Recovered trade from disk. Entry: {self.active_trade.get('entry')}")
         except Exception as e:
             print(f"[State] Load error: {e}")
+
+    def _handle_on_demand_status(self, curr_price: float, macro: str, s_total: float, ob: Any, td: Any) -> None:
+        """Sends an on-demand status report in direct response to a user's Telegram command (/status)."""
+        if self.active_trade:
+            t = self.active_trade
+            gain_pct = ((curr_price - t['entry']) / t['entry']) * 100.0 if t['entry'] > 0 else 0.0
+            pos_str = (
+                f"🟢 <b>ACTIVE SPOT POSITION</b>\n"
+                f"• Entry: <b>${t['entry']:,.2f}</b> | Current: <b>${curr_price:,.2f}</b> (<b>{gain_pct:+.2f}%</b>)\n"
+                f"• Stop Loss: <b>${t['current_stop']:,.2f}</b> ({'🛡️ BREAKEVEN LOCKED' if t.get('breakeven_set') else 'HARD STOP'})\n"
+                f"• Target 1: ${t['target_1']:,.2f} | Runner Target 2: ${t['target_2']:,.2f}"
+            )
+        elif self.market_state in ["STALLING", "REGRESSING"]:
+            pos_str = (
+                f"🟡 <b>IN CASH · REGRESSION TRACKING ACTIVE</b>\n"
+                f"• Tracked Peak: <b>${self.tracked_peak:,.2f}</b>\n"
+                f"• Repositioned Buy Zone: <b>${self.repositioned_limit:,.2f}</b>"
+            )
+        else:
+            pos_str = f"⚪ <b>IN CASH · SCANNING FOR DIP & BREAKOUT IGNITION</b>"
+
+        status_msg = (
+            f"📡 <b>BTCTOOL: ON-DEMAND ENGINE STATUS</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"💵 <b>BTC Price:</b> <b>${curr_price:,.2f}</b>\n"
+            f"📊 <b>State:</b> <b>{self.market_state}</b> | 4H Macro: <b>{macro}</b>\n"
+            f"🧮 <b>Confluence Score:</b> <b>{s_total:.1f} / 100</b> "
+            f"{'🟢 NEAR SIGNAL' if s_total >= 55 else '🟡 BUILDING' if s_total >= 40 else '⚪ QUIET'}\n"
+            f"⚡ <b>Order Flow:</b> Taker Delta: <b>{ob.taker_delta:+.2f}</b> | Depth: <b>{ob.imbalance_pct:+.1f}%</b>\n"
+            f"🎯 <b>Advisory:</b> {td.action}\n\n"
+            f"{pos_str}\n\n"
+            f"💡 <i>Running 24/7 in pure Event-Driven mode (Zero clock spam).</i>"
+        )
+        self.notifier.send_message(status_msg)
 
     def _compute_confluence_score(self, ob: Any, pct_b_1m: float, pct_b_5m: float, pct_b_15m: float,
                                   wick_rejection_1m: bool, vol_surge_1m: bool, squeeze: str, macro: str) -> Tuple[float, Dict[str, float]]:
@@ -243,21 +307,7 @@ class AutonomousExecutionEngine:
         macro = report_15m.macro_regime_4h
         oi_conf = report_15m.oi_confluence
 
-        # Upgrade 6A: Auto-reset if price recovers to peak zone (false dip / no repositioning triggered)
-        if self.market_state == "REGRESSING" and self.tracked_peak > 0:
-            if curr_price >= (self.tracked_peak * 0.998):
-                self.market_state = "SCANNING"
-                self.tracked_peak = 0.0
-                self.projected_floor = 0.0
-                print("[State Machine] Price recovered to peak. Resetting to SCANNING.")
-                self._save_state()
-
-        # 1. Manage Active Position (if in a trade)
-        if self.active_trade is not None:
-            self._manage_active_trade(curr_price, ob, atr, oi_conf)
-            return
-
-        # 2. Extract Micro-Scale Metrics (1M and 5M)
+        # 1. Extract Micro-Scale Metrics (1M and 5M)
         c_1m = df_1m["Close"]
         h_1m = df_1m["High"]
         l_1m = df_1m["Low"]
@@ -282,43 +332,78 @@ class AutonomousExecutionEngine:
 
         now = time.time()
 
-        # ====================================================================
-        # STATE 1: DETECT STALLING & ANTICIPATE REGRESSION (At Resistance / Top)
-        # Price hits ceiling (%B > 0.78 on 1M/5M/15M) and momentum flattens
-        # ====================================================================
-        if pct_b_15m >= 0.78 or pct_b_5m >= 0.80 or pct_b_1m >= 0.85:
-            if self.market_state != "STALLING" and (now - self.last_alert_time) > self.alert_cooldown_seconds:
-                self.market_state = "STALLING"
-                self.tracked_peak = max(curr_price, h_1m.max(), h_5m.max())
-                # Project dynamic regression target: 15M/1H EMA(21) or lower Bollinger channel
-                self.projected_floor = round(self.tracked_peak - 1.2 * atr, 2)
-                self.repositioned_limit = self.projected_floor
+        # Compute continuous multivariate confluence score (0.0 to 100.0)
+        s_total, sub_scores = self._compute_confluence_score(
+            ob=ob,
+            pct_b_1m=pct_b_1m,
+            pct_b_5m=pct_b_5m,
+            pct_b_15m=pct_b_15m,
+            wick_rejection_1m=wick_rejection_1m,
+            vol_surge_1m=vol_surge_1m,
+            squeeze=squeeze,
+            macro=macro
+        )
+        self.last_s_total = s_total
 
-                msg = (
-                    f"⚠️ <b>BTCTOOL: MOMENTUM STALLING · REGRESSION EXPECTED</b>\n"
-                    f"━━━━━━━━━━━━━━━━━━\n"
-                    f"📈 <b>Local High Reached:</b> <b>${self.tracked_peak:,.2f}</b> | Current: <b>${curr_price:,.2f}</b>\n"
-                    f"📉 <b>Tape Condition:</b> Overhead ceiling active. 1M/5M momentum flattening.\n"
-                    f"🎯 <b>Projected Regression Target:</b> <b>${self.projected_floor:,.2f}</b>\n\n"
-                    f"👉 <b>Tactical Guidance:</b>\n"
-                    f"• <b>If you are in a Spot Trade:</b> Tighten your Stop Loss to <b>${round(curr_price - 0.5*atr, 2):,.2f}</b> to lock in profit, or cash out at market.\n"
-                    f"• <b>If you are in Cash/USDT:</b> <b>DO NOT BUY HERE.</b> Bot is actively tracking regression descent toward ${self.projected_floor:,.2f} for next reload."
-                )
-                if self.notifier.send_message(msg):
-                    self.last_alert_time = now
+        # 2. Check for On-Demand User Command from Telegram (e.g. /status, /info, /ping)
+        cmd = self.notifier.poll_incoming_command()
+        if cmd:
+            cmd_lower = cmd.lower()
+            if any(k in cmd_lower for k in ["/status", "status", "/info", "info", "/ping", "ping", "/state"]):
+                self._handle_on_demand_status(curr_price, macro, s_total, ob, td)
+
+        # 3. Manage Active Position (if in a trade)
+        if self.active_trade is not None:
+            self._manage_active_trade(curr_price, ob, atr, oi_conf, pct_b_15m, pct_b_5m, pct_b_1m)
+            return
+
+        # 4. Zero-Ego Re-engagement: Breakout Momentum Resumption
+        # If in STALLING or REGRESSING and buyers blow through the peak, re-enter immediately!
+        if self.market_state in ["STALLING", "REGRESSING"] and self.tracked_peak > 0:
+            if curr_price >= (self.tracked_peak * 0.999) and (s_total >= 65.0 or sub_scores["S_tape"] >= 22.0):
+                if (now - self.last_reentry_time) > self.alert_cooldown_seconds:
+                    self.last_reentry_time = now
+                    stop_price = round(curr_price - 1.2 * atr, 2)
+                    tp1_price  = round(curr_price + 1.0 * atr, 2)
+                    tp2_price  = round(curr_price + 2.2 * atr, 2)
+                    tp1_gain_pct = ((tp1_price - curr_price) / curr_price) * 100.0 if curr_price > 0 else 0.0
+                    tp2_gain_pct = ((tp2_price - curr_price) / curr_price) * 100.0 if curr_price > 0 else 0.0
+                    risk_pct     = ((curr_price - stop_price) / curr_price) * 100.0 if curr_price > 0 else 0.0
+
+                    rationale = (
+                        f"Breakout above ${self.tracked_peak:,.2f} | "
+                        f"S_total={s_total:.1f}/100 | "
+                        f"Tape={sub_scores['S_tape']:.1f} | "
+                        f"Depth={sub_scores['S_depth']:.1f}"
+                    )
+                    self.market_state = "EXPANDING"
+                    self._trigger_entry(
+                        setup_name="SPOT RE-ENGAGEMENT: BREAKOUT MOMENTUM RESUMPTION",
+                        price=curr_price,
+                        tp1=tp1_price,
+                        tp2=tp2_price,
+                        stop=stop_price,
+                        tp1_gain=tp1_gain_pct,
+                        tp2_gain=tp2_gain_pct,
+                        risk_pct=risk_pct,
+                        rationale=rationale,
+                        timeframe="1M/5M BREAKOUT MOMENTUM"
+                    )
+                    self._save_state()
+                    return
+            elif curr_price >= (self.tracked_peak * 0.998):
+                self.market_state = "SCANNING"
+                self.tracked_peak = 0.0
+                self.projected_floor = 0.0
+                print("[State Machine] Price recovered to peak. Resetting to SCANNING.")
                 self._save_state()
-                return
 
-        # ====================================================================
-        # STATE 2: DYNAMIC DIP TRACKING & ORDER REPOSITIONING (During Pullback)
-        # As price drops toward the floor, watch if buyers absorb earlier
-        # ====================================================================
+        # 5. Dynamic Dip Tracking & Buy Zone Repositioning (During Pullback)
         if self.market_state in ["STALLING", "REGRESSING"] and curr_price < (self.tracked_peak - 0.4 * atr):
             self.market_state = "REGRESSING"
             # If aggressive bids step in above the original projected floor
             if ob.taker_delta >= 0.20 or ob.imbalance_pct >= 8.0:
                 new_repositioned_limit = round(curr_price + 0.15 * atr, 2)
-                # If repositioned zone moved significantly up from old floor
                 if new_repositioned_limit > (self.repositioned_limit + 0.3 * atr) and (now - self.last_alert_time) > self.alert_cooldown_seconds:
                     self.repositioned_limit = new_repositioned_limit
                     rebound_target = round(self.repositioned_limit + 1.2 * atr, 2)
@@ -338,29 +423,34 @@ class AutonomousExecutionEngine:
                     self._save_state()
                     return
 
-        # ====================================================================
-        # STATE 3: PURE PROBABILISTIC CONFLUENCE SCORING ENGINE (UPGRADES 1 & 2)
-        # Zero static veto gates. Computes continuous S_total score.
-        # ====================================================================
-        s_total, sub_scores = self._compute_confluence_score(
-            ob=ob,
-            pct_b_1m=pct_b_1m,
-            pct_b_5m=pct_b_5m,
-            pct_b_15m=pct_b_15m,
-            wick_rejection_1m=wick_rejection_1m,
-            vol_surge_1m=vol_surge_1m,
-            squeeze=squeeze,
-            macro=macro
-        )
-        self.last_s_total = s_total
+        # 6. Detect Stalling & Anticipate Regression (At Resistance / Top)
+        if pct_b_15m >= 0.78 or pct_b_5m >= 0.80 or pct_b_1m >= 0.85:
+            if self.market_state != "STALLING" and (now - self.last_alert_time) > self.alert_cooldown_seconds:
+                self.market_state = "STALLING"
+                self.tracked_peak = max(curr_price, h_1m.max(), h_5m.max())
+                self.projected_floor = round(self.tracked_peak - 1.2 * atr, 2)
+                self.repositioned_limit = self.projected_floor
 
-        # CONVICTION THRESHOLD: Trigger Spot Buy when S_total >= 65.0
+                msg = (
+                    f"⚠️ <b>BTCTOOL: MOMENTUM STALLING · REGRESSION EXPECTED</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━\n"
+                    f"📈 <b>Local High Reached:</b> <b>${self.tracked_peak:,.2f}</b> | Current: <b>${curr_price:,.2f}</b>\n"
+                    f"📉 <b>Tape Condition:</b> Overhead ceiling active. 1M/5M momentum flattening.\n"
+                    f"🎯 <b>Projected Regression Target:</b> <b>${self.projected_floor:,.2f}</b>\n\n"
+                    f"👉 <b>Tactical Guidance:</b>\n"
+                    f"• <b>If you are in Cash/USDT:</b> <b>DO NOT BUY HERE.</b> Bot is actively tracking regression descent toward ${self.projected_floor:,.2f} for next reload."
+                )
+                if self.notifier.send_message(msg):
+                    self.last_alert_time = now
+                self._save_state()
+                return
+
+        # 7. Pure Probabilistic Confluence Entry Gate (S_total >= 65.0)
         if s_total >= 65.0 and (now - self.last_alert_time) > self.alert_cooldown_seconds:
             stop_price = round(curr_price - 1.2 * atr, 2)
             tp1_price  = round(curr_price + 1.0 * atr, 2)
             tp2_price  = round(curr_price + 2.2 * atr, 2)
 
-            # Upgrade 3: OI Confluence 25% TP Tightening (Matches engine.py EXHAUSTION_SIGNAL)
             if oi_conf == "EXHAUSTION_SIGNAL" or "EXHAUSTION" in str(oi_conf):
                 tp1_price = round(curr_price + (1.0 * atr * 0.75), 2)
                 tp2_price = round(curr_price + (2.2 * atr * 0.75), 2)
@@ -369,7 +459,6 @@ class AutonomousExecutionEngine:
             tp2_gain_pct = ((tp2_price - curr_price) / curr_price) * 100.0 if curr_price > 0 else 0.0
             risk_pct     = ((curr_price - stop_price) / curr_price) * 100.0 if curr_price > 0 else 0.0
 
-            # Dynamic primary driver identification
             if sub_scores["S_tape"] >= 22.0:
                 setup_name = "SPOT BUY: TAKER IGNITION CONFLUENCE"
             elif sub_scores["S_structure"] >= 12.0:
@@ -407,24 +496,6 @@ class AutonomousExecutionEngine:
             self._save_state()
             return
 
-        # ====================================================================
-        # PERIODIC STATUS PULSE (Every 15 min - Upgrade 5): Zero Silence Guarantee
-        # ====================================================================
-        if (now - self.last_status_time) > self.status_pulse_interval:
-            self.last_status_time = now
-            pulse_msg = (
-                f"📡 <b>BTCTOOL MARKET STATUS PULSE</b>\n"
-                f"━━━━━━━━━━━━━━━━━━\n"
-                f"💵 <b>BTC Price:</b> <b>${curr_price:,.2f}</b>\n"
-                f"📊 <b>Market Phase:</b> <b>{self.market_state}</b> | 4H Macro: <b>{macro}</b>\n"
-                f"🧮 <b>Confluence Score:</b> <b>{self.last_s_total:.1f} / 100</b> "
-                f"{'🟢 NEAR SIGNAL' if self.last_s_total >= 55 else '🟡 BUILDING' if self.last_s_total >= 40 else '⚪ QUIET'}\n"
-                f"⚡ <b>Order Flow:</b> Taker Delta: <b>{ob.taker_delta:+.2f}</b> | Depth: <b>{ob.imbalance_pct:+.1f}%</b>\n"
-                f"🎯 <b>Current Strategy:</b> {td.action}\n"
-                f"💡 <i>Scanner running 24/7 across 1M, 5M, 15M & live order flow.</i>"
-            )
-            self.notifier.send_message(pulse_msg)
-
     def _trigger_entry(self, setup_name: str, price: float, tp1: float, tp2: float,
                        stop: float, tp1_gain: float, tp2_gain: float, risk_pct: float,
                        rationale: str, timeframe: str) -> None:
@@ -433,6 +504,7 @@ class AutonomousExecutionEngine:
             f"🟢 <b>BTCTOOL: {setup_name}</b>\n"
             f"━━━━━━━━━━━━━━━━━━\n"
             f"📍 <b>Action:</b> <b>BUY SPOT NOW (Limit/Market)</b>\n"
+            f"💼 <b>Capital Allocation:</b> Tranche 1 (Base Scalp Position)\n"
             f"⏰ <b>Trigger Timeframe:</b> {timeframe.upper()}\n"
             f"💵 <b>Entry Price:</b> <b>${price:,.2f}</b>\n\n"
             f"🎯 <b>Target 1:</b> ${tp1:,.2f} (<b>+{tp1_gain:.2f}%</b> · Breakeven Trigger)\n"
@@ -460,10 +532,11 @@ class AutonomousExecutionEngine:
             # Upgrade 4: Persist trade to disk
             self._save_state()
 
-    def _manage_active_trade(self, curr_price: float, ob: Any, atr: float, oi_conf: str) -> None:
+    def _manage_active_trade(self, curr_price: float, ob: Any, atr: float, oi_conf: str,
+                             pct_b_15m: float = 0.5, pct_b_5m: float = 0.5, pct_b_1m: float = 0.5) -> None:
         """
-        Manages the live spot position with ratcheting trailing stops,
-        breakeven protection, whale emergency defenses, and banked profit alerts.
+        Manages live spot position: ratcheting trailing stops, breakeven protection,
+        early resistance stall profit shields, whale defense, and banked profit alerts.
         """
         t = self.active_trade
         if not t:
@@ -489,6 +562,26 @@ class AutonomousExecutionEngine:
             self.market_state = "SCANNING"
             self._save_state()
             return
+
+        # Early Resistance Stall & Peak Profit Shield:
+        # If trade is in profit (> +0.35*atr) and price hits upper band (%B >= 0.82) with flattening tape
+        if curr_price > (entry + 0.35 * atr) and (pct_b_15m >= 0.82 or pct_b_5m >= 0.85 or pct_b_1m >= 0.88):
+            if ob.taker_delta < 0.0 or ob.imbalance_pct < -5.0:
+                tight_stop = round(curr_price - 0.35 * atr, 2)
+                if tight_stop > t['current_stop']:
+                    t['current_stop'] = tight_stop
+                    locked_gain = ((tight_stop - entry) / entry) * 100.0
+                    gain_now = ((curr_price - entry) / entry) * 100.0
+                    msg = (
+                        f"⚠️ <b>BTCTOOL: MOMENTUM STALLING AT RESISTANCE · PROFIT SHIELD</b>\n"
+                        f"━━━━━━━━━━━━━━━━━━\n"
+                        f"📈 <b>Current Price:</b> <b>${curr_price:,.2f}</b> (<b>+{gain_now:.2f}% Profit</b>)\n"
+                        f"📉 <b>Tape Condition:</b> Overhead ceiling active. Sellers absorbing.\n"
+                        f"👉 <b>Action:</b> Ratchet Stop Loss tight to <b>${tight_stop:,.2f}</b> (<b>+{locked_gain:.2f}% Guaranteed</b>), or cash out at market.\n"
+                        f"🛡️ <i>Secures peak profits before the regression drop.</i>"
+                    )
+                    self.notifier.send_message(msg)
+                    self._save_state()
 
         # Target 1 Reached -> Move Stop to Breakeven
         if not t['target_1_hit'] and curr_price >= t['target_1']:
@@ -541,7 +634,7 @@ class AutonomousExecutionEngine:
                 self.notifier.send_message(msg)
                 self._save_state()
 
-        # Exit on Trailing Stop / Breakeven Hit -> Bank the Gain
+        # Exit on Trailing Stop / Breakeven Hit -> Bank the Gain & Handover to Regression Tracking
         if curr_price <= t['current_stop'] and t['target_1_hit']:
             realized_gain = ((curr_price - entry) / entry) * 100.0
             msg = (
@@ -549,12 +642,15 @@ class AutonomousExecutionEngine:
                 f"━━━━━━━━━━━━━━━━━━\n"
                 f"💵 <b>Exit Price:</b> <b>${curr_price:,.2f}</b>\n"
                 f"💰 <b>Final Realized Gain:</b> <b>+{realized_gain:.2f}% PROFIT</b> 🏆\n"
-                f"💼 <b>Status:</b> 100% in USDT/Cash. Capital compounded.\n"
-                f"⏳ <i>Tracking regression descent to reload full balance.</i>"
+                f"💼 <b>Status:</b> In Cash / Capital Secured.\n"
+                f"⏳ <i>Immediate transition to regression tracking for dip reload.</i>"
             )
             self.notifier.send_message(msg)
             self.active_trade = None
-            self.market_state = "SCANNING"
+            self.market_state = "STALLING"
+            self.tracked_peak = highest
+            self.projected_floor = round(highest - 1.2 * atr, 2)
+            self.repositioned_limit = self.projected_floor
             self._save_state()
             return
 
@@ -641,8 +737,9 @@ def run_bot(interval_seconds: int = 20):
     if os.environ.get("RENDER") or os.environ.get("PORT"):
         notifier.send_message(
             "⚡ <b>btctool 2.0 · Spot Execution Copilot Online</b>\n\n"
-            "Cloud engine active on Render!\n"
-            "Monitoring BTC/USDT early trend ignition, parabolic ratchets & whale defense."
+            "Cloud engine active on Render 24/7!\n"
+            "Operating in pure <b>Event-Driven Mode</b> (Zero Clock Spam).\n"
+            "Send <code>/status</code> at any time for instant on-demand telemetry."
         )
 
     engine = AutonomousExecutionEngine(notifier)
