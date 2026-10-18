@@ -119,7 +119,14 @@ This document serves as the **Single Source of Truth** for the entire project.
 ## 6. Telegram Mobile Autonomous Execution Engine (`alert_bot.py`)
 
 * **Continuous Multi-Scale Autonomous Architecture (`AutonomousExecutionEngine`):**
-  - **Zero Rigid Static Limits:** Replaces arbitrary single-timeframe thresholds with aggregate multi-scale confluence across 1M, 5M, 15M, 1H, 4H, and live order flow tape ticks.
+  - **Zero Rigid Static Limits (Pure Mathematical Confluence):** Replaces arbitrary `if/else` checks with a continuous $0.0 \rightarrow 100.0$ multivariate conviction score:
+    $$S_{\text{total}} = S_{\text{tape}} + S_{\text{micro}} + S_{\text{depth}} + S_{\text{structure}} + S_{\text{macro}}$$
+    1. **$S_{\text{tape}} \in [0, 30]$:** $15.0 \times (1.0 + \tanh(2.5 \times \text{taker\_delta}))$.
+    2. **$S_{\text{micro}} \in [0, 25]$:** 1M/5M wick rejection dynamics ($\frac{\text{LowerShadow}}{\text{Body}} \times 7.5$, max 15) $+$ lower channel proximity ($(1 - \%B) \times 10$, max 10).
+    3. **$S_{\text{depth}} \in [0, 20]$:** $10.0 \times (1.0 + \tanh(3.0 \times \text{imbalance\_ratio}))$.
+    4. **$S_{\text{structure}} \in [0, 15]$:** Squeeze State (`FIRING`=15, `LOADED`=12, `BUILDING`=8, `IDLE`=5).
+    5. **$S_{\text{macro}} \in [0, 10]$:** Macro 4H/1H compass (`Trend Up`=10, `Range`=6, `Trend Down`=3).
+    - **Trigger Threshold:** Executes Spot Buy when $S_{\text{total}} \ge 60.0$. No single metric has veto power.
   - **4-Phase Market State Machine:**
     1. **`ACCUMULATING / SCANNING`:** Quiet volatility compression, bid absorption, and tape acceleration monitoring.
     2. **`EXPANDING`:** Real-time trend impulse active with Parabolic ATR Trailing Ratchet to the peak.

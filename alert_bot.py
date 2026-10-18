@@ -249,56 +249,57 @@ class AutonomousExecutionEngine:
                     return
 
         # ====================================================================
-        # STATE 3: SPOT BUY ENTRY EXECUTION (Confluence Green Light)
+        # STATE 3: PURE PROBABILISTIC CONFLUENCE SCORING ENGINE (PILLAR 2)
+        # Zero static veto gates. Computes continuous 0-100 score.
         # ====================================================================
         if (now - self.last_alert_time) > self.alert_cooldown_seconds:
-            stop_price = round(curr_price - 1.2 * atr, 2)
-            tp1_price  = round(curr_price + 1.0 * atr, 2)
-            tp2_price  = round(curr_price + 2.2 * atr, 2)
-            tp1_gain_pct = ((tp1_price - curr_price) / curr_price) * 100.0 if curr_price > 0 else 0.0
-            tp2_gain_pct = ((tp2_price - curr_price) / curr_price) * 100.0 if curr_price > 0 else 0.0
-            risk_pct     = ((curr_price - stop_price) / curr_price) * 100.0 if curr_price > 0 else 0.0
+            # 1. Tape Flow Score (0 to 30 pts) via continuous tanh
+            # taker_delta in [-1.0, +1.0] -> s_tape in [0.0, 30.0]
+            s_tape = 15.0 * (1.0 + float(np.tanh(2.5 * ob.taker_delta)))
 
-            # Trigger 1: Micro-Momentum & Taker Ignition (1M/5M turn with positive flow)
-            if ob.taker_delta >= 0.20 and (pct_b_1m <= 0.65 or pct_b_5m <= 0.60) and ob.imbalance_pct >= 0.0:
-                if wick_rejection_1m or vol_surge_1m or (c_1m.iloc[-1] > o_1m.iloc[-1]):
-                    self.market_state = "EXPANDING"
-                    self._trigger_entry(
-                        setup_name="SPOT BUY: MICRO-MOMENTUM TAKER IGNITION",
-                        price=curr_price,
-                        tp1=tp1_price,
-                        tp2=tp2_price,
-                        stop=stop_price,
-                        tp1_gain=tp1_gain_pct,
-                        tp2_gain=tp2_gain_pct,
-                        risk_pct=risk_pct,
-                        rationale=f"Live Taker Delta acceleration ({ob.taker_delta:+.2f}) with 1M/5M wick reversal and supporting depth.",
-                        timeframe="1M/5M Live"
-                    )
-                    return
+            # 2. Micro Price Action Score (0 to 25 pts)
+            # Wicking dynamics + oversold channel bounce
+            shadow_ratio = float(lower_shadow_1m / max(body_1m, 1e-4))
+            wick_score = min(15.0, shadow_ratio * 7.5) if c_1m.iloc[-1] >= l_1m.iloc[-1] else 0.0
+            # Higher score when near lower channel (pct_b low)
+            channel_score = max(0.0, min(10.0, (1.0 - pct_b_1m) * 10.0))
+            s_micro = wick_score + channel_score
 
-            # Trigger 2: 15M Squeeze Volatility Coil (Early pre-breakout entry)
-            if squeeze in ["LOADED", "FIRING"] and ob.imbalance_pct >= 6.0 and pct_b_15m <= 0.60:
-                self.market_state = "EXPANDING"
-                self._trigger_entry(
-                    setup_name="SPOT BUY: 15M VOLATILITY SQUEEZE COIL",
-                    price=curr_price,
-                    tp1=tp1_price,
-                    tp2=tp2_price,
-                    stop=stop_price,
-                    tp1_gain=tp1_gain_pct,
-                    tp2_gain=tp2_gain_pct,
-                    risk_pct=risk_pct,
-                    rationale="15M Volatility compression loaded/firing with order book absorption. Early entry before trend acceleration.",
-                    timeframe="15M Squeeze"
+            # 3. Order Book Depth Score (0 to 20 pts) via continuous tanh
+            # imbalance_pct in [-100, +100] -> ratio in [-1.0, +1.0]
+            imbalance_ratio = ob.imbalance_pct / 100.0
+            s_depth = 10.0 * (1.0 + float(np.tanh(3.0 * imbalance_ratio)))
+
+            # 4. Volatility Structure Score (0 to 15 pts)
+            squeeze_map = {"FIRING": 15.0, "LOADED": 12.0, "BUILDING": 8.0, "IDLE": 5.0}
+            s_structure = squeeze_map.get(squeeze, 5.0)
+
+            # 5. Macro Compass Score (0 to 10 pts)
+            s_macro = 10.0 if macro == "Trend Up" else (6.0 if macro == "Range" else 3.0)
+
+            # AGGREGATE TOTAL PROBABILISTIC CONFLUENCE (0.0 to 100.0)
+            total_conviction = s_tape + s_micro + s_depth + s_structure + s_macro
+
+            # CONVICTION THRESHOLD: Trigger Spot Buy when total score >= 60.0
+            if total_conviction >= 60.0:
+                stop_price = round(curr_price - 1.2 * atr, 2)
+                tp1_price  = round(curr_price + 1.0 * atr, 2)
+                tp2_price  = round(curr_price + 2.2 * atr, 2)
+                tp1_gain_pct = ((tp1_price - curr_price) / curr_price) * 100.0 if curr_price > 0 else 0.0
+                tp2_gain_pct = ((tp2_price - curr_price) / curr_price) * 100.0 if curr_price > 0 else 0.0
+                risk_pct     = ((curr_price - stop_price) / curr_price) * 100.0 if curr_price > 0 else 0.0
+
+                rationale = (
+                    f"Aggregate Confluence: {total_conviction:.1f}/100. "
+                    f"Tape Flow: {s_tape:.1f}/30 (Delta {ob.taker_delta:+.2f}), "
+                    f"Micro Reversal: {s_micro:.1f}/25, "
+                    f"OB Depth: {s_depth:.1f}/20 ({ob.imbalance_pct:+.1f}%), "
+                    f"Structure: {s_structure:.1f}/15 ({squeeze})."
                 )
-                return
 
-            # Trigger 3: Multi-Scale Liquidity Sweep Rebound
-            if (pct_b_15m <= 0.35 or pct_b_5m <= 0.30 or pct_b_1m <= 0.25) and ob.imbalance_pct >= 10.0:
                 self.market_state = "EXPANDING"
                 self._trigger_entry(
-                    setup_name="SPOT BUY: LIQUIDITY SWEEP REBOUND",
+                    setup_name=f"SPOT BUY (CONFLUENCE {total_conviction:.0f}/100)",
                     price=curr_price,
                     tp1=tp1_price,
                     tp2=tp2_price,
@@ -306,25 +307,8 @@ class AutonomousExecutionEngine:
                     tp1_gain=tp1_gain_pct,
                     tp2_gain=tp2_gain_pct,
                     risk_pct=risk_pct,
-                    rationale="Lower channel liquidity swept with heavy institutional bid wall absorption.",
-                    timeframe="Multi-Scale"
-                )
-                return
-
-            # Trigger 4: Bullish Dip Support in 4H Uptrend
-            if macro == "Trend Up" and ((0.35 <= pct_b_15m <= 0.52) or (0.35 <= pct_b_5m <= 0.52)) and ob.imbalance_pct >= 0.0:
-                self.market_state = "EXPANDING"
-                self._trigger_entry(
-                    setup_name="SPOT BUY: BULLISH DIP SUPPORT",
-                    price=curr_price,
-                    tp1=tp1_price,
-                    tp2=tp2_price,
-                    stop=stop_price,
-                    tp1_gain=tp1_gain_pct,
-                    tp2_gain=tp2_gain_pct,
-                    risk_pct=risk_pct,
-                    rationale="Healthy pullback into dynamic support within established 4H uptrend.",
-                    timeframe="Multi-Scale Dip"
+                    rationale=rationale,
+                    timeframe="Multi-Scale Unified"
                 )
                 return
 
