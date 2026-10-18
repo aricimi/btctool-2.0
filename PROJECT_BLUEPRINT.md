@@ -119,7 +119,11 @@ This document serves as the **Single Source of Truth** for the entire project.
 ## 6. Telegram Mobile Autonomous Execution Engine (`alert_bot.py`)
 
 * **Continuous Multi-Scale Autonomous Architecture (`AutonomousExecutionEngine`):**
-  - **Zero Rigid Static Limits (Pure Mathematical Confluence Engine):** Method `_compute_confluence_score()` calculates continuous $0.0 \rightarrow 100.0$ multivariate conviction score:
+  - **Dynamic Volatility & Structural Invalidation Shelf:**
+    - Stop loss is anchored below the local micro-swing low / order book bid shelf ($P - \text{Floor} + 0.2 \times \text{ATR}$).
+    - Enforces a strict minimum Reward-to-Risk ratio: Target 1 $\ge 1.7 \times \text{Risk}$ with an absolute minimum floor of $+0.38\%$ to eliminate spread noise.
+    - Target 2 (Runner) expands dynamically up to $3.2 \times \text{Risk}$ to capture full parabolic impulse expansions.
+  - **Continuous Multivariate Confluence Engine:** Method `_compute_confluence_score()` calculates continuous $0.0 \rightarrow 100.0$ multivariate conviction score:
     $$S_{\text{total}} = S_{\text{tape}} + S_{\text{micro}} + S_{\text{depth}} + S_{\text{structure}} + S_{\text{macro}}$$
     1. **$S_{\text{tape}} \in [0, 30]$:** $15.0 \times (1.0 + \tanh(2.5 \times \text{taker\_delta}))$.
     2. **$S_{\text{micro}} \in [0, 25]$:** Rejection wick score ($15.0$ if wick rejection on 1M else $7.0$ if volume surge else $0.0$) $+$ lower channel proximity ($10.0 \times \max(0.0, 1.0 - (\text{pct\_b\_avg} / 0.5))$). Capped at $25.0$.
@@ -127,43 +131,47 @@ This document serves as the **Single Source of Truth** for the entire project.
     4. **$S_{\text{structure}} \in [0, 15]$:** Squeeze State map: `{"FIRING": 15.0, "LOADED": 12.0, "TRENDING": 10.0, "BUILDING": 8.0, "IDLE": 5.0}`.
     5. **$S_{\text{macro}} \in [0, 10]$:** Macro 4H/1H compass: `{"Trend Up": 10.0, "Range": 5.0, "Trend Down": 2.0}`. (*"Trend Down" is 2.0 to maintain limitless property*).
     - **Trigger Threshold:** Executes Spot Buy when $S_{\text{total}} \ge 65.0$. Zero single metric has veto power.
-  - **Dynamic Driver Identification:** Classifies setup name based on dominant sub-score (`TAKER IGNITION CONFLUENCE`, `VOLATILITY SQUEEZE RELEASE`, `INSTITUTIONAL BID ABSORPTION`, `MICRO-REVERSAL COMPRESSION`, or `MULTI-SCALE CONFLUENCE`).
-  - **OI Confluence Tightening (25% TP Tightening):** When `oi_confluence == "EXHAUSTION_SIGNAL"` (verified in `engine.py`), targets are dynamically scaled by $0.75$:
-    - $TP_1 = \text{Entry} + (1.0 \times \text{ATR} \times 0.75)$
-    - $TP_2 = \text{Entry} + (2.2 \times \text{ATR} \times 0.75)$
+  - **State-Action Policy Engine (`_manage_active_trade`):**
+    - `EARLY_BAIL`: Cuts losses immediately before hard stop if order book depth or taker bids collapse ($<-18\%$ depth or $<-0.40$ delta).
+    - `HOLD_AND_STRETCH`: If buyer momentum is accelerating ($>+0.20$ delta) as Target 1 is touched, delays selling, expands target, and ratchets stop to guaranteed profit.
+    - `SCALE_IN`: Adds Tranche 2 on confirmed breakout acceleration with combined risk-free stop.
+    - `BANK_PROFIT`: Dispatches directive sell order to bank cash when upper Bollinger band exhausts (%B $\ge 0.85$) and tape delta turns negative.
   - **Persistent State File (`bot_state.json`):**
     - State is persisted to disk on trade open, ratchet update, and close.
     - Automatically recovers active trades and state after Render container restarts or redeployments.
     - Features a 4-hour staleness guard (`time.time() - saved_at > 14400`) to safely discard expired positions.
   - **Regression State Recovery & Zero-Ego Re-engagement:**
     - Auto-resets `REGRESSING` back to `SCANNING` if price recovers to peak zone ($P \ge \text{tracked\_peak} \times 0.998$).
-    - **Zero-Ego Re-engagement (`SPOT RE-ENGAGEMENT: BREAKOUT MOMENTUM RESUMPTION`):** If in `STALLING` or `REGRESSING` and aggressive buyer volume blasts through overhead resistance ($P \ge \text{tracked\_peak} \times 0.999$ and $S_{\text{total}} \ge 65.0$ or $S_{\text{tape}} \ge 22.0$), the bot immediately re-engages for the expansion push without sitting on the sidelines.
-    - Replaces silent timeouts with an explicit Telegram notification on 4H expiration instructing manual position review.
-* **Complete Multi-Scale Event-Driven Alert Spectrum (Zero Clock Spam):**
-  1. **Spot Buy Signal (Tranche 1 Allocation):** Multi-scale ignition entry with pre-calculated ATR Target 1, Target 2 Runner, and Hard Stop.
-  2. **Target 1 & Breakeven Protection:** Automatic notification to ratchet stop to entry $+ 0.15 \times \text{ATR}$ (100% risk-free trade).
-  3. **Resistance Stall & Peak Profit Shield:** When in an active trade and price pushes into upper resistance (%B $\ge 0.82$) with momentum flattening, ratchets stop tightly ($P - 0.35 \times \text{ATR}$) to lock peak profit before regression.
-  4. **Stalling & Regression Alert (Cash):** Tells cash holders not to buy at the ceiling, projecting the dip reload floor.
-  5. **Dynamic Dip Repositioning:** Alerts when buyers absorb early during a pullback, repositioning the limit buy order higher.
-  6. **Zero-Ego Breakout Re-engagement:** Pings immediately to re-enter if a stall was absorbed and resistance is shattered.
-  7. **Parabolic Trailing Ratchet:** Follows new higher swing lows candle-by-candle with zero upper profit cap.
-  8. **Whale Emergency Defense:** Exits immediately at market if order book depth violently flips ($\le -25\%$).
-  9. **On-Demand Telemetry via Telegram (`/status`):** Zero clock spam every 15 minutes. Send `/status` or `/info` to the bot at any time to receive instant live telemetry (<1 second) detailing price, market state, confluence score, order flow, and trade position.
+    - **Zero-Ego Re-engagement (`RE-ENGAGEMENT: BREAKOUT MOMENTUM RESUMPTION`):** If in `STALLING` or `REGRESSING` and aggressive buyer volume blasts through overhead resistance ($P \ge \text{tracked\_peak} \times 0.999$ and $S_{\text{total}} \ge 65.0$ or $S_{\text{tape}} \ge 22.0$), the bot immediately re-engages for the expansion push without sitting on the sidelines.
+* **Directive Action Order Spectrum (Zero Clock Spam):**
+  1. `🟢 BUY SPOT NOW (ENTER TRADE)`: Direct market buy directive with entry, Target 1, Target 2 runner, stop loss, and R:R $\ge 1.7:1$.
+  2. `📈 HOLD POSITION (DO NOT SELL YET)`: Clear directive to hold active spot coins while momentum surges, expanding target and ratcheting stop to guaranteed profit.
+  3. `➕ BUY MORE SPOT (ADD TO POSITION)`: Tranche 2 scale-in order upon confirmed breakout continuation with stop ratcheted to total breakeven.
+  4. `⚠️ SELL SPOT NOW (EXIT TRADE EARLY)`: Early bail order cutting trade before stop loss when order book support collapses.
+  5. `🏁 SELL SPOT NOW (BANK YOUR PROFIT)`: Direct sell order banking cash at peak exhaustion.
+  6. `🛑 STOP LOSS HIT (EXIT TRADE)`: Capital preservation exit notification.
+  7. `📍 UPDATE: MOVE LIMIT BUY UP TO $...`: Dynamic limit buy order repositioning during dip absorption.
+  8. `🛡️ UPDATE: MOVE STOP TO BREAKEVEN`: Breakeven locking order once Target 1 is reached.
+  9. `📡 On-Demand Telemetry via Telegram (/status)`: Sub-second (<1s) live engine status check via Telegram command listener with 100% spot-pure metrics.
 * **24/7 Cloud Architecture (Render + UptimeRobot):**
   - Integrated HTTP Health Check endpoint on `$PORT` (default 10000) supporting both `HEAD` and `GET`.
   - Keeps Render service permanently awake via UptimeRobot 5-minute HTTP keep-alive pings.
   - Zero local PC dependency: runs 24/7/365 in the cloud without sleeping.
-  - Fallback credentials embedded in `TelegramNotifier` ensuring zero cloud container silence.
 
 ---
 
-## 7. OKX Auto-Execution Architecture & Roadmap (`okx_trader.py`)
+## 7. Dual-Mode Execution Architecture (OKX Auto-Trade & Revolut X Copilot)
 
-* **Target Account:** OKX Spot BTC/USDT starting with €50 (~$54) with 0.08% Maker Fee.
-* **4 Defensive Engineering Shields:**
-  1. **Anti-Hanging Order Shield:** Auto-cancels limit buy orders after 3 minutes or if price escapes $> 0.35 \times \text{ATR}$.
-  2. **Dynamic Partial Fill Tracking:** Queries `get_order_details()` on fill and binds trailing stop strictly to actual `filled_sz`.
-  3. **Server-Side Trigger Stops & API Backoff:** Places hard stops natively on OKX's servers (OCO/Trigger orders) with exponential backoff on HTTP 429.
-  4. **Slippage-Capped Emergency Exits:** Uses Immediate-Or-Cancel (IOC) limit sells at `best_bid - 0.05%` to prevent slippage during whale dumps.
+The engine functions in dual-mode through `OKXSpotClient` (`okx_trader.py`):
+1. **Copilot Mode (Default / Revolut X 0% Maker Fee):**
+   - Without OKX API keys, alerts arrive in Telegram as unambiguous manual orders (`BUY SPOT NOW`, `SELL SPOT NOW`, `HOLD`, `MOVE STOP`).
+2. **Autonomous OKX Auto-Execution Mode:**
+   - When OKX credentials (`OKX_API_KEY`, `OKX_API_SECRET`, `OKX_PASSPHRASE` or `okx_config.json`) are supplied, the bot automatically executes spot buy/sell orders directly on OKX V5 REST API while simultaneously broadcasting confirmations to Telegram.
+   - **4 Defensive Engineering Shields:**
+     1. **Anti-Hanging Order Shield:** Auto-cancels limit buy orders if price escapes $> 0.35 \times \text{ATR}$.
+     2. **Dynamic Partial Fill Tracking:** Automatically queries wallet balances and calculates exact available BTC quantity for sells.
+     3. **Server-Side Trigger Stops:** Direct OCO/Trigger stops placed natively on OKX servers with exponential backoff on HTTP 429.
+     4. **Slippage-Capped Emergency Exits:** Immediate-Or-Cancel (IOC) limit sells at `best_bid - 0.05%` to prevent slippage during whale dumps.
+
 
 

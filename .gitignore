@@ -26,3 +26,4 @@ ENV/
 .streamlit/secrets.toml
 telegram_config.json
 bot_state.json
+okx_config.json

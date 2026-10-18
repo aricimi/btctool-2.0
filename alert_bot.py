@@ -21,6 +21,7 @@ import numpy as np
 import requests
 
 from engine import MarketDataService, PredictiveEnsembleEngine, AdvisoryReport
+from okx_trader import OKXSpotClient
 
 
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "telegram_config.json")
@@ -172,6 +173,7 @@ class AutonomousExecutionEngine:
 
     def __init__(self, notifier: TelegramNotifier):
         self.notifier = notifier
+        self.okx = OKXSpotClient()
         self.active_trade: Optional[Dict[str, Any]] = None
         self.market_state: str = "SCANNING"  # SCANNING, EXPANDING, STALLING, REGRESSING
         self.last_alert_time: float = 0.0
@@ -181,6 +183,11 @@ class AutonomousExecutionEngine:
         self.projected_floor: float = 0.0
         self.repositioned_limit: float = 0.0
         self.last_s_total: float = 0.0
+
+        if self.okx.is_configured:
+            print("⚡ OKX Execution Client Online (Live Auto-Trade Active)")
+        else:
+            print("📱 Telegram Execution Copilot Active (Tuned for Spot Orders on Revolut X)")
 
         # Load persisted state if exists
         self._load_state()
@@ -227,15 +234,13 @@ class AutonomousExecutionEngine:
                                  s_total: Optional[float] = None, ob: Any = None, td: Any = None) -> None:
         """Sends an on-demand status report in direct response to a user's Telegram command (/status)."""
         curr_price = curr_price or getattr(self, "latest_price", 0.0)
-        macro = macro or getattr(self, "latest_macro", "Range")
         s_total = s_total if s_total is not None else getattr(self, "last_s_total", 0.0)
         ob = ob or getattr(self, "latest_ob", None)
-        td = td or getattr(self, "latest_td", None)
 
         delta_str = f"{ob.taker_delta:+.2f}" if ob else "+0.00"
         depth_str = f"{ob.imbalance_pct:+.1f}%" if ob else "+0.0%"
-        action_str = td.action if td else "SCANNING"
 
+        # Spot-Purged Strategy Action: Never tell a spot trader to short!
         if self.active_trade:
             t = self.active_trade
             gain_pct = ((curr_price - t['entry']) / t['entry']) * 100.0 if t['entry'] > 0 else 0.0
@@ -245,28 +250,71 @@ class AutonomousExecutionEngine:
                 f"• Stop Loss: <b>${t['current_stop']:,.2f}</b> ({'🛡️ BREAKEVEN LOCKED' if t.get('breakeven_set') else 'HARD STOP'})\n"
                 f"• Target 1: ${t['target_1']:,.2f} | Runner Target 2: ${t['target_2']:,.2f}"
             )
+            strategy_str = "MANAGING ACTIVE SPOT POSITION"
         elif self.market_state in ["STALLING", "REGRESSING"]:
             pos_str = (
                 f"🟡 <b>IN CASH · REGRESSION TRACKING ACTIVE</b>\n"
                 f"• Tracked Peak: <b>${self.tracked_peak:,.2f}</b>\n"
                 f"• Repositioned Buy Zone: <b>${self.repositioned_limit:,.2f}</b>"
             )
+            strategy_str = f"DEFENSIVE CASH · TRACKING DIP RELOAD (${self.repositioned_limit:,.2f})"
+        elif s_total >= 55.0:
+            pos_str = f"🟢 <b>IN CASH · HIGH BUY CONFLUENCE BUILDING</b>"
+            strategy_str = "HIGH CONFLUENCE · PREPARING SPOT BUY"
         else:
             pos_str = f"⚪ <b>IN CASH · SCANNING FOR DIP & BREAKOUT IGNITION</b>"
+            strategy_str = "DEFENSIVE CASH · AWAITING BUYER IGNITION"
+
+        mode_tag = "⚡ OKX Auto-Trade Active" if self.okx.is_configured else "📱 Copilot Mode (Revolut X)"
 
         status_msg = (
             f"📡 <b>BTCTOOL: ON-DEMAND ENGINE STATUS</b>\n"
             f"━━━━━━━━━━━━━━━━━━\n"
             f"💵 <b>BTC Price:</b> <b>${curr_price:,.2f}</b>\n"
-            f"📊 <b>State:</b> <b>{self.market_state}</b> | 4H Macro: <b>{macro}</b>\n"
+            f"📊 <b>State:</b> <b>{self.market_state}</b> | <b>{mode_tag}</b>\n"
+            f"🎯 <b>Strategy:</b> <b>{strategy_str}</b>\n"
             f"🧮 <b>Confluence Score:</b> <b>{s_total:.1f} / 100</b> "
             f"{'🟢 NEAR SIGNAL' if s_total >= 55 else '🟡 BUILDING' if s_total >= 40 else '⚪ QUIET'}\n"
-            f"⚡ <b>Order Flow:</b> Taker Delta: <b>{delta_str}</b> | Depth: <b>{depth_str}</b>\n"
-            f"🎯 <b>Advisory:</b> {action_str}\n\n"
+            f"⚡ <b>Order Flow:</b> Taker Delta: <b>{delta_str}</b> | Depth: <b>{depth_str}</b>\n\n"
             f"{pos_str}\n\n"
             f"💡 <i>Running 24/7 in pure Event-Driven mode (Zero clock spam).</i>"
         )
         self.notifier.send_message(status_msg)
+
+    def _calculate_dynamic_levels(self, curr_price: float, atr: float,
+                                  df_1m: Any, df_5m: Any, ob: Any) -> Tuple[float, float, float, float, float, float]:
+        """
+        Dynamically computes structural invalidation shelf and opposing liquidity targets.
+        Enforces:
+        - Structural stop below local swing floor / order book bid shelf.
+        - Minimum 1.6x to 2.5x Reward-to-Risk ratio.
+        - Minimum target floor of +0.38% (eliminates micro-spread flickers).
+        Returns: (stop_price, tp1_price, tp2_price, risk_pct, tp1_gain_pct, tp2_gain_pct)
+        """
+        l_1m = df_1m["Low"]
+        l_5m = df_5m["Low"]
+        structural_floor = min(l_1m.iloc[-15:].min(), l_5m.iloc[-15:].min())
+
+        # Invalidation distance based on structural shelf + volatility buffer
+        raw_risk = max(curr_price - structural_floor + (0.2 * atr), 1.0 * atr)
+        min_risk_dist = curr_price * 0.0018
+        max_risk_dist = max(curr_price * 0.0085, 2.5 * atr)
+        risk_dist = max(min_risk_dist, min(raw_risk, max_risk_dist))
+        stop_price = round(curr_price - risk_dist, 2)
+
+        # Reward distance: Must be at least 1.7x the risk distance AND at least 0.38% gain
+        min_tp1_dist = max(risk_dist * 1.7, curr_price * 0.0038, 1.6 * atr)
+        tp1_price = round(curr_price + min_tp1_dist, 2)
+
+        # Runner target (Target 2): Expands 3.2x the risk
+        tp2_dist = max(risk_dist * 3.2, 3.0 * atr, curr_price * 0.0080)
+        tp2_price = round(curr_price + tp2_dist, 2)
+
+        risk_pct = ((curr_price - stop_price) / curr_price) * 100.0 if curr_price > 0 else 0.0
+        tp1_gain_pct = ((tp1_price - curr_price) / curr_price) * 100.0 if curr_price > 0 else 0.0
+        tp2_gain_pct = ((tp2_price - curr_price) / curr_price) * 100.0 if curr_price > 0 else 0.0
+
+        return stop_price, tp1_price, tp2_price, risk_pct, tp1_gain_pct, tp2_gain_pct
 
     def _compute_confluence_score(self, ob: Any, pct_b_1m: float, pct_b_5m: float, pct_b_15m: float,
                                   wick_rejection_1m: bool, vol_surge_1m: bool, squeeze: str, macro: str) -> Tuple[float, Dict[str, float]]:
@@ -380,31 +428,21 @@ class AutonomousExecutionEngine:
             if curr_price >= (self.tracked_peak * 0.999) and (s_total >= 65.0 or sub_scores["S_tape"] >= 22.0):
                 if (now - self.last_reentry_time) > self.alert_cooldown_seconds:
                     self.last_reentry_time = now
-                    stop_price = round(curr_price - 1.2 * atr, 2)
-                    tp1_price  = round(curr_price + 1.0 * atr, 2)
-                    tp2_price  = round(curr_price + 2.2 * atr, 2)
-                    tp1_gain_pct = ((tp1_price - curr_price) / curr_price) * 100.0 if curr_price > 0 else 0.0
-                    tp2_gain_pct = ((tp2_price - curr_price) / curr_price) * 100.0 if curr_price > 0 else 0.0
-                    risk_pct     = ((curr_price - stop_price) / curr_price) * 100.0 if curr_price > 0 else 0.0
-
-                    rationale = (
-                        f"Breakout above ${self.tracked_peak:,.2f} | "
-                        f"S_total={s_total:.1f}/100 | "
-                        f"Tape={sub_scores['S_tape']:.1f} | "
-                        f"Depth={sub_scores['S_depth']:.1f}"
+                    stop_p, tp1_p, tp2_p, r_pct, tp1_g, tp2_g = self._calculate_dynamic_levels(
+                        curr_price, atr, df_1m, df_5m, ob
                     )
                     self.market_state = "EXPANDING"
                     self._trigger_entry(
-                        setup_name="SPOT RE-ENGAGEMENT: BREAKOUT MOMENTUM RESUMPTION",
+                        setup_name="RE-ENGAGEMENT: BREAKOUT MOMENTUM RESUMPTION",
                         price=curr_price,
-                        tp1=tp1_price,
-                        tp2=tp2_price,
-                        stop=stop_price,
-                        tp1_gain=tp1_gain_pct,
-                        tp2_gain=tp2_gain_pct,
-                        risk_pct=risk_pct,
-                        rationale=rationale,
-                        timeframe="1M/5M BREAKOUT MOMENTUM"
+                        tp1=tp1_p,
+                        tp2=tp2_p,
+                        stop=stop_p,
+                        tp1_gain=tp1_g,
+                        tp2_gain=tp2_g,
+                        risk_pct=r_pct,
+                        rationale=f"Resistance at ${self.tracked_peak:,.2f} shattered by aggressive buyer volume (Delta {ob.taker_delta:+.2f}).",
+                        timeframe="MOMENTUM BREAKOUT"
                     )
                     self._save_state()
                     return
@@ -423,17 +461,16 @@ class AutonomousExecutionEngine:
                 new_repositioned_limit = round(curr_price + 0.15 * atr, 2)
                 if new_repositioned_limit > (self.repositioned_limit + 0.3 * atr) and (now - self.last_alert_time) > self.alert_cooldown_seconds:
                     self.repositioned_limit = new_repositioned_limit
-                    rebound_target = round(self.repositioned_limit + 1.2 * atr, 2)
+                    rebound_target = round(self.repositioned_limit + 1.8 * atr, 2)
                     gain_pot = ((rebound_target - self.repositioned_limit) / self.repositioned_limit) * 100.0
                     msg = (
-                        f"🎯 <b>BTCTOOL: REGRESSION UPDATE · BUY ZONE REPOSITIONED</b>\n"
+                        f"📍 <b>UPDATE: MOVE LIMIT BUY UP TO ${self.repositioned_limit:,.2f}</b>\n"
                         f"━━━━━━━━━━━━━━━━━━\n"
                         f"💵 <b>Current Price:</b> <b>${curr_price:,.2f}</b>\n"
                         f"📊 <b>Tape Shift:</b> Early buyer absorption detected (Delta {ob.taker_delta:+.2f} / Depth +{ob.imbalance_pct:.1f}%).\n"
-                        f"📍 <b>Repositioned Action:</b> <b>SET LIMIT BUY AT ${self.repositioned_limit:,.2f}</b>\n"
-                        f"🛑 <b>Stop Loss:</b> ${round(self.repositioned_limit - 1.1*atr, 2):,.2f}\n"
-                        f"🎯 <b>Rebound Target:</b> ${rebound_target:,.2f} (<b>+{gain_pot:.2f}%</b>)\n\n"
-                        f"💡 <i>Buyers absorbing earlier than expected. Move your Limit Buy up to ${self.repositioned_limit:,.2f} to ensure fill.</i>"
+                        f"🎯 <b>Rebound Target:</b> ${rebound_target:,.2f} (<b>+{gain_pot:.2f}%</b>)\n"
+                        f"🛑 <b>Stop Loss:</b> ${round(self.repositioned_limit - 1.2*atr, 2):,.2f}\n\n"
+                        f"👉 <b>Action:</b> Cancel previous limit buy. Move Limit Buy up to <b>${self.repositioned_limit:,.2f}</b> now to ensure fill."
                     )
                     if self.notifier.send_message(msg):
                         self.last_alert_time = now
@@ -445,17 +482,16 @@ class AutonomousExecutionEngine:
             if self.market_state != "STALLING" and (now - self.last_alert_time) > self.alert_cooldown_seconds:
                 self.market_state = "STALLING"
                 self.tracked_peak = max(curr_price, h_1m.max(), h_5m.max())
-                self.projected_floor = round(self.tracked_peak - 1.2 * atr, 2)
+                self.projected_floor = round(self.tracked_peak - 1.4 * atr, 2)
                 self.repositioned_limit = self.projected_floor
 
                 msg = (
-                    f"⚠️ <b>BTCTOOL: MOMENTUM STALLING · REGRESSION EXPECTED</b>\n"
+                    f"⚠️ <b>MOMENTUM STALLING AT RESISTANCE · DO NOT BUY</b>\n"
                     f"━━━━━━━━━━━━━━━━━━\n"
                     f"📈 <b>Local High Reached:</b> <b>${self.tracked_peak:,.2f}</b> | Current: <b>${curr_price:,.2f}</b>\n"
-                    f"📉 <b>Tape Condition:</b> Overhead ceiling active. 1M/5M momentum flattening.\n"
-                    f"🎯 <b>Projected Regression Target:</b> <b>${self.projected_floor:,.2f}</b>\n\n"
-                    f"👉 <b>Tactical Guidance:</b>\n"
-                    f"• <b>If you are in Cash/USDT:</b> <b>DO NOT BUY HERE.</b> Bot is actively tracking regression descent toward ${self.projected_floor:,.2f} for next reload."
+                    f"📉 <b>Tape Condition:</b> Overhead ceiling active. Momentum flattening.\n"
+                    f"🎯 <b>Projected Dip Floor:</b> <b>${self.projected_floor:,.2f}</b>\n\n"
+                    f"👉 <b>Action:</b> <b>DO NOT BUY HERE.</b> Stay in cash. Bot is actively tracking regression descent toward ${self.projected_floor:,.2f} for reload."
                 )
                 if self.notifier.send_message(msg):
                     self.last_alert_time = now
@@ -464,36 +500,31 @@ class AutonomousExecutionEngine:
 
         # 7. Pure Probabilistic Confluence Entry Gate (S_total >= 65.0)
         if s_total >= 65.0 and (now - self.last_alert_time) > self.alert_cooldown_seconds:
-            stop_price = round(curr_price - 1.2 * atr, 2)
-            tp1_price  = round(curr_price + 1.0 * atr, 2)
-            tp2_price  = round(curr_price + 2.2 * atr, 2)
+            stop_price, tp1_price, tp2_price, risk_pct, tp1_gain_pct, tp2_gain_pct = self._calculate_dynamic_levels(
+                curr_price, atr, df_1m, df_5m, ob
+            )
 
-            if oi_conf == "EXHAUSTION_SIGNAL" or "EXHAUSTION" in str(oi_conf):
-                tp1_price = round(curr_price + (1.0 * atr * 0.75), 2)
-                tp2_price = round(curr_price + (2.2 * atr * 0.75), 2)
-
-            tp1_gain_pct = ((tp1_price - curr_price) / curr_price) * 100.0 if curr_price > 0 else 0.0
-            tp2_gain_pct = ((tp2_price - curr_price) / curr_price) * 100.0 if curr_price > 0 else 0.0
-            risk_pct     = ((curr_price - stop_price) / curr_price) * 100.0 if curr_price > 0 else 0.0
+            # Strict Positive Asymmetry Filter: Ensure Expected Reward exceeds Risk
+            if tp1_gain_pct < (1.5 * risk_pct):
+                return
 
             if sub_scores["S_tape"] >= 22.0:
-                setup_name = "SPOT BUY: TAKER IGNITION CONFLUENCE"
+                setup_name = "TAKER IGNITION CONFLUENCE"
             elif sub_scores["S_structure"] >= 12.0:
-                setup_name = "SPOT BUY: VOLATILITY SQUEEZE RELEASE"
+                setup_name = "VOLATILITY SQUEEZE RELEASE"
             elif sub_scores["S_depth"] >= 15.0:
-                setup_name = "SPOT BUY: INSTITUTIONAL BID ABSORPTION"
+                setup_name = "INSTITUTIONAL BID ABSORPTION"
             elif sub_scores["S_micro"] >= 18.0:
-                setup_name = "SPOT BUY: MICRO-REVERSAL COMPRESSION"
+                setup_name = "MICRO-REVERSAL COMPRESSION"
             else:
-                setup_name = "SPOT BUY: MULTI-SCALE CONFLUENCE"
+                setup_name = "MULTI-SCALE MOMENTUM CONFLUENCE"
 
             rationale = (
                 f"S_total={s_total:.1f}/100 | "
                 f"Tape={sub_scores['S_tape']:.1f} "
                 f"Micro={sub_scores['S_micro']:.1f} "
                 f"Depth={sub_scores['S_depth']:.1f} "
-                f"Structure={sub_scores['S_structure']:.1f} "
-                f"Macro={sub_scores['S_macro']:.1f}"
+                f"Structure={sub_scores['S_structure']:.1f}"
             )
 
             self.market_state = "EXPANDING"
@@ -516,44 +547,66 @@ class AutonomousExecutionEngine:
     def _trigger_entry(self, setup_name: str, price: float, tp1: float, tp2: float,
                        stop: float, tp1_gain: float, tp2_gain: float, risk_pct: float,
                        rationale: str, timeframe: str) -> None:
-        """Dispatches an explicit Spot Buy push notification to Telegram."""
+        """Dispatches an explicit DIRECT ACTION ORDER and auto-executes on OKX if connected."""
+        rr_ratio = tp1_gain / risk_pct if risk_pct > 0 else 2.0
+
+        okx_exec_str = ""
+        if self.okx.is_configured:
+            try:
+                bals = self.okx.get_spot_balance()
+                usdt_avail = bals.get("USDT", 0.0)
+                if usdt_avail >= 10.0:
+                    trade_usd = min(usdt_avail, 50.0)
+                    sz_btc = round(trade_usd / price, 5)
+                    ord_id = self.okx.place_spot_order(side="buy", sz=str(sz_btc), order_type="market")
+                    if ord_id:
+                        okx_exec_str = f"\n⚡ <b>OKX Auto-Executed:</b> {sz_btc} BTC (~${trade_usd:.2f}) [ID: {ord_id}]"
+            except Exception as e:
+                print(f"[OKX Exec Error] {e}")
+
         msg = (
-            f"🟢 <b>BTCTOOL: {setup_name}</b>\n"
+            f"🟢 <b>BUY SPOT NOW (ENTER TRADE)</b>\n"
             f"━━━━━━━━━━━━━━━━━━\n"
-            f"📍 <b>Action:</b> <b>BUY SPOT NOW (Limit/Market)</b>\n"
-            f"💼 <b>Capital Allocation:</b> Tranche 1 (Base Scalp Position)\n"
-            f"⏰ <b>Trigger Timeframe:</b> {timeframe.upper()}\n"
+            f"📍 <b>Setup:</b> {setup_name}\n"
+            f"💼 <b>Allocation:</b> Tranche 1 (Base Scalp Allocation)\n"
+            f"⏰ <b>Trigger Timeframe:</b> {timeframe}\n"
             f"💵 <b>Entry Price:</b> <b>${price:,.2f}</b>\n\n"
             f"🎯 <b>Target 1:</b> ${tp1:,.2f} (<b>+{tp1_gain:.2f}%</b> · Breakeven Trigger)\n"
             f"🚀 <b>Target 2 (Runner):</b> ${tp2:,.2f} (<b>+{tp2_gain:.2f}%</b> · Trailing Peak)\n"
-            f"🛑 <b>Hard Invalidation Stop:</b> ${stop:,.2f} (<b>-{risk_pct:.2f}%</b>)\n\n"
+            f"🛑 <b>Stop Loss:</b> ${stop:,.2f} (<b>-{risk_pct:.2f}%</b>)\n"
+            f"⚖️ <b>Risk/Reward Ratio:</b> <b>{rr_ratio:.1f} : 1</b>\n\n"
             f"📊 <b>Execution Rationale:</b>\n"
             f"• <i>{rationale}</i>\n\n"
-            f"💡 <i>Place your Spot Limit Buy order on your exchange now. Stop is pre-calculated.</i>"
+            f"👉 <b>Action:</b> Place your Spot Buy order on your exchange now and set your stop loss.{okx_exec_str}"
         )
 
         sent = self.notifier.send_message(msg)
         if sent:
             self.last_alert_time = time.time()
             self.active_trade = {
-                'entry':        price,
-                'target_1':     tp1,
-                'target_2':     tp2,
-                'current_stop': stop,
-                'highest_price': price,
-                'target_1_hit': False,
-                'breakeven_set': False,
-                'ratchet_level': 0,
-                'timestamp':    time.time()
+                'entry':           price,
+                'target_1':        tp1,
+                'target_2':        tp2,
+                'current_stop':    stop,
+                'highest_price':   price,
+                'target_1_hit':    False,
+                'breakeven_set':   False,
+                'tranche_2_added': False,
+                'ratchet_level':   0,
+                'timestamp':       time.time()
             }
-            # Upgrade 4: Persist trade to disk
             self._save_state()
 
     def _manage_active_trade(self, curr_price: float, ob: Any, atr: float, oi_conf: str,
                              pct_b_15m: float = 0.5, pct_b_5m: float = 0.5, pct_b_1m: float = 0.5) -> None:
         """
-        Manages live spot position: ratcheting trailing stops, breakeven protection,
-        early resistance stall profit shields, whale defense, and banked profit alerts.
+        Active Position Policy Engine:
+        Evaluates tape candle-by-candle:
+        - EARLY_BAIL: Cuts loss immediately before stop if order book collapses.
+        - HOLD_AND_STRETCH: Does not sell early if buyers are accelerating.
+        - SCALE_IN: Adds Tranche 2 if breakout confirmed.
+        - BANK_PROFIT: Sells at market to bank profit when peak exhausts.
+        - HARD STOP: Capital preservation.
         """
         t = self.active_trade
         if not t:
@@ -563,16 +616,19 @@ class AutonomousExecutionEngine:
         highest = max(t['highest_price'], curr_price)
         t['highest_price'] = highest
 
-        # Defense: Whale Emergency Invalidation on Violent Orderbook Collapse
+        # POLICY 1: WHALE EMERGENCY DEFENSE / VIOLENT BOOK COLLAPSE
         if curr_price >= entry and ob.imbalance_pct <= -25.0:
             gain_pct = ((curr_price - entry) / entry) * 100.0
+            okx_exec_str = ""
+            if self.okx.is_configured:
+                self.okx.execute_slippage_capped_exit(best_bid=curr_price, sz="100%")
+                okx_exec_str = "\n⚡ <b>OKX Auto-Exited at Market.</b>"
             msg = (
-                f"⚠️ <b>BTCTOOL SPOT ALERT: WHALE DUMP DEFENSE (EXIT NOW)</b>\n"
+                f"⚠️ <b>SELL SPOT NOW (WHALE DUMP DEFENSE)</b>\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
                 f"🚨 <b>Microstructure Warning:</b> Heavy overhead ask wall collapse (Imbalance {ob.imbalance_pct:.1f}%).\n"
                 f"💵 <b>Current Price:</b> <b>${curr_price:,.2f}</b> ({gain_pct:+.2f}%)\n"
-                f"👉 <b>Action:</b> <b>SELL SPOT AT MARKET NOW.</b>\n"
-                f"🛡️ <i>Take flat/breakeven exit. Do not wait for hard stop; preserve full capital.</i>"
+                f"👉 <b>Action:</b> <b>SELL SPOT AT MARKET NOW.</b> Preserve full capital.{okx_exec_str}"
             )
             self.notifier.send_message(msg)
             self.active_trade = None
@@ -580,25 +636,72 @@ class AutonomousExecutionEngine:
             self._save_state()
             return
 
-        # Early Resistance Stall & Peak Profit Shield:
-        # If trade is in profit (> +0.35*atr) and price hits upper band (%B >= 0.82) with flattening tape
-        if curr_price > (entry + 0.35 * atr) and (pct_b_15m >= 0.82 or pct_b_5m >= 0.85 or pct_b_1m >= 0.88):
-            if ob.taker_delta < 0.0 or ob.imbalance_pct < -5.0:
-                tight_stop = round(curr_price - 0.35 * atr, 2)
-                if tight_stop > t['current_stop']:
-                    t['current_stop'] = tight_stop
-                    locked_gain = ((tight_stop - entry) / entry) * 100.0
-                    gain_now = ((curr_price - entry) / entry) * 100.0
-                    msg = (
-                        f"⚠️ <b>BTCTOOL: MOMENTUM STALLING AT RESISTANCE · PROFIT SHIELD</b>\n"
-                        f"━━━━━━━━━━━━━━━━━━\n"
-                        f"📈 <b>Current Price:</b> <b>${curr_price:,.2f}</b> (<b>+{gain_now:.2f}% Profit</b>)\n"
-                        f"📉 <b>Tape Condition:</b> Overhead ceiling active. Sellers absorbing.\n"
-                        f"👉 <b>Action:</b> Ratchet Stop Loss tight to <b>${tight_stop:,.2f}</b> (<b>+{locked_gain:.2f}% Guaranteed</b>), or cash out at market.\n"
-                        f"🛡️ <i>Secures peak profits before the regression drop.</i>"
-                    )
-                    self.notifier.send_message(msg)
-                    self._save_state()
+        # POLICY 2: EARLY BAIL (CUT BEFORE STOP LOSS)
+        # If price is in negative territory and order book bids vanish or takers dump heavily
+        if curr_price < (entry - 0.0008 * entry):
+            if ob.imbalance_pct <= -18.0 or ob.taker_delta <= -0.40:
+                loss_pct = ((entry - curr_price) / entry) * 100.0
+                okx_exec_str = ""
+                if self.okx.is_configured:
+                    self.okx.execute_slippage_capped_exit(best_bid=curr_price, sz="100%")
+                    okx_exec_str = "\n⚡ <b>OKX Auto-Exited at Market.</b>"
+                msg = (
+                    f"⚠️ <b>SELL SPOT NOW (EXIT TRADE EARLY)</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━\n"
+                    f"💵 <b>Current Price:</b> <b>${curr_price:,.2f}</b> (<b>-{loss_pct:.2f}%</b>)\n"
+                    f"📉 <b>Reason:</b> Order book bid support evaporated (Depth {ob.imbalance_pct:.1f}% / Delta {ob.taker_delta:+.2f}).\n"
+                    f"👉 <b>Action:</b> <b>SELL AT MARKET IMMEDIATELY.</b> Cut now to protect cash before hard stop is reached.{okx_exec_str}"
+                )
+                self.notifier.send_message(msg)
+                self.active_trade = None
+                self.market_state = "SCANNING"
+                self._save_state()
+                return
+
+        # POLICY 3: HOLD AND STRETCH (MOMENTUM SURGING - DO NOT SELL YET)
+        if curr_price >= t['target_1'] and ob.taker_delta >= 0.20:
+            new_target = round(curr_price + 1.8 * atr, 2)
+            new_stop = round(max(t['current_stop'], entry + 0.15 * atr), 2)
+            if new_stop > t['current_stop']:
+                t['current_stop'] = new_stop
+                t['target_1_hit'] = True
+                t['breakeven_set'] = True
+                locked_gain = ((new_stop - entry) / entry) * 100.0
+                gain_now = ((curr_price - entry) / entry) * 100.0
+                msg = (
+                    f"📈 <b>HOLD POSITION (DO NOT SELL YET)</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━\n"
+                    f"💵 <b>Current Price:</b> <b>${curr_price:,.2f}</b> (<b>+{gain_now:.2f}%</b>)\n"
+                    f"⚡ <b>Tape:</b> Buyer momentum surging (Delta {ob.taker_delta:+.2f}). Waiting for more push!\n"
+                    f"🎯 <b>Expanded Target:</b> <b>${new_target:,.2f}</b>\n"
+                    f"🔒 <b>Stop Loss Ratcheted:</b> <b>${new_stop:,.2f}</b> (<b>+{locked_gain:.2f}% Guaranteed Profit</b>)\n"
+                    f"👉 <b>Action:</b> <b>DO NOT SELL.</b> Move your stop loss up on your exchange to ${new_stop:,.2f}."
+                )
+                self.notifier.send_message(msg)
+                self._save_state()
+
+        # POLICY 4: SCALE-IN (BUY MORE SPOT - TRANCHE 2)
+        if t.get('breakeven_set') and not t.get('tranche_2_added') and ob.taker_delta >= 0.35 and curr_price >= (entry + 0.45 * atr):
+            t['tranche_2_added'] = True
+            okx_exec_str = ""
+            if self.okx.is_configured:
+                bals = self.okx.get_spot_balance()
+                usdt_avail = bals.get("USDT", 0.0)
+                if usdt_avail >= 10.0:
+                    trade_usd = min(usdt_avail, 25.0)
+                    sz_btc = round(trade_usd / curr_price, 5)
+                    self.okx.place_spot_order(side="buy", sz=str(sz_btc), order_type="market")
+                    okx_exec_str = f"\n⚡ <b>OKX Auto-Executed Tranche 2:</b> {sz_btc} BTC"
+            msg = (
+                f"➕ <b>BUY MORE SPOT (ADD TO POSITION)</b>\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"💵 <b>Current Price:</b> <b>${curr_price:,.2f}</b>\n"
+                f"🚀 <b>Tape Ignition:</b> Breakout continuation confirmed by aggressive market buying.\n"
+                f"🔒 <b>Stop Loss for Total Position:</b> <b>${entry:,.2f}</b> (100% Risk-Free)\n"
+                f"👉 <b>Action:</b> Buy 2nd Spot Tranche now to ride the expansion wave.{okx_exec_str}"
+            )
+            self.notifier.send_message(msg)
+            self._save_state()
 
         # Target 1 Reached -> Move Stop to Breakeven
         if not t['target_1_hit'] and curr_price >= t['target_1']:
@@ -608,29 +711,11 @@ class AutonomousExecutionEngine:
             t['current_stop'] = max(t['current_stop'], new_stop)
             gain_pct = ((curr_price - entry) / entry) * 100.0
             msg = (
-                f"🛡️ <b>BTCTOOL: TARGET 1 REACHED · MOVE STOP TO BREAKEVEN</b>\n"
+                f"🛡️ <b>UPDATE: MOVE STOP TO BREAKEVEN</b>\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
                 f"📈 <b>Current Price:</b> <b>${curr_price:,.2f}</b> (<b>+{gain_pct:.2f}% PROFIT</b>) ✅\n"
-                f"👉 <b>Action on Exchange:</b> Update your Stop Loss order:\n"
                 f"🔄 <b>New Stop:</b> <b>${new_stop:,.2f}</b> (Guaranteed Breakeven / Fee Shield)\n"
-                f"🔒 <i>Trade is now 100% Risk-Free. Parabolic trailing stop active—let runner ride!</i>"
-            )
-            self.notifier.send_message(msg)
-            self._save_state()
-
-        # Target 2 Hit -> Ratchet Stop High
-        if curr_price >= t['target_2'] and t['ratchet_level'] < 1:
-            t['ratchet_level'] = 1
-            new_stop = round(curr_price - 0.7 * atr, 2)
-            t['current_stop'] = max(t['current_stop'], new_stop)
-            gain_pct = ((curr_price - entry) / entry) * 100.0
-            lock_pct = ((new_stop - entry) / entry) * 100.0
-            msg = (
-                f"🚀 <b>BTCTOOL: TARGET 2 REACHED · RATCHET STOP HIGH</b>\n"
-                f"━━━━━━━━━━━━━━━━━━\n"
-                f"📈 <b>Current Price:</b> <b>${curr_price:,.2f}</b> (<b>+{gain_pct:.2f}% GAIN</b>) 🏆\n"
-                f"👉 <b>Action:</b> Move Stop Loss to <b>${new_stop:,.2f}</b> (<b>+{lock_pct:.2f}% Guaranteed Profit</b>)\n"
-                f"💰 <i>You are guaranteed +{lock_pct:.2f}% profit. Trailing the peak with zero upper cap!</i>"
+                f"👉 <b>Action on Exchange:</b> Update your Stop Loss to <b>${new_stop:,.2f}</b> now. Trade is 100% Risk-Free!"
             )
             self.notifier.send_message(msg)
             self._save_state()
@@ -642,31 +727,35 @@ class AutonomousExecutionEngine:
                 t['current_stop'] = dynamic_trail_stop
                 locked_gain = ((dynamic_trail_stop - entry) / entry) * 100.0
                 msg = (
-                    f"📈 <b>BTCTOOL: TRAILING STOP RATCHETED HIGHER</b>\n"
+                    f"📈 <b>UPDATE: RATCHET STOP LOSS HIGHER</b>\n"
                     f"━━━━━━━━━━━━━━━━━━\n"
                     f"Highest: <b>${highest:,.2f}</b> | Current: <b>${curr_price:,.2f}</b>\n"
-                    f"👉 <b>Action:</b> Ratchet Stop Loss up to <b>${dynamic_trail_stop:,.2f}</b>\n"
-                    f"🔒 <b>Locked-in Profit:</b> <b>+{locked_gain:.2f}%</b> (Risk-Free Trend Run)"
+                    f"👉 <b>Action on Exchange:</b> Ratchet Stop Loss up to <b>${dynamic_trail_stop:,.2f}</b>\n"
+                    f"🔒 <b>Locked-in Profit:</b> <b>+{locked_gain:.2f}%</b> (Guaranteed Win)"
                 )
                 self.notifier.send_message(msg)
                 self._save_state()
 
-        # Exit on Trailing Stop / Breakeven Hit -> Bank the Gain & Handover to Regression Tracking
-        if curr_price <= t['current_stop'] and t['target_1_hit']:
+        # POLICY 5: BANK PROFIT (SELL SPOT NOW)
+        # When runner peak exhausts (%B >= 0.85 and delta < 0, or trailing stop touched)
+        if (curr_price >= t['target_1'] and pct_b_5m >= 0.85 and ob.taker_delta <= 0.0) or (curr_price <= t['current_stop'] and t.get('breakeven_set')):
             realized_gain = ((curr_price - entry) / entry) * 100.0
+            okx_exec_str = ""
+            if self.okx.is_configured:
+                self.okx.place_spot_order(side="sell", sz="100%", order_type="market")
+                okx_exec_str = "\n⚡ <b>OKX Auto-Sold at Market.</b>"
             msg = (
-                f"🏁 <b>BTCTOOL: SPOT POSITION CLOSED · PROFIT BANKED!</b>\n"
+                f"🏁 <b>SELL SPOT NOW (BANK YOUR PROFIT)</b>\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
                 f"💵 <b>Exit Price:</b> <b>${curr_price:,.2f}</b>\n"
                 f"💰 <b>Final Realized Gain:</b> <b>+{realized_gain:.2f}% PROFIT</b> 🏆\n"
-                f"💼 <b>Status:</b> In Cash / Capital Secured.\n"
-                f"⏳ <i>Immediate transition to regression tracking for dip reload.</i>"
+                f"👉 <b>Action:</b> <b>SELL SPOT AT MARKET NOW.</b> Bank cash. Bot is actively tracking dip reload.{okx_exec_str}"
             )
             self.notifier.send_message(msg)
             self.active_trade = None
             self.market_state = "STALLING"
             self.tracked_peak = highest
-            self.projected_floor = round(highest - 1.2 * atr, 2)
+            self.projected_floor = round(highest - 1.4 * atr, 2)
             self.repositioned_limit = self.projected_floor
             self._save_state()
             return
@@ -674,12 +763,15 @@ class AutonomousExecutionEngine:
         # Hard Stop Loss Triggered (Capital Preservation)
         if curr_price <= t['current_stop'] and not t['target_1_hit']:
             loss_pct = abs((curr_price - entry) / entry) * 100.0
+            okx_exec_str = ""
+            if self.okx.is_configured:
+                self.okx.place_spot_order(side="sell", sz="100%", order_type="market")
+                okx_exec_str = "\n⚡ <b>OKX Auto-Sold Stop.</b>"
             msg = (
-                f"🛑 <b>BTCTOOL: SPOT STOP LOSS HIT · CAPITAL PRESERVED</b>\n"
+                f"🛑 <b>STOP LOSS HIT (EXIT TRADE)</b>\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
-                f"💵 <b>Exit Price:</b> <b>${curr_price:,.2f}</b>\n"
-                f"📉 <b>Loss:</b> <b>-{loss_pct:.2f}%</b>\n\n"
-                f"🛡️ <i>Action: Position exited. Hard stop protected capital from further drawdown.</i>"
+                f"💵 <b>Exit Price:</b> <b>${curr_price:,.2f}</b> (-{loss_pct:.2f}%)\n"
+                f"👉 <b>Action:</b> Exit position immediately. Hard stop protected capital.{okx_exec_str}"
             )
             self.notifier.send_message(msg)
             self.active_trade = None
@@ -687,7 +779,7 @@ class AutonomousExecutionEngine:
             self._save_state()
             return
 
-        # Upgrade 6B: Explicit Telegram Alert on 4H Position Timeout
+        # Position Timeout (>4h)
         if (time.time() - t["timestamp"]) > 14400:
             self.notifier.send_message(
                 "⏱️ <b>BTCTOOL: POSITION TIMEOUT (4H)</b>\n"
