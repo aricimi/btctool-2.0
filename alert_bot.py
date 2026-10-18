@@ -16,7 +16,8 @@ import datetime
 import threading
 import gc
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from typing import Dict, Any, Optional
+import math
+import numpy as np
 import requests
 
 from engine import MarketDataService, PredictiveEnsembleEngine, AdvisoryReport
@@ -117,6 +118,9 @@ class TelegramNotifier:
         return self.send_message(msg)
 
 
+STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot_state.json")
+
+
 class AutonomousExecutionEngine:
     """
     Continuous Multi-Scale Autonomous Spot Trading Engine & Telemetry Copilot:
@@ -126,11 +130,13 @@ class AutonomousExecutionEngine:
        - STALLING / EXHAUSTION: Upper resistance ceiling reached, 1M/5M momentum fading.
        - REGRESSING: Price pulling back toward support floor; dynamic repositioning active.
     2. Telemetry & Alerts:
-       - SPOT BUY SIGNAL: Probabilistic multi-scale confluence entry.
+       - SPOT BUY SIGNAL: Pure continuous S_total confluence scoring (>= 65.0).
        - TARGET 1 & BREAKEVEN: Milestone reached, stop ratcheted to lock risk-free trade.
        - STALLING & REGRESSION WARNING: Notifies you to lock profits if holding, or wait for dip if in cash.
        - DYNAMIC DIP REPOSITIONING: Tracks dip descent and shifts buy zone adaptively.
        - WHALE DEFENSE: Immediate exit if order book collapses.
+    3. Persistence:
+       - bot_state.json survives Render cloud restarts with 4h staleness guard.
     """
 
     def __init__(self, notifier: TelegramNotifier):
@@ -144,6 +150,79 @@ class AutonomousExecutionEngine:
         self.tracked_peak: float = 0.0
         self.projected_floor: float = 0.0
         self.repositioned_limit: float = 0.0
+        self.last_s_total: float = 0.0
+
+        # Load persisted state if exists
+        self._load_state()
+
+    def _save_state(self) -> None:
+        state = {
+            "market_state": self.market_state,
+            "active_trade": self.active_trade,
+            "tracked_peak": self.tracked_peak,
+            "projected_floor": self.projected_floor,
+            "repositioned_limit": self.repositioned_limit,
+            "last_alert_time": self.last_alert_time,
+            "last_s_total": self.last_s_total,
+            "saved_at": time.time()
+        }
+        try:
+            with open(STATE_FILE, "w") as f:
+                json.dump(state, f, indent=2)
+        except Exception as e:
+            print(f"[State] Save error: {e}")
+
+    def _load_state(self) -> None:
+        if not os.path.exists(STATE_FILE):
+            return
+        try:
+            with open(STATE_FILE, "r") as f:
+                state = json.load(f)
+            if time.time() - state.get("saved_at", 0) > 14400:
+                print("[State] Stale state discarded (>4h old).")
+                return
+            self.market_state       = state.get("market_state", "SCANNING")
+            self.active_trade       = state.get("active_trade", None)
+            self.tracked_peak       = state.get("tracked_peak", 0.0)
+            self.projected_floor    = state.get("projected_floor", 0.0)
+            self.repositioned_limit = state.get("repositioned_limit", 0.0)
+            self.last_alert_time    = state.get("last_alert_time", 0.0)
+            self.last_s_total       = state.get("last_s_total", 0.0)
+            if self.active_trade:
+                print(f"[State] Recovered trade from disk. Entry: {self.active_trade.get('entry')}")
+        except Exception as e:
+            print(f"[State] Load error: {e}")
+
+    def _compute_confluence_score(self, ob: Any, pct_b_1m: float, pct_b_5m: float, pct_b_15m: float,
+                                  wick_rejection_1m: bool, vol_surge_1m: bool, squeeze: str, macro: str) -> Tuple[float, Dict[str, float]]:
+        """Computes pure continuous S_total confluence scoring model (0.0 to 100.0)."""
+        # S_tape: Continuous sigmoid of taker delta (0.0 to 30.0)
+        s_tape = 15.0 * (1.0 + float(np.tanh(2.5 * ob.taker_delta)))
+
+        # S_micro: Wick dynamics + Bollinger position (0.0 to 25.0)
+        s_micro_wick = 15.0 if wick_rejection_1m else (7.0 if vol_surge_1m else 0.0)
+        pct_b_avg = (pct_b_1m + pct_b_5m) / 2.0
+        s_micro_bb = min(10.0 * max(0.0, 1.0 - (pct_b_avg / 0.5)), 10.0)
+        s_micro = min(s_micro_wick + s_micro_bb, 25.0)
+
+        # S_depth: tanh of order book imbalance (0.0 to 20.0)
+        imbalance_ratio = ob.imbalance_pct / 100.0
+        s_depth = 10.0 * (1.0 + float(np.tanh(3.0 * imbalance_ratio)))
+
+        # S_structure: Squeeze state mapped to points (0.0 to 15.0)
+        squeeze_map = {"FIRING": 15.0, "LOADED": 12.0, "TRENDING": 10.0, "BUILDING": 8.0, "IDLE": 5.0}
+        s_structure = squeeze_map.get(squeeze, 5.0)
+
+        # S_macro: 4H regime score (0.0 to 10.0) - "Trend Down" is 2.0 to preserve limitless property
+        macro_map = {"Trend Up": 10.0, "Range": 5.0, "Trend Down": 2.0}
+        s_macro = macro_map.get(macro, 5.0)
+
+        s_total = s_tape + s_micro + s_depth + s_structure + s_macro
+        sub_scores = {
+            "S_tape": s_tape, "S_micro": s_micro, "S_depth": s_depth,
+            "S_structure": s_structure, "S_macro": s_macro
+        }
+        return s_total, sub_scores
 
     def evaluate_market_cycle(self) -> None:
         """Runs the continuous autonomous loop across the entire market continuum."""
@@ -163,6 +242,15 @@ class AutonomousExecutionEngine:
         squeeze = report_15m.squeeze_state
         macro = report_15m.macro_regime_4h
         oi_conf = report_15m.oi_confluence
+
+        # Upgrade 6A: Auto-reset if price recovers to peak zone (false dip / no repositioning triggered)
+        if self.market_state == "REGRESSING" and self.tracked_peak > 0:
+            if curr_price >= (self.tracked_peak * 0.998):
+                self.market_state = "SCANNING"
+                self.tracked_peak = 0.0
+                self.projected_floor = 0.0
+                print("[State Machine] Price recovered to peak. Resetting to SCANNING.")
+                self._save_state()
 
         # 1. Manage Active Position (if in a trade)
         if self.active_trade is not None:
@@ -218,6 +306,7 @@ class AutonomousExecutionEngine:
                 )
                 if self.notifier.send_message(msg):
                     self.last_alert_time = now
+                self._save_state()
                 return
 
         # ====================================================================
@@ -246,74 +335,80 @@ class AutonomousExecutionEngine:
                     )
                     if self.notifier.send_message(msg):
                         self.last_alert_time = now
+                    self._save_state()
                     return
 
         # ====================================================================
-        # STATE 3: PURE PROBABILISTIC CONFLUENCE SCORING ENGINE (PILLAR 2)
-        # Zero static veto gates. Computes continuous 0-100 score.
+        # STATE 3: PURE PROBABILISTIC CONFLUENCE SCORING ENGINE (UPGRADES 1 & 2)
+        # Zero static veto gates. Computes continuous S_total score.
         # ====================================================================
-        if (now - self.last_alert_time) > self.alert_cooldown_seconds:
-            # 1. Tape Flow Score (0 to 30 pts) via continuous tanh
-            # taker_delta in [-1.0, +1.0] -> s_tape in [0.0, 30.0]
-            s_tape = 15.0 * (1.0 + float(np.tanh(2.5 * ob.taker_delta)))
+        s_total, sub_scores = self._compute_confluence_score(
+            ob=ob,
+            pct_b_1m=pct_b_1m,
+            pct_b_5m=pct_b_5m,
+            pct_b_15m=pct_b_15m,
+            wick_rejection_1m=wick_rejection_1m,
+            vol_surge_1m=vol_surge_1m,
+            squeeze=squeeze,
+            macro=macro
+        )
+        self.last_s_total = s_total
 
-            # 2. Micro Price Action Score (0 to 25 pts)
-            # Wicking dynamics + oversold channel bounce
-            shadow_ratio = float(lower_shadow_1m / max(body_1m, 1e-4))
-            wick_score = min(15.0, shadow_ratio * 7.5) if c_1m.iloc[-1] >= l_1m.iloc[-1] else 0.0
-            # Higher score when near lower channel (pct_b low)
-            channel_score = max(0.0, min(10.0, (1.0 - pct_b_1m) * 10.0))
-            s_micro = wick_score + channel_score
+        # CONVICTION THRESHOLD: Trigger Spot Buy when S_total >= 65.0
+        if s_total >= 65.0 and (now - self.last_alert_time) > self.alert_cooldown_seconds:
+            stop_price = round(curr_price - 1.2 * atr, 2)
+            tp1_price  = round(curr_price + 1.0 * atr, 2)
+            tp2_price  = round(curr_price + 2.2 * atr, 2)
 
-            # 3. Order Book Depth Score (0 to 20 pts) via continuous tanh
-            # imbalance_pct in [-100, +100] -> ratio in [-1.0, +1.0]
-            imbalance_ratio = ob.imbalance_pct / 100.0
-            s_depth = 10.0 * (1.0 + float(np.tanh(3.0 * imbalance_ratio)))
+            # Upgrade 3: OI Confluence 25% TP Tightening (Matches engine.py EXHAUSTION_SIGNAL)
+            if oi_conf == "EXHAUSTION_SIGNAL" or "EXHAUSTION" in str(oi_conf):
+                tp1_price = round(curr_price + (1.0 * atr * 0.75), 2)
+                tp2_price = round(curr_price + (2.2 * atr * 0.75), 2)
 
-            # 4. Volatility Structure Score (0 to 15 pts)
-            squeeze_map = {"FIRING": 15.0, "LOADED": 12.0, "BUILDING": 8.0, "IDLE": 5.0}
-            s_structure = squeeze_map.get(squeeze, 5.0)
+            tp1_gain_pct = ((tp1_price - curr_price) / curr_price) * 100.0 if curr_price > 0 else 0.0
+            tp2_gain_pct = ((tp2_price - curr_price) / curr_price) * 100.0 if curr_price > 0 else 0.0
+            risk_pct     = ((curr_price - stop_price) / curr_price) * 100.0 if curr_price > 0 else 0.0
 
-            # 5. Macro Compass Score (0 to 10 pts)
-            s_macro = 10.0 if macro == "Trend Up" else (6.0 if macro == "Range" else 3.0)
+            # Dynamic primary driver identification
+            if sub_scores["S_tape"] >= 22.0:
+                setup_name = "SPOT BUY: TAKER IGNITION CONFLUENCE"
+            elif sub_scores["S_structure"] >= 12.0:
+                setup_name = "SPOT BUY: VOLATILITY SQUEEZE RELEASE"
+            elif sub_scores["S_depth"] >= 15.0:
+                setup_name = "SPOT BUY: INSTITUTIONAL BID ABSORPTION"
+            elif sub_scores["S_micro"] >= 18.0:
+                setup_name = "SPOT BUY: MICRO-REVERSAL COMPRESSION"
+            else:
+                setup_name = "SPOT BUY: MULTI-SCALE CONFLUENCE"
 
-            # AGGREGATE TOTAL PROBABILISTIC CONFLUENCE (0.0 to 100.0)
-            total_conviction = s_tape + s_micro + s_depth + s_structure + s_macro
+            rationale = (
+                f"S_total={s_total:.1f}/100 | "
+                f"Tape={sub_scores['S_tape']:.1f} "
+                f"Micro={sub_scores['S_micro']:.1f} "
+                f"Depth={sub_scores['S_depth']:.1f} "
+                f"Structure={sub_scores['S_structure']:.1f} "
+                f"Macro={sub_scores['S_macro']:.1f}"
+            )
 
-            # CONVICTION THRESHOLD: Trigger Spot Buy when total score >= 60.0
-            if total_conviction >= 60.0:
-                stop_price = round(curr_price - 1.2 * atr, 2)
-                tp1_price  = round(curr_price + 1.0 * atr, 2)
-                tp2_price  = round(curr_price + 2.2 * atr, 2)
-                tp1_gain_pct = ((tp1_price - curr_price) / curr_price) * 100.0 if curr_price > 0 else 0.0
-                tp2_gain_pct = ((tp2_price - curr_price) / curr_price) * 100.0 if curr_price > 0 else 0.0
-                risk_pct     = ((curr_price - stop_price) / curr_price) * 100.0 if curr_price > 0 else 0.0
-
-                rationale = (
-                    f"Aggregate Confluence: {total_conviction:.1f}/100. "
-                    f"Tape Flow: {s_tape:.1f}/30 (Delta {ob.taker_delta:+.2f}), "
-                    f"Micro Reversal: {s_micro:.1f}/25, "
-                    f"OB Depth: {s_depth:.1f}/20 ({ob.imbalance_pct:+.1f}%), "
-                    f"Structure: {s_structure:.1f}/15 ({squeeze})."
-                )
-
-                self.market_state = "EXPANDING"
-                self._trigger_entry(
-                    setup_name=f"SPOT BUY (CONFLUENCE {total_conviction:.0f}/100)",
-                    price=curr_price,
-                    tp1=tp1_price,
-                    tp2=tp2_price,
-                    stop=stop_price,
-                    tp1_gain=tp1_gain_pct,
-                    tp2_gain=tp2_gain_pct,
-                    risk_pct=risk_pct,
-                    rationale=rationale,
-                    timeframe="Multi-Scale Unified"
-                )
-                return
+            self.market_state = "EXPANDING"
+            self._trigger_entry(
+                setup_name=setup_name,
+                price=curr_price,
+                tp1=tp1_price,
+                tp2=tp2_price,
+                stop=stop_price,
+                tp1_gain=tp1_gain_pct,
+                tp2_gain=tp2_gain_pct,
+                risk_pct=risk_pct,
+                rationale=rationale,
+                timeframe="MULTI-SCALE 1M/5M/15M"
+            )
+            self.last_alert_time = now
+            self._save_state()
+            return
 
         # ====================================================================
-        # PERIODIC STATUS PULSE (Every 15 min): Zero Silence Guarantee
+        # PERIODIC STATUS PULSE (Every 15 min - Upgrade 5): Zero Silence Guarantee
         # ====================================================================
         if (now - self.last_status_time) > self.status_pulse_interval:
             self.last_status_time = now
@@ -322,9 +417,11 @@ class AutonomousExecutionEngine:
                 f"━━━━━━━━━━━━━━━━━━\n"
                 f"💵 <b>BTC Price:</b> <b>${curr_price:,.2f}</b>\n"
                 f"📊 <b>Market Phase:</b> <b>{self.market_state}</b> | 4H Macro: <b>{macro}</b>\n"
+                f"🧮 <b>Confluence Score:</b> <b>{self.last_s_total:.1f} / 100</b> "
+                f"{'🟢 NEAR SIGNAL' if self.last_s_total >= 55 else '🟡 BUILDING' if self.last_s_total >= 40 else '⚪ QUIET'}\n"
                 f"⚡ <b>Order Flow:</b> Taker Delta: <b>{ob.taker_delta:+.2f}</b> | Depth: <b>{ob.imbalance_pct:+.1f}%</b>\n"
                 f"🎯 <b>Current Strategy:</b> {td.action}\n"
-                f"💡 <i>Scanner running 24/7 across 1M, 5M, 15M, 1H & live order flow.</i>"
+                f"💡 <i>Scanner running 24/7 across 1M, 5M, 15M & live order flow.</i>"
             )
             self.notifier.send_message(pulse_msg)
 
@@ -360,6 +457,8 @@ class AutonomousExecutionEngine:
                 'ratchet_level': 0,
                 'timestamp':    time.time()
             }
+            # Upgrade 4: Persist trade to disk
+            self._save_state()
 
     def _manage_active_trade(self, curr_price: float, ob: Any, atr: float, oi_conf: str) -> None:
         """
@@ -388,6 +487,7 @@ class AutonomousExecutionEngine:
             self.notifier.send_message(msg)
             self.active_trade = None
             self.market_state = "SCANNING"
+            self._save_state()
             return
 
         # Target 1 Reached -> Move Stop to Breakeven
@@ -406,6 +506,7 @@ class AutonomousExecutionEngine:
                 f"🔒 <i>Trade is now 100% Risk-Free. Parabolic trailing stop active—let runner ride!</i>"
             )
             self.notifier.send_message(msg)
+            self._save_state()
 
         # Target 2 Hit -> Ratchet Stop High
         if curr_price >= t['target_2'] and t['ratchet_level'] < 1:
@@ -422,6 +523,7 @@ class AutonomousExecutionEngine:
                 f"💰 <i>You are guaranteed +{lock_pct:.2f}% profit. Trailing the peak with zero upper cap!</i>"
             )
             self.notifier.send_message(msg)
+            self._save_state()
 
         # Parabolic Trailing Ratchet (Trailing higher swing lows)
         if t['target_1_hit']:
@@ -437,6 +539,7 @@ class AutonomousExecutionEngine:
                     f"🔒 <b>Locked-in Profit:</b> <b>+{locked_gain:.2f}%</b> (Risk-Free Trend Run)"
                 )
                 self.notifier.send_message(msg)
+                self._save_state()
 
         # Exit on Trailing Stop / Breakeven Hit -> Bank the Gain
         if curr_price <= t['current_stop'] and t['target_1_hit']:
@@ -452,6 +555,7 @@ class AutonomousExecutionEngine:
             self.notifier.send_message(msg)
             self.active_trade = None
             self.market_state = "SCANNING"
+            self._save_state()
             return
 
         # Hard Stop Loss Triggered (Capital Preservation)
@@ -467,13 +571,20 @@ class AutonomousExecutionEngine:
             self.notifier.send_message(msg)
             self.active_trade = None
             self.market_state = "SCANNING"
+            self._save_state()
             return
 
-        # Position Timeout (>4h)
+        # Upgrade 6B: Explicit Telegram Alert on 4H Position Timeout
         if (time.time() - t["timestamp"]) > 14400:
-            print("[Trade Tracker] Position timeout (>4h). Resetting.")
+            self.notifier.send_message(
+                "⏱️ <b>BTCTOOL: POSITION TIMEOUT (4H)</b>\n"
+                "━━━━━━━━━━━━━━━━━━\n"
+                "Trade tracker auto-reset after 4 hours with no resolution.\n"
+                "<i>Please check your exchange manually and confirm position status.</i>"
+            )
             self.active_trade = None
             self.market_state = "SCANNING"
+            self._save_state()
 
 
 

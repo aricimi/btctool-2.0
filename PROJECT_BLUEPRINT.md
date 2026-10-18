@@ -119,19 +119,25 @@ This document serves as the **Single Source of Truth** for the entire project.
 ## 6. Telegram Mobile Autonomous Execution Engine (`alert_bot.py`)
 
 * **Continuous Multi-Scale Autonomous Architecture (`AutonomousExecutionEngine`):**
-  - **Zero Rigid Static Limits (Pure Mathematical Confluence):** Replaces arbitrary `if/else` checks with a continuous $0.0 \rightarrow 100.0$ multivariate conviction score:
+  - **Zero Rigid Static Limits (Pure Mathematical Confluence Engine):** Method `_compute_confluence_score()` calculates continuous $0.0 \rightarrow 100.0$ multivariate conviction score:
     $$S_{\text{total}} = S_{\text{tape}} + S_{\text{micro}} + S_{\text{depth}} + S_{\text{structure}} + S_{\text{macro}}$$
     1. **$S_{\text{tape}} \in [0, 30]$:** $15.0 \times (1.0 + \tanh(2.5 \times \text{taker\_delta}))$.
-    2. **$S_{\text{micro}} \in [0, 25]$:** 1M/5M wick rejection dynamics ($\frac{\text{LowerShadow}}{\text{Body}} \times 7.5$, max 15) $+$ lower channel proximity ($(1 - \%B) \times 10$, max 10).
+    2. **$S_{\text{micro}} \in [0, 25]$:** Rejection wick score ($15.0$ if wick rejection on 1M else $7.0$ if volume surge else $0.0$) $+$ lower channel proximity ($10.0 \times \max(0.0, 1.0 - (\text{pct\_b\_avg} / 0.5))$). Capped at $25.0$.
     3. **$S_{\text{depth}} \in [0, 20]$:** $10.0 \times (1.0 + \tanh(3.0 \times \text{imbalance\_ratio}))$.
-    4. **$S_{\text{structure}} \in [0, 15]$:** Squeeze State (`FIRING`=15, `LOADED`=12, `BUILDING`=8, `IDLE`=5).
-    5. **$S_{\text{macro}} \in [0, 10]$:** Macro 4H/1H compass (`Trend Up`=10, `Range`=6, `Trend Down`=3).
-    - **Trigger Threshold:** Executes Spot Buy when $S_{\text{total}} \ge 60.0$. No single metric has veto power.
-  - **4-Phase Market State Machine:**
-    1. **`ACCUMULATING / SCANNING`:** Quiet volatility compression, bid absorption, and tape acceleration monitoring.
-    2. **`EXPANDING`:** Real-time trend impulse active with Parabolic ATR Trailing Ratchet to the peak.
-    3. **`STALLING / EXHAUSTION`:** Upper resistance reached, 1M/5M momentum flattening, asks building. Alerts immediately with dynamic regression projections and advice to lock profits.
-    4. **`REGRESSING (DYNAMIC REPOSITIONING)`:** Actively tracks price descent toward support floor. If buyers absorb earlier than projected, dynamically recalculates and raises the Limit Buy price so entries are never missed.
+    4. **$S_{\text{structure}} \in [0, 15]$:** Squeeze State map: `{"FIRING": 15.0, "LOADED": 12.0, "TRENDING": 10.0, "BUILDING": 8.0, "IDLE": 5.0}`.
+    5. **$S_{\text{macro}} \in [0, 10]$:** Macro 4H/1H compass: `{"Trend Up": 10.0, "Range": 5.0, "Trend Down": 2.0}`. (*"Trend Down" is 2.0 to maintain limitless property*).
+    - **Trigger Threshold:** Executes Spot Buy when $S_{\text{total}} \ge 65.0$. Zero single metric has veto power.
+  - **Dynamic Driver Identification:** Classifies setup name based on dominant sub-score (`TAKER IGNITION CONFLUENCE`, `VOLATILITY SQUEEZE RELEASE`, `INSTITUTIONAL BID ABSORPTION`, `MICRO-REVERSAL COMPRESSION`, or `MULTI-SCALE CONFLUENCE`).
+  - **OI Confluence Tightening (25% TP Tightening):** When `oi_confluence == "EXHAUSTION_SIGNAL"` (verified in `engine.py`), targets are dynamically scaled by $0.75$:
+    - $TP_1 = \text{Entry} + (1.0 \times \text{ATR} \times 0.75)$
+    - $TP_2 = \text{Entry} + (2.2 \times \text{ATR} \times 0.75)$
+  - **Persistent State File (`bot_state.json`):**
+    - State is persisted to disk on trade open, ratchet update, and close.
+    - Automatically recovers active trades and state after Render container restarts or redeployments.
+    - Features a 4-hour staleness guard (`time.time() - saved_at > 14400`) to safely discard expired positions.
+  - **Regression State Recovery & Timeout Alerting:**
+    - Auto-resets `REGRESSING` back to `SCANNING` if price recovers to peak zone ($P \ge \text{tracked\_peak} \times 0.998$).
+    - Replaces silent timeouts with an explicit Telegram notification on 4H expiration instructing manual position review.
 * **Complete Multi-Scale Alert Spectrum:**
   1. **Spot Buy Signal:** Multi-scale green-light entry with pre-calculated ATR Target 1, Target 2 Runner, and Hard Stop.
   2. **Target 1 & Breakeven Protection:** Automatic notification to ratchet stop to entry $+ 0.15 \times \text{ATR}$ (100% risk-free trade).
@@ -139,7 +145,7 @@ This document serves as the **Single Source of Truth** for the entire project.
   4. **Dynamic Dip Repositioning:** Alerts when buyers absorb early during a pullback, repositioning the limit buy order higher.
   5. **Parabolic Trailing Ratchet:** Follows new higher swing lows candle-by-candle with zero upper profit cap.
   6. **Whale Emergency Defense:** Exits immediately at market if order book depth violently flips ($\le -25\%$).
-  7. **Periodic Status Telemetry (Every 15 min):** Transmits active market phase, live taker delta, and current strategy to guarantee zero blind silence.
+  7. **Periodic Status Telemetry (Every 15 min):** Transmits active market phase, live taker delta, and current $S_{\text{total}}$ score (with `🟢 NEAR SIGNAL` $\ge 55$, `🟡 BUILDING` $\ge 40$, `⚪ QUIET`).
 * **24/7 Cloud Architecture (Render + UptimeRobot):**
   - Integrated HTTP Health Check endpoint on `$PORT` (default 10000) supporting both `HEAD` and `GET`.
   - Keeps Render service permanently awake via UptimeRobot 5-minute HTTP keep-alive pings.
