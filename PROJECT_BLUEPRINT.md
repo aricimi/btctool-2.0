@@ -120,38 +120,38 @@ This document serves as the **Single Source of Truth** for the entire project.
 
 * **Continuous Multi-Scale Autonomous Architecture (`AutonomousExecutionEngine`):**
   - **Dynamic Volatility & Structural Invalidation Shelf:**
-    - Stop loss is anchored below the local micro-swing low / order book bid shelf ($P - \text{Floor} + 0.2 \times \text{ATR}$).
-    - Enforces a strict minimum Reward-to-Risk ratio: Target 1 $\ge 1.7 \times \text{Risk}$ with an absolute minimum floor of $+0.38\%$ to eliminate spread noise.
-    - Target 2 (Runner) expands dynamically up to $3.2 \times \text{Risk}$ to capture full parabolic impulse expansions.
-  - **Continuous Multivariate Confluence Engine:** Method `_compute_confluence_score()` calculates continuous $0.0 \rightarrow 100.0$ multivariate conviction score:
-    $$S_{\text{total}} = S_{\text{tape}} + S_{\text{micro}} + S_{\text{depth}} + S_{\text{structure}} + S_{\text{macro}}$$
-    1. **$S_{\text{tape}} \in [0, 30]$:** $15.0 \times (1.0 + \tanh(2.5 \times \text{taker\_delta}))$.
-    2. **$S_{\text{micro}} \in [0, 25]$:** Rejection wick score ($15.0$ if wick rejection on 1M else $7.0$ if volume surge else $0.0$) $+$ lower channel proximity ($10.0 \times \max(0.0, 1.0 - (\text{pct\_b\_avg} / 0.5))$). Capped at $25.0$.
-    3. **$S_{\text{depth}} \in [0, 20]$:** $10.0 \times (1.0 + \tanh(3.0 \times \text{imbalance\_ratio}))$.
-    4. **$S_{\text{structure}} \in [0, 15]$:** Squeeze State map: `{"FIRING": 15.0, "LOADED": 12.0, "TRENDING": 10.0, "BUILDING": 8.0, "IDLE": 5.0}`.
-    5. **$S_{\text{macro}} \in [0, 10]$:** Macro 4H/1H compass: `{"Trend Up": 10.0, "Range": 5.0, "Trend Down": 2.0}`. (*"Trend Down" is 2.0 to maintain limitless property*).
-    - **Trigger Threshold:** Executes Spot Buy when $S_{\text{total}} \ge 65.0$. Zero single metric has veto power.
+    - Stop loss is anchored below the local micro-swing low / order book bid shelf ($P - \text{Floor} + 0.15 \times \text{ATR}$).
+    - Target 1 is anchored dynamically to structural resistance with minimum $1.5\times \text{Risk}$ positive asymmetry (zero arbitrary percentage floors).
+    - Target 2 (Runner) expands dynamically up to $2.8\times \text{Risk}$ for sustained expansion waves.
+  - **Continuous Multivariate Confluence Engine (Zero Macro Vetoes):** Method `_compute_confluence_score()` calculates continuous $0.0 \rightarrow 100.0$ multivariate conviction score without macro gatekeeping:
+    $$S_{\text{total}} = S_{\text{tape}} + S_{\text{depth}} + S_{\text{micro}} + S_{\text{structure}}$$
+    1. **$S_{\text{tape}} \in [0, 35]$:** $17.5 \times (1.0 + \tanh(2.5 \times \text{taker\_delta}))$.
+    2. **$S_{\text{depth}} \in [0, 25]$:** $12.5 \times (1.0 + \tanh(3.0 \times \text{imbalance\_ratio}))$.
+    3. **$S_{\text{micro}} \in [0, 25]$:** Dynamic swing low rejection across visible chart $+$ Bollinger band inflection.
+    4. **$S_{\text{structure}} \in [0, 15]$:** Breakout squeeze firing OR exhaustion dip recovery in expanded volatility.
+    - **Trigger Threshold:** Executes Spot Buy when $S_{\text{total}} \ge 65.0$. 4H macro trend never vetoes a micro-scalp.
   - **State-Action Policy Engine (`_manage_active_trade`):**
-    - `EARLY_BAIL`: Cuts losses immediately before hard stop if order book depth or taker bids collapse ($<-18\%$ depth or $<-0.40$ delta).
-    - `HOLD_AND_STRETCH`: If buyer momentum is accelerating ($>+0.20$ delta) as Target 1 is touched, delays selling, expands target, and ratchets stop to guaranteed profit.
+    - `EARLY_BAIL`: Cuts losses immediately before stop if order book depth or taker bids collapse ($<-18\%$ depth or $<-0.40$ delta).
+    - `HOLD_AND_STRETCH`: If buyer momentum is accelerating ($>+0.20$ delta), delays selling, expands target, and ratchets stop to guaranteed profit.
     - `SCALE_IN`: Adds Tranche 2 on confirmed breakout acceleration with combined risk-free stop.
-    - `BANK_PROFIT`: Dispatches directive sell order to bank cash when upper Bollinger band exhausts (%B $\ge 0.85$) and tape delta turns negative.
+    - `BANK_PROFIT`: Sells at market to bank profit when 1M volume collapses and candle thrust flattens at resistance (zero Target 1 lock!).
+    - `MEMORY_SOFT_STOP`: Stop loss is tracked in memory; when touched, inspects tape live. Holds if buyers are absorbing the wick sweep, exits if bids truly collapse.
   - **Persistent State File (`bot_state.json`):**
     - State is persisted to disk on trade open, ratchet update, and close.
     - Automatically recovers active trades and state after Render container restarts or redeployments.
     - Features a 4-hour staleness guard (`time.time() - saved_at > 14400`) to safely discard expired positions.
   - **Regression State Recovery & Zero-Ego Re-engagement:**
     - Auto-resets `REGRESSING` back to `SCANNING` if price recovers to peak zone ($P \ge \text{tracked\_peak} \times 0.998$).
-    - **Zero-Ego Re-engagement (`RE-ENGAGEMENT: BREAKOUT MOMENTUM RESUMPTION`):** If in `STALLING` or `REGRESSING` and aggressive buyer volume blasts through overhead resistance ($P \ge \text{tracked\_peak} \times 0.999$ and $S_{\text{total}} \ge 65.0$ or $S_{\text{tape}} \ge 22.0$), the bot immediately re-engages for the expansion push without sitting on the sidelines.
+    - Zero cooldown timeouts: ready to engage immediately after an exit.
 * **Directive Action Order Spectrum (Zero Clock Spam):**
-  1. `🟢 BUY SPOT NOW (ENTER TRADE)`: Direct market buy directive with entry, Target 1, Target 2 runner, stop loss, and R:R $\ge 1.7:1$.
+  1. `🟢 BUY SPOT NOW (ENTER TRADE)`: Direct market buy directive with entry, Target 1, Target 2 runner, stop loss, and R:R $\ge 1.5:1$.
   2. `📈 HOLD POSITION (DO NOT SELL YET)`: Clear directive to hold active spot coins while momentum surges, expanding target and ratcheting stop to guaranteed profit.
   3. `➕ BUY MORE SPOT (ADD TO POSITION)`: Tranche 2 scale-in order upon confirmed breakout continuation with stop ratcheted to total breakeven.
   4. `⚠️ SELL SPOT NOW (EXIT TRADE EARLY)`: Early bail order cutting trade before stop loss when order book support collapses.
-  5. `🏁 SELL SPOT NOW (BANK YOUR PROFIT)`: Direct sell order banking cash at peak exhaustion.
-  6. `🛑 STOP LOSS HIT (EXIT TRADE)`: Capital preservation exit notification.
+  5. `🏁 SELL SPOT NOW (BANK YOUR PROFIT)`: Direct sell order banking cash at 1M volume/thrust exhaustion at ceiling.
+  6. `🛑 STOP LOSS HIT (EXIT TRADE)`: Memory-based soft stop exit when bids collapse.
   7. `📍 UPDATE: MOVE LIMIT BUY UP TO $...`: Dynamic limit buy order repositioning during dip absorption.
-  8. `🛡️ UPDATE: MOVE STOP TO BREAKEVEN`: Breakeven locking order once Target 1 is reached.
+  8. `🛡️ UPDATE: MOVE STOP TO BREAKEVEN`: Breakeven locking order once price pushes forward into profit.
   9. `📡 On-Demand Telemetry via Telegram (/status)`: Sub-second (<1s) live engine status check via Telegram command listener with 100% spot-pure metrics.
 * **24/7 Cloud Architecture (Render + UptimeRobot):**
   - Integrated HTTP Health Check endpoint on `$PORT` (default 10000) supporting both `HEAD` and `GET`.

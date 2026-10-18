@@ -178,7 +178,6 @@ class AutonomousExecutionEngine:
         self.market_state: str = "SCANNING"  # SCANNING, EXPANDING, STALLING, REGRESSING
         self.last_alert_time: float = 0.0
         self.last_reentry_time: float = 0.0
-        self.alert_cooldown_seconds: int = 120
         self.tracked_peak: float = 0.0
         self.projected_floor: float = 0.0
         self.repositioned_limit: float = 0.0
@@ -287,27 +286,28 @@ class AutonomousExecutionEngine:
         Dynamically computes structural invalidation shelf and opposing liquidity targets.
         Enforces:
         - Structural stop below local swing floor / order book bid shelf.
-        - Minimum 1.6x to 2.5x Reward-to-Risk ratio.
-        - Minimum target floor of +0.38% (eliminates micro-spread flickers).
+        - Minimum 1.5x Reward-to-Risk ratio dynamically anchored to structural resistance.
         Returns: (stop_price, tp1_price, tp2_price, risk_pct, tp1_gain_pct, tp2_gain_pct)
         """
         l_1m = df_1m["Low"]
         l_5m = df_5m["Low"]
-        structural_floor = min(l_1m.iloc[-15:].min(), l_5m.iloc[-15:].min())
+        # Look at the structural swing low across visible chart
+        structural_floor = min(l_1m.min(), l_5m.min())
 
         # Invalidation distance based on structural shelf + volatility buffer
-        raw_risk = max(curr_price - structural_floor + (0.2 * atr), 1.0 * atr)
-        min_risk_dist = curr_price * 0.0018
-        max_risk_dist = max(curr_price * 0.0085, 2.5 * atr)
+        raw_risk = max(curr_price - structural_floor + (0.15 * atr), 0.8 * atr)
+        min_risk_dist = curr_price * 0.0012
+        max_risk_dist = max(curr_price * 0.0075, 2.5 * atr)
         risk_dist = max(min_risk_dist, min(raw_risk, max_risk_dist))
         stop_price = round(curr_price - risk_dist, 2)
 
-        # Reward distance: Must be at least 1.7x the risk distance AND at least 0.38% gain
-        min_tp1_dist = max(risk_dist * 1.7, curr_price * 0.0038, 1.6 * atr)
+        # Reward distance: Anchored dynamically to structural resistance / volatility
+        # Ensures positive asymmetry (Target 1 >= 1.5x risk) without arbitrary retail floor percentages
+        min_tp1_dist = max(risk_dist * 1.5, 1.2 * atr)
         tp1_price = round(curr_price + min_tp1_dist, 2)
 
-        # Runner target (Target 2): Expands 3.2x the risk
-        tp2_dist = max(risk_dist * 3.2, 3.0 * atr, curr_price * 0.0080)
+        # Runner target (Target 2): Expands for momentum waves
+        tp2_dist = max(risk_dist * 2.8, 2.5 * atr)
         tp2_price = round(curr_price + tp2_dist, 2)
 
         risk_pct = ((curr_price - stop_price) / curr_price) * 100.0 if curr_price > 0 else 0.0
@@ -317,35 +317,44 @@ class AutonomousExecutionEngine:
         return stop_price, tp1_price, tp2_price, risk_pct, tp1_gain_pct, tp2_gain_pct
 
     def _compute_confluence_score(self, ob: Any, pct_b_1m: float, pct_b_5m: float, pct_b_15m: float,
-                                  wick_rejection_1m: bool, vol_surge_1m: bool, squeeze: str, macro: str) -> Tuple[float, Dict[str, float]]:
-        """Computes pure continuous S_total confluence scoring model (0.0 to 100.0)."""
-        # S_tape: Continuous sigmoid of taker delta (0.0 to 30.0)
-        s_tape = 15.0 * (1.0 + float(np.tanh(2.5 * ob.taker_delta)))
+                                  has_rejection: bool, vol_surge: bool, squeeze: str, macro: str) -> Tuple[float, Dict[str, float]]:
+        """Computes pure continuous S_total confluence scoring model (0.0 to 100.0) without macro vetoes."""
+        # S_tape: Continuous sigmoid of taker delta (0.0 to 35.0)
+        s_tape = 17.5 * (1.0 + float(np.tanh(2.5 * ob.taker_delta)))
 
-        # S_micro: Wick dynamics + Bollinger position (0.0 to 25.0)
-        s_micro_wick = 15.0 if wick_rejection_1m else (7.0 if vol_surge_1m else 0.0)
+        # S_depth: tanh of order book imbalance (0.0 to 25.0)
+        imbalance_ratio = ob.imbalance_pct / 100.0
+        s_depth = 12.5 * (1.0 + float(np.tanh(3.0 * imbalance_ratio)))
+
+        # S_micro: Structural swing rejection + micro-trend inflection (0.0 to 25.0)
+        s_micro_wick = 15.0 if has_rejection else (8.0 if vol_surge else 0.0)
         pct_b_avg = (pct_b_1m + pct_b_5m) / 2.0
-        s_micro_bb = min(10.0 * max(0.0, 1.0 - (pct_b_avg / 0.5)), 10.0)
+        if pct_b_avg <= 0.40:
+            # Dip rebound zone: Points for inflecting off the low
+            s_micro_bb = min(10.0 * max(0.0, 1.0 - (pct_b_avg / 0.4)), 10.0)
+        else:
+            # Expansion push
+            s_micro_bb = min(10.0 * (pct_b_avg / 0.8), 10.0)
         s_micro = min(s_micro_wick + s_micro_bb, 25.0)
 
-        # S_depth: tanh of order book imbalance (0.0 to 20.0)
-        imbalance_ratio = ob.imbalance_pct / 100.0
-        s_depth = 10.0 * (1.0 + float(np.tanh(3.0 * imbalance_ratio)))
+        # S_structure: Dynamic structure (0.0 to 15.0) - Squeeze firing OR exhaustion dip recovery
+        if squeeze in ["FIRING", "LOADED"]:
+            s_structure = 15.0
+        elif pct_b_avg <= 0.35 and ob.taker_delta > 0.10:
+            # Exhaustion dip recovery in expanded volatility gets high structural points
+            s_structure = 14.0
+        elif squeeze == "TRENDING":
+            s_structure = 12.0
+        else:
+            s_structure = 8.0
 
-        # S_structure: Squeeze state mapped to points (0.0 to 15.0)
-        squeeze_map = {"FIRING": 15.0, "LOADED": 12.0, "TRENDING": 10.0, "BUILDING": 8.0, "IDLE": 5.0}
-        s_structure = squeeze_map.get(squeeze, 5.0)
-
-        # S_macro: 4H regime score (0.0 to 10.0) - "Trend Down" is 2.0 to preserve limitless property
-        macro_map = {"Trend Up": 10.0, "Range": 5.0, "Trend Down": 2.0}
-        s_macro = macro_map.get(macro, 5.0)
-
-        s_total = s_tape + s_micro + s_depth + s_structure + s_macro
+        s_total = s_tape + s_depth + s_micro + s_structure
         sub_scores = {
-            "S_tape": s_tape, "S_micro": s_micro, "S_depth": s_depth,
-            "S_structure": s_structure, "S_macro": s_macro
+            "S_tape": s_tape, "S_depth": s_depth,
+            "S_micro": s_micro, "S_structure": s_structure
         }
         return s_total, sub_scores
+
 
     def evaluate_market_cycle(self) -> None:
         """Runs the continuous autonomous loop across the entire market continuum."""
@@ -389,22 +398,22 @@ class AutonomousExecutionEngine:
         std_5m  = c_5m.rolling(20).std().iloc[-1]
         pct_b_5m = float((c_5m.iloc[-1] - (mean_5m - 2*std_5m)) / (4*std_5m)) if std_5m > 0 else 0.5
 
-        # 1M candle shape dynamics
-        lower_shadow_1m = min(o_1m.iloc[-1], c_1m.iloc[-1]) - l_1m.iloc[-1]
-        body_1m = abs(c_1m.iloc[-1] - o_1m.iloc[-1])
-        wick_rejection_1m = (lower_shadow_1m > body_1m) and (c_1m.iloc[-1] > l_1m.iloc[-1])
-        vol_surge_1m = v_1m.iloc[-1] > (v_1m.iloc[-10:].mean() * 1.4)
+        # 1M candle shape dynamics & dynamic swing structure
+        swing_low_1m = l_1m.min()
+        recent_has_wick = any((min(o_1m.iloc[i], c_1m.iloc[i]) - l_1m.iloc[i]) > abs(c_1m.iloc[i] - o_1m.iloc[i]) for i in range(-5, 0))
+        has_rejection = recent_has_wick or ((curr_price - swing_low_1m) <= (1.2 * atr) and c_1m.iloc[-1] > o_1m.iloc[-1])
+        vol_surge_1m = v_1m.iloc[-1] > (v_1m.iloc[-10:].mean() * 1.3)
 
         now = time.time()
 
-        # Compute continuous multivariate confluence score (0.0 to 100.0)
+        # Compute continuous multivariate confluence score (0.0 to 100.0) without macro vetoes
         s_total, sub_scores = self._compute_confluence_score(
             ob=ob,
             pct_b_1m=pct_b_1m,
             pct_b_5m=pct_b_5m,
             pct_b_15m=pct_b_15m,
-            wick_rejection_1m=wick_rejection_1m,
-            vol_surge_1m=vol_surge_1m,
+            has_rejection=has_rejection,
+            vol_surge=vol_surge_1m,
             squeeze=squeeze,
             macro=macro
         )
@@ -419,14 +428,14 @@ class AutonomousExecutionEngine:
 
         # 3. Manage Active Position (if in a trade)
         if self.active_trade is not None:
-            self._manage_active_trade(curr_price, ob, atr, oi_conf, pct_b_15m, pct_b_5m, pct_b_1m)
+            self._manage_active_trade(curr_price, ob, atr, oi_conf, pct_b_15m, pct_b_5m, pct_b_1m, df_1m)
             return
 
         # 4. Zero-Ego Re-engagement: Breakout Momentum Resumption
         # If in STALLING or REGRESSING and buyers blow through the peak, re-enter immediately!
         if self.market_state in ["STALLING", "REGRESSING"] and self.tracked_peak > 0:
             if curr_price >= (self.tracked_peak * 0.999) and (s_total >= 65.0 or sub_scores["S_tape"] >= 22.0):
-                if (now - self.last_reentry_time) > self.alert_cooldown_seconds:
+                if (now - self.last_reentry_time) > 15:
                     self.last_reentry_time = now
                     stop_p, tp1_p, tp2_p, r_pct, tp1_g, tp2_g = self._calculate_dynamic_levels(
                         curr_price, atr, df_1m, df_5m, ob
@@ -459,7 +468,7 @@ class AutonomousExecutionEngine:
             # If aggressive bids step in above the original projected floor
             if ob.taker_delta >= 0.20 or ob.imbalance_pct >= 8.0:
                 new_repositioned_limit = round(curr_price + 0.15 * atr, 2)
-                if new_repositioned_limit > (self.repositioned_limit + 0.3 * atr) and (now - self.last_alert_time) > self.alert_cooldown_seconds:
+                if new_repositioned_limit > (self.repositioned_limit + 0.3 * atr) and (now - self.last_alert_time) > 20:
                     self.repositioned_limit = new_repositioned_limit
                     rebound_target = round(self.repositioned_limit + 1.8 * atr, 2)
                     gain_pot = ((rebound_target - self.repositioned_limit) / self.repositioned_limit) * 100.0
@@ -477,19 +486,23 @@ class AutonomousExecutionEngine:
                     self._save_state()
                     return
 
-        # 6. Detect Stalling & Anticipate Regression (At Resistance / Top)
+        # 6. Detect Stalling & Anticipate Regression (Using Bollinger Band Geometry)
         if pct_b_15m >= 0.78 or pct_b_5m >= 0.80 or pct_b_1m >= 0.85:
-            if self.market_state != "STALLING" and (now - self.last_alert_time) > self.alert_cooldown_seconds:
+            if self.market_state != "STALLING" and (now - self.last_alert_time) > 20:
                 self.market_state = "STALLING"
-                self.tracked_peak = max(curr_price, h_1m.max(), h_5m.max())
-                self.projected_floor = round(self.tracked_peak - 1.4 * atr, 2)
+                bb_upper_1m = mean_1m + 2.0 * std_1m
+                bb_mid_1m = mean_1m
+                # Ceiling is anchored to the upper Bollinger Band of the active move
+                self.tracked_peak = round(max(curr_price, bb_upper_1m), 2)
+                # Projected reload floor is the Middle Band (SMA 20) or lower, guaranteed strictly < curr_price
+                self.projected_floor = round(min(bb_mid_1m, curr_price - 0.5 * atr), 2)
                 self.repositioned_limit = self.projected_floor
 
                 msg = (
                     f"⚠️ <b>MOMENTUM STALLING AT RESISTANCE · DO NOT BUY</b>\n"
                     f"━━━━━━━━━━━━━━━━━━\n"
-                    f"📈 <b>Local High Reached:</b> <b>${self.tracked_peak:,.2f}</b> | Current: <b>${curr_price:,.2f}</b>\n"
-                    f"📉 <b>Tape Condition:</b> Overhead ceiling active. Momentum flattening.\n"
+                    f"📈 <b>Upper Resistance:</b> <b>${self.tracked_peak:,.2f}</b> | Current: <b>${curr_price:,.2f}</b>\n"
+                    f"📉 <b>Tape Condition:</b> Overhead ceiling active. Momentum flattening against bands.\n"
                     f"🎯 <b>Projected Dip Floor:</b> <b>${self.projected_floor:,.2f}</b>\n\n"
                     f"👉 <b>Action:</b> <b>DO NOT BUY HERE.</b> Stay in cash. Bot is actively tracking regression descent toward ${self.projected_floor:,.2f} for reload."
                 )
@@ -499,14 +512,15 @@ class AutonomousExecutionEngine:
                 return
 
         # 7. Pure Probabilistic Confluence Entry Gate (S_total >= 65.0)
-        if s_total >= 65.0 and (now - self.last_alert_time) > self.alert_cooldown_seconds:
+        if s_total >= 65.0 and (now - self.last_alert_time) > 20:
             stop_price, tp1_price, tp2_price, risk_pct, tp1_gain_pct, tp2_gain_pct = self._calculate_dynamic_levels(
                 curr_price, atr, df_1m, df_5m, ob
             )
 
             # Strict Positive Asymmetry Filter: Ensure Expected Reward exceeds Risk
-            if tp1_gain_pct < (1.5 * risk_pct):
+            if tp1_gain_pct < (1.4 * risk_pct):
                 return
+
 
             if sub_scores["S_tape"] >= 22.0:
                 setup_name = "TAKER IGNITION CONFLUENCE"
@@ -598,15 +612,16 @@ class AutonomousExecutionEngine:
             self._save_state()
 
     def _manage_active_trade(self, curr_price: float, ob: Any, atr: float, oi_conf: str,
-                             pct_b_15m: float = 0.5, pct_b_5m: float = 0.5, pct_b_1m: float = 0.5) -> None:
+                             pct_b_15m: float = 0.5, pct_b_5m: float = 0.5, pct_b_1m: float = 0.5,
+                             df_1m: Any = None) -> None:
         """
-        Active Position Policy Engine:
+        Active Position Policy Engine (Fluid Execution):
         Evaluates tape candle-by-candle:
         - EARLY_BAIL: Cuts loss immediately before stop if order book collapses.
         - HOLD_AND_STRETCH: Does not sell early if buyers are accelerating.
         - SCALE_IN: Adds Tranche 2 if breakout confirmed.
-        - BANK_PROFIT: Sells at market to bank profit when peak exhausts.
-        - HARD STOP: Capital preservation.
+        - BANK_PROFIT: Exits on 1M volume/thrust exhaustion at resistance or trailing stop.
+        - MEMORY SOFT STOP: Inspects tape at stop level; holds if absorbing, exits if breaking down.
         """
         t = self.active_trade
         if not t:
@@ -736,10 +751,27 @@ class AutonomousExecutionEngine:
                 self.notifier.send_message(msg)
                 self._save_state()
 
-        # POLICY 5: BANK PROFIT (SELL SPOT NOW)
-        # When runner peak exhausts (%B >= 0.85 and delta < 0, or trailing stop touched)
-        if (curr_price >= t['target_1'] and pct_b_5m >= 0.85 and ob.taker_delta <= 0.0) or (curr_price <= t['current_stop'] and t.get('breakeven_set')):
-            realized_gain = ((curr_price - entry) / entry) * 100.0
+        # POLICY 5: BANK PROFIT / MICRO-EXHAUSTION (FLOW WITH THE MARKET)
+        # Exits when:
+        # A) Price is in profit and 1M chart shows volume/thrust exhaustion at resistance
+        # B) Trailing stop touched after breakeven locked
+        in_profit = curr_price > entry
+        gain_pct = ((curr_price - entry) / entry) * 100.0 if entry > 0 else 0.0
+
+        v_exhausted = False
+        range_stalled = False
+        if df_1m is not None and len(df_1m) >= 10:
+            v_1m = df_1m["Volume"]
+            c_1m = df_1m["Close"]
+            o_1m = df_1m["Open"]
+            v_exhausted = v_1m.iloc[-1] < (v_1m.iloc[-10:].mean() * 0.40)
+            range_stalled = abs(c_1m.iloc[-1] - o_1m.iloc[-1]) < (0.20 * atr)
+
+        is_micro_stalled = in_profit and (gain_pct >= 0.15) and (pct_b_1m >= 0.75 or pct_b_5m >= 0.75) and (v_exhausted or range_stalled or ob.taker_delta <= -0.15)
+        trailing_stop_touched = (curr_price <= t['current_stop'] and t.get('breakeven_set'))
+
+        if is_micro_stalled or trailing_stop_touched:
+            realized_gain = gain_pct
             okx_exec_str = ""
             if self.okx.is_configured:
                 self.okx.place_spot_order(side="sell", sz="100%", order_type="market")
@@ -749,35 +781,44 @@ class AutonomousExecutionEngine:
                 f"━━━━━━━━━━━━━━━━━━\n"
                 f"💵 <b>Exit Price:</b> <b>${curr_price:,.2f}</b>\n"
                 f"💰 <b>Final Realized Gain:</b> <b>+{realized_gain:.2f}% PROFIT</b> 🏆\n"
+                f"📊 <b>Exit Reason:</b> {'1M Volume/Thrust Stalled at Ceiling' if is_micro_stalled else 'Trailing Stop Protected Profit'}\n"
                 f"👉 <b>Action:</b> <b>SELL SPOT AT MARKET NOW.</b> Bank cash. Bot is actively tracking dip reload.{okx_exec_str}"
             )
             self.notifier.send_message(msg)
             self.active_trade = None
-            self.market_state = "STALLING"
+            self.market_state = "SCANNING"
             self.tracked_peak = highest
-            self.projected_floor = round(highest - 1.4 * atr, 2)
+            self.projected_floor = round(min(highest - 0.5 * atr, curr_price - 0.3 * atr), 2)
             self.repositioned_limit = self.projected_floor
             self._save_state()
             return
 
-        # Hard Stop Loss Triggered (Capital Preservation)
+        # POLICY 6: MEMORY-BASED SOFT STOP (DECISION ZONE)
         if curr_price <= t['current_stop'] and not t['target_1_hit']:
-            loss_pct = abs((curr_price - entry) / entry) * 100.0
-            okx_exec_str = ""
-            if self.okx.is_configured:
-                self.okx.place_spot_order(side="sell", sz="100%", order_type="market")
-                okx_exec_str = "\n⚡ <b>OKX Auto-Sold Stop.</b>"
-            msg = (
-                f"🛑 <b>STOP LOSS HIT (EXIT TRADE)</b>\n"
-                f"━━━━━━━━━━━━━━━━━━\n"
-                f"💵 <b>Exit Price:</b> <b>${curr_price:,.2f}</b> (-{loss_pct:.2f}%)\n"
-                f"👉 <b>Action:</b> Exit position immediately. Hard stop protected capital.{okx_exec_str}"
-            )
-            self.notifier.send_message(msg)
-            self.active_trade = None
-            self.market_state = "SCANNING"
-            self._save_state()
-            return
+            # Inspect order flow: Is it being absorbed by buyers on a wick sweep?
+            is_absorbing = (ob.taker_delta >= 0.15 or ob.imbalance_pct >= 8.0)
+            if is_absorbing:
+                # Liquidity sweep being absorbed by buyers: Hold in memory, do not panic sell on a wick
+                return
+            else:
+                # True breakdown: bids collapsed or aggressive sellers slamming the book
+                loss_pct = abs((curr_price - entry) / entry) * 100.0
+                okx_exec_str = ""
+                if self.okx.is_configured:
+                    self.okx.place_spot_order(side="sell", sz="100%", order_type="market")
+                    okx_exec_str = "\n⚡ <b>OKX Auto-Sold Stop.</b>"
+                msg = (
+                    f"🛑 <b>STOP LOSS HIT (EXIT TRADE)</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━\n"
+                    f"💵 <b>Exit Price:</b> <b>${curr_price:,.2f}</b> (-{loss_pct:.2f}%)\n"
+                    f"👉 <b>Action:</b> Exit position immediately. Memory soft stop protected capital.{okx_exec_str}"
+                )
+                self.notifier.send_message(msg)
+                self.active_trade = None
+                self.market_state = "SCANNING"
+                self._save_state()
+                return
+
 
         # Position Timeout (>4h)
         if (time.time() - t["timestamp"]) > 14400:
