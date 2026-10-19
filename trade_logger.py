@@ -5,23 +5,26 @@ Factors in OKX Spot round-trip fees (0.10% entry taker + 0.10% exit taker = 0.20
 """
 
 import os
+import csv
 import json
 import time
 import datetime
 from typing import Optional, Dict, Any, List
 
 JOURNAL_MD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trade_journal.md")
+JOURNAL_CSV_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trade_journal.csv")
 HISTORY_JSON_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trade_history.json")
 
 OKX_ROUNDTRIP_FEE_PCT = 0.20  # 0.10% buy + 0.10% sell
 
 
 class TradeJournal:
-    """Manages trade recording, PnL accounting, and Markdown journal publishing."""
+    """Manages trade recording, PnL accounting, and Markdown/CSV journal publishing."""
 
     def __init__(self):
         self.history_file = HISTORY_JSON_FILE
         self.journal_file = JOURNAL_MD_FILE
+        self.csv_file = JOURNAL_CSV_FILE
         self._load_or_init()
 
     def _load_or_init(self) -> None:
@@ -29,7 +32,8 @@ class TradeJournal:
             try:
                 with open(self.history_file, "r", encoding="utf-8") as f:
                     self.data = json.load(f)
-                    return
+                self._recalculate_and_save()
+                return
             except Exception as e:
                 print(f"[Journal] Error loading history: {e}")
 
@@ -220,11 +224,19 @@ class TradeJournal:
 
         # Render Markdown
         self._render_markdown()
+        # Render CSV
+        self._render_csv()
 
     def _render_markdown(self) -> None:
         """Generates formatted GitHub-style Markdown trade journal."""
         stats = self.data["stats"]
         now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        gross_cum = stats.get("gross_cumulative_pct", 0.0)
+        gross_sign = "+" if gross_cum >= 0 else ""
+        net_cum = stats.get("net_cumulative_pct", 0.0)
+        net_sign = "+" if net_cum >= 0 else ""
+        net_badge = "🏆" if net_cum >= 0 else "⚠️"
 
         lines = []
         lines.append("# 📜 BTCTOOL 2.0 · Autonomous Spot Trading Journal")
@@ -235,9 +247,9 @@ class TradeJournal:
         lines.append("| :--- | :--- | :--- |")
         lines.append(f"| **Total Closed Trades** | **{stats['total_closed_trades']}** | All trades since bot activation |")
         lines.append(f"| **Win Rate** | **{stats['win_rate_pct']:.1f}%** ({stats['wins']} Wins / {stats['losses']} Losses) | Factoring all exchange fees |")
-        lines.append(f"| **Gross Realized Gain** | **+{stats['gross_cumulative_pct']:.2f}%** | Raw market price movement |")
+        lines.append(f"| **Gross Realized Gain** | **{gross_sign}{gross_cum:.2f}%** | Raw market price movement |")
         lines.append(f"| **OKX Fees Deducted** | **{stats['total_fees_pct']:.2f}%** | 0.10% buy taker + 0.10% sell taker |")
-        lines.append(f"| **Net Realized Profit** | **+{stats['net_cumulative_pct']:.2f}% NET** 🏆 | Clean profit in your wallet |")
+        lines.append(f"| **Net Realized Profit** | **{net_sign}{net_cum:.2f}% NET** {net_badge} | Clean profit in your wallet |")
 
         # Active trade section
         active = [t for t in self.data["trades"] if t.get("status") == "ACTIVE_OPEN"]
@@ -287,6 +299,92 @@ class TradeJournal:
             print(f"[Journal] Updated {self.journal_file}")
         except Exception as e:
             print(f"[Journal] Markdown render error: {e}")
+
+    def _render_csv(self) -> None:
+        """Generates clean CSV spreadsheet ready for Microsoft Excel."""
+        stats = self.data.get("stats", {})
+        headers = [
+            "Trade #",
+            "Status",
+            "Type",
+            "Setup",
+            "Entry Time",
+            "Exit Time",
+            "Hold Duration",
+            "Entry Price ($)",
+            "Exit Price ($)",
+            "Target 1 ($)",
+            "Target 2 ($)",
+            "Stop Loss ($)",
+            "Gross PnL (%)",
+            "OKX Fee (%)",
+            "Net PnL (%)",
+            "Result",
+            "Exit Reason"
+        ]
+        try:
+            with open(self.csv_file, "w", newline="", encoding="utf-8-sig") as f:
+                writer = csv.writer(f)
+                writer.writerow(headers)
+
+                for t in self.data["trades"]:
+                    is_open = t.get("status") == "ACTIVE_OPEN"
+                    net_pnl = t.get("net_pnl_pct")
+                    if is_open:
+                        result = "ACTIVE"
+                        exit_price = ""
+                        exit_time = ""
+                        duration = "Holding"
+                        gross_str = ""
+                        net_str = ""
+                    else:
+                        result = "WIN" if (net_pnl is not None and net_pnl >= 0) else "LOSS"
+                        exit_price = f"{t.get('exit_price', 0):.2f}"
+                        exit_time = t.get("exit_time", "")
+                        duration = t.get("duration", "")
+                        gross_str = f"{t.get('gross_pnl_pct', 0.0):+.2f}%" if t.get('gross_pnl_pct') is not None else ""
+                        net_str = f"{net_pnl:+.2f}%" if net_pnl is not None else ""
+
+                    row = [
+                        t.get("id"),
+                        t.get("status"),
+                        t.get("type", "SPOT_BUY"),
+                        t.get("setup", ""),
+                        t.get("entry_time", ""),
+                        exit_time,
+                        duration,
+                        f"{t.get('entry_price', 0):.2f}",
+                        exit_price,
+                        f"{t.get('target_1', 0):.2f}" if t.get('target_1') else "",
+                        f"{t.get('target_2', 0):.2f}" if t.get('target_2') else "",
+                        f"{t.get('stop_loss', 0):.2f}" if t.get('stop_loss') else "",
+                        gross_str,
+                        f"{-OKX_ROUNDTRIP_FEE_PCT:.2f}%",
+                        net_str,
+                        result,
+                        t.get("exit_reason", "")
+                    ]
+                    writer.writerow(row)
+
+                # Blank line and Excel Summary Block
+                gross_cum = stats.get("gross_cumulative_pct", 0.0)
+                gross_sign = "+" if gross_cum >= 0 else ""
+                net_cum = stats.get("net_cumulative_pct", 0.0)
+                net_sign = "+" if net_cum >= 0 else ""
+
+                writer.writerow([])
+                writer.writerow(["=== SUMMARY PERFORMANCE ==="])
+                writer.writerow(["Total Closed Trades", stats.get("total_closed_trades", 0)])
+                writer.writerow(["Win Rate", f"{stats.get('win_rate_pct', 0.0):.1f}%"])
+                writer.writerow(["Wins", stats.get("wins", 0)])
+                writer.writerow(["Losses", stats.get("losses", 0)])
+                writer.writerow(["Gross Cumulative Gain", f"{gross_sign}{gross_cum:.2f}%"])
+                writer.writerow(["Total OKX Fees Deducted", f"{stats.get('total_fees_pct', 0.0):.2f}%"])
+                writer.writerow(["Net Realized Profit", f"{net_sign}{net_cum:.2f}%"])
+
+            print(f"[Journal] Updated {self.csv_file}")
+        except Exception as e:
+            print(f"[Journal] CSV render error: {e}")
 
 
 # Self-test when executed directly

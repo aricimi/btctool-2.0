@@ -719,7 +719,7 @@ class AutonomousExecutionEngine:
 
         # POLICY 3: BANK PROFIT / MICRO-EXHAUSTION (FLOW WITH THE MARKET)
         # Exits when:
-        # A) Price is in meaningful profit (>= +0.18% to ensure profit net of fees) and 1M chart shows volume/thrust exhaustion at resistance
+        # A) Price is in meaningful profit (>= +0.30% to ensure profit net of OKX 0.20% fees) and 1M chart shows volume/thrust exhaustion at resistance
         # B) Trailing stop touched after breakeven locked
         v_exhausted = False
         range_stalled = False
@@ -730,7 +730,7 @@ class AutonomousExecutionEngine:
             v_exhausted = v_1m.iloc[-1] < (v_1m.iloc[-10:].mean() * 0.40)
             range_stalled = abs(c_1m.iloc[-1] - o_1m.iloc[-1]) < (0.20 * atr)
 
-        is_micro_stalled = in_profit and (gain_pct >= 0.18) and (pct_b_1m >= 0.75 or pct_b_5m >= 0.75) and (v_exhausted or range_stalled or ob.taker_delta <= -0.20)
+        is_micro_stalled = in_profit and (gain_pct >= 0.30) and (pct_b_1m >= 0.75 or pct_b_5m >= 0.75) and (v_exhausted or range_stalled or ob.taker_delta <= -0.20)
         trailing_stop_touched = (curr_price <= t['current_stop'] and t.get('breakeven_set'))
 
         if is_micro_stalled or trailing_stop_touched:

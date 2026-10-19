@@ -1,25 +1,25 @@
 # 📜 BTCTOOL 2.0 · Autonomous Spot Trading Journal
-*Last Updated: 2026-10-19 07:24:06 (Local) | Symbol: BTC/USDT (Spot) | Fee Standard: OKX 0.20% Round-Trip*
+*Last Updated: 2026-10-19 17:35:49 (Local) | Symbol: BTC/USDT (Spot) | Fee Standard: OKX 0.20% Round-Trip*
 
 ---
 ## 📊 Executive Performance Summary
 | Metric | Performance Value | Note |
 | :--- | :--- | :--- |
-| **Total Closed Trades** | **4** | All trades since bot activation |
-| **Win Rate** | **100.0%** (4 Wins / 0 Losses) | Factoring all exchange fees |
-| **Gross Realized Gain** | **+1.70%** | Raw market price movement |
-| **OKX Fees Deducted** | **-0.80%** | 0.10% buy taker + 0.10% sell taker |
-| **Net Realized Profit** | **+0.90% NET** 🏆 | Clean profit in your wallet |
+| **Total Closed Trades** | **11** | All trades since bot activation |
+| **Win Rate** | **54.5%** (6 Wins / 5 Losses) | Factoring all exchange fees |
+| **Gross Realized Gain** | **+2.01%** | Raw market price movement |
+| **OKX Fees Deducted** | **-2.20%** | 0.10% buy taker + 0.10% sell taker |
+| **Net Realized Profit** | **-0.19% NET** ⚠️ | Clean profit in your wallet |
 
 ---
 ## 🟢 Current Live Position (Open)
-- **Trade ID:** #5
+- **Trade ID:** #12
 - **Setup:** `RE-ENGAGEMENT: BREAKOUT MOMENTUM RESUMPTION`
-- **Entry Time:** `2026-10-19 06:56:54`
-- **Entry Price:** **$82,786.10**
-- **Target 1:** **$83,472.91** (Breakeven Trigger)
-- **Runner Target 2:** **$84,068.15**
-- **Memory Stop Loss:** **$82,328.22**
+- **Entry Time:** `2026-10-19 17:21:57`
+- **Entry Price:** **$82,482.30**
+- **Target 1:** **$83,498.59** (Breakeven Trigger)
+- **Runner Target 2:** **$84,379.37**
+- **Memory Stop Loss:** **$81,804.78**
 - **Status:** **🟢 ACTIVE SPOT HOLD · MANAGING CONTINUOUSLY**
 
 ---
@@ -30,7 +30,14 @@
 | **2** | 2026-10-18 23:53:30 | 2026-10-19 00:55:00 | 1h 01m | `BREAKOUT RE-ENGAGEMENT` | $81,175.20 | $81,750.00 | +0.71% | -0.20% | **+0.51%** | WIN 🏆 | Trailing Stop Locked Profit |
 | **3** | 2026-10-19 01:28:25 | 2026-10-19 03:43:49 | 2h 15m | `TAKER IGNITION CONFLUENCE` | $82,130.00 | $82,522.00 | +0.48% | -0.20% | **+0.28%** | WIN 🏆 | 1M Volume/Thrust Stalled at Resistance |
 | **4** | 2026-10-19 05:24:23 | 2026-10-19 06:47:30 | 1h 23m | `MULTI-SCALE CONFLUENCE (DIP REVERSAL)` | $82,585.10 | $82,810.10 | +0.27% | -0.20% | **+0.07%** | WIN ✅ | 1M Volume/Thrust Stalled at Resistance |
-| **5** | 2026-10-19 06:56:54 | *OPEN* | *Holding* | `RE-ENGAGEMENT: BREAKOUT MOMENTUM RESUMPTION` | $82,786.10 | — | — | -0.20% | — | 🟢 **ACTIVE** | Open Position |
+| **5** | 2026-10-19 06:56:54 | 2026-10-19 09:32:33 | 2h 35m | `RE-ENGAGEMENT: BREAKOUT MOMENTUM RESUMPTION` | $82,786.10 | $82,941.50 | +0.19% | -0.20% | **-0.01%** | LOSS 🛑 | 1M Volume/Thrust Stalled at Resistance |
+| **6** | 2026-10-19 09:34:26 | 2026-10-19 12:34:01 | 2h 59m | `RE-ENGAGEMENT: BREAKOUT MOMENTUM RESUMPTION` | $83,125.80 | $82,216.80 | -1.09% | -0.20% | **-1.29%** | LOSS 🛑 | Memory Soft Stop Invalidation |
+| **7** | 2026-10-19 13:36:08 | 2026-10-19 13:50:10 | 14m | `TAKER IGNITION CONFLUENCE` | $82,174.50 | $82,324.20 | +0.18% | -0.20% | **-0.02%** | LOSS 🛑 | 1M Volume/Thrust Stalled at Resistance |
+| **8** | 2026-10-19 13:52:58 | 2026-10-19 14:16:28 | 23m | `RE-ENGAGEMENT: BREAKOUT MOMENTUM RESUMPTION` | $82,391.70 | $82,607.50 | +0.26% | -0.20% | **+0.06%** | WIN ✅ | 1M Volume/Thrust Stalled at Resistance |
+| **9** | 2026-10-19 14:41:54 | 2026-10-19 15:05:25 | 23m | `RE-ENGAGEMENT: BREAKOUT MOMENTUM RESUMPTION` | $82,577.60 | $82,733.50 | +0.19% | -0.20% | **-0.01%** | LOSS 🛑 | 1M Volume/Thrust Stalled at Resistance |
+| **10** | 2026-10-19 16:03:42 | 2026-10-19 16:14:04 | 10m | `TAKER IGNITION CONFLUENCE` | $81,824.40 | $82,142.70 | +0.39% | -0.20% | **+0.19%** | WIN 🏆 | 1M Volume/Thrust Stalled at Resistance |
+| **11** | 2026-10-19 16:18:47 | 2026-10-19 17:20:03 | 1h 01m | `TAKER IGNITION CONFLUENCE` | $82,173.00 | $82,330.00 | +0.19% | -0.20% | **-0.01%** | LOSS 🛑 | 1M Volume/Thrust Stalled at Resistance |
+| **12** | 2026-10-19 17:21:57 | *OPEN* | *Holding* | `RE-ENGAGEMENT: BREAKOUT MOMENTUM RESUMPTION` | $82,482.30 | — | — | -0.20% | — | 🟢 **ACTIVE** | Open Position |
 
 ---
 *BTCTOOL 2.0 Autonomous Spot Execution Engine · Pure Event-Driven Architecture*
