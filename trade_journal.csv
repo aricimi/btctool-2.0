@@ -1,4 +1,4 @@
-﻿Trade #,Status,Type,Setup,Entry Time,Exit Time,Hold Duration,Entry Price ($),Exit Price ($),Target 1 ($),Target 2 ($),Stop Loss ($),Gross PnL (%),OKX Fee (%),Net PnL (%),Result,Exit Reason
+Trade #,Status,Type,Setup,Entry Time,Exit Time,Hold Duration,Entry Price ($),Exit Price ($),Target 1 ($),Target 2 ($),Stop Loss ($),Gross PnL (%),OKX Fee (%),Net PnL (%),Result,Exit Reason
 1,CLOSED_PROFIT,SPOT_BUY,MULTI-SCALE CONFLUENCE,2026-10-18 22:26:54,2026-10-18 23:40:19,1h 13m,80938.79,81133.34,,,,+0.24%,-0.20%,+0.04%,WIN,1M Thrust Exhaustion at Resistance
 2,CLOSED_PROFIT,SPOT_BUY,BREAKOUT RE-ENGAGEMENT,2026-10-18 23:53:30,2026-10-19 00:55:00,1h 01m,81175.20,81750.00,,,,+0.71%,-0.20%,+0.51%,WIN,Trailing Stop Locked Profit
 3,CLOSED_PROFIT,SPOT_BUY,TAKER IGNITION CONFLUENCE,2026-10-19 01:28:25,2026-10-19 03:43:49,2h 15m,82130.00,82522.00,,,,+0.48%,-0.20%,+0.28%,WIN,1M Volume/Thrust Stalled at Resistance

@@ -229,25 +229,6 @@
       "exit_reason": null,
       "rationale": "S_total=67.2/100 | Tape=32.6 Micro=20.6 Depth=0.0 Structure=14.0",
       "status": "ACTIVE_OPEN"
-    },
-    {
-      "id": 14,
-      "type": "SPOT_BUY",
-      "setup": "ZEBRA CORE: Test Core Breakout",
-      "entry_time": "2026-10-19 19:45:32",
-      "entry_price": 82000.0,
-      "exit_time": null,
-      "exit_price": null,
-      "duration": null,
-      "target_1": 82500.0,
-      "target_2": 83000.0,
-      "stop_loss": 81500.0,
-      "gross_pnl_pct": null,
-      "okx_fee_pct": -0.2,
-      "net_pnl_pct": null,
-      "exit_reason": null,
-      "rationale": "Test Core Breakout",
-      "status": "ACTIVE_OPEN"
     }
   ],
   "stats": {
