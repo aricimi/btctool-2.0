@@ -195,6 +195,9 @@ The system automatically records, audits, and publishes every trade lifecycle in
 4. **Exchange Fee Accounting Model:**
    - Standard OKX Spot taker rate: **0.10% buy taker + 0.10% sell taker = 0.20% round-trip**.
    - Net profit accounting: $\text{Net PnL} = \text{Gross PnL} - 0.20\%$.
+5. **Excel Lock Protection & Zero-Loss Background Auto-Flush:**
+   - If [`trade_journal.csv`](file:///c:/gemini%20proyect/btctool%202.0/trade_journal.csv) is open in Microsoft Excel, Windows locks the file. The logger catches `PermissionError` without interrupting execution, preserves the trade in memory and [`trade_history.json`](file:///c:/gemini%20proyect/btctool%202.0/trade_history.json), and flags `pending_csv_update = True`.
+   - On every 20-second evaluation tick in `evaluate_market_cycle()`, `flush_pending_csv()` automatically attempts to flush the queue. The moment Excel is closed, the spreadsheet is updated immediately with all pending trades.
 
 ---
 

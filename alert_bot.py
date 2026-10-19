@@ -371,6 +371,10 @@ class AutonomousExecutionEngine:
 
     def evaluate_market_cycle(self) -> None:
         """Runs the continuous autonomous loop across the entire market continuum."""
+        # Flush any pending CSV updates if Excel was previously locking the file
+        if getattr(self, "journal", None):
+            self.journal.flush_pending_csv()
+
         try:
             report_15m: AdvisoryReport = PredictiveEnsembleEngine.generate_advisory(symbol="BTCUSDT", timeframe="15m")
             df_1m = MarketDataService.fetch_klines("BTCUSDT", "1m", limit=35)

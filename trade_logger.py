@@ -25,6 +25,7 @@ class TradeJournal:
         self.history_file = HISTORY_JSON_FILE
         self.journal_file = JOURNAL_MD_FILE
         self.csv_file = JOURNAL_CSV_FILE
+        self.pending_csv_update = False
         self._load_or_init()
 
     def _load_or_init(self) -> None:
@@ -382,9 +383,20 @@ class TradeJournal:
                 writer.writerow(["Total OKX Fees Deducted", f"{stats.get('total_fees_pct', 0.0):.2f}%"])
                 writer.writerow(["Net Realized Profit", f"{net_sign}{net_cum:.2f}%"])
 
+            self.pending_csv_update = False
             print(f"[Journal] Updated {self.csv_file}")
+        except PermissionError:
+            self.pending_csv_update = True
+            print(f"[Journal Notice] {self.csv_file} is locked (open in Excel). Queued for automatic update once Excel is closed.")
         except Exception as e:
             print(f"[Journal] CSV render error: {e}")
+
+    def flush_pending_csv(self) -> bool:
+        """Automatically flushes any pending CSV updates once Excel releases the file lock."""
+        if self.pending_csv_update:
+            self._render_csv()
+            return not self.pending_csv_update
+        return True
 
 
 # Self-test when executed directly
