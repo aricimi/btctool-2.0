@@ -18,11 +18,13 @@ import threading
 import gc
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import math
+import re
 import numpy as np
 import requests
 
 from engine import MarketDataService, PredictiveEnsembleEngine, AdvisoryReport
 from okx_trader import OKXSpotClient
+from trade_logger import TradeJournal
 
 
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "telegram_config.json")
@@ -110,7 +112,9 @@ class TelegramNotifier:
         try:
             r = requests.post(url, json=payload, timeout=6)
             if r.status_code == 200:
-                print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Telegram alert delivered successfully.")
+                lines = [l.strip() for l in text.split("\n") if l.strip()]
+                clean_title = re.sub(r'<[^>]+>', '', lines[0]) if lines else "Alert"
+                print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Telegram Alert Sent: {clean_title}")
                 return True
             else:
                 print(f"[Telegram Error] HTTP {r.status_code}: {r.text}")
@@ -175,6 +179,7 @@ class AutonomousExecutionEngine:
     def __init__(self, notifier: TelegramNotifier):
         self.notifier = notifier
         self.okx = OKXSpotClient()
+        self.journal = TradeJournal()
         self.active_trade: Optional[Dict[str, Any]] = None
         self.market_state: str = "SCANNING"  # SCANNING, EXPANDING, STALLING, REGRESSING
         self.last_alert_time: float = 0.0
@@ -182,7 +187,6 @@ class AutonomousExecutionEngine:
         self.last_stalling_alert_time: float = 0.0
         self.tracked_peak: float = 0.0
         self.projected_floor: float = 0.0
-        self.repositioned_limit: float = 0.0
         self.last_s_total: float = 0.0
 
         if self.okx.is_configured:
@@ -199,7 +203,6 @@ class AutonomousExecutionEngine:
             "active_trade": self.active_trade,
             "tracked_peak": self.tracked_peak,
             "projected_floor": self.projected_floor,
-            "repositioned_limit": self.repositioned_limit,
             "last_alert_time": self.last_alert_time,
             "last_stalling_alert_time": self.last_stalling_alert_time,
             "last_s_total": self.last_s_total,
@@ -224,7 +227,6 @@ class AutonomousExecutionEngine:
             self.active_trade              = state.get("active_trade", None)
             self.tracked_peak              = state.get("tracked_peak", 0.0)
             self.projected_floor           = state.get("projected_floor", 0.0)
-            self.repositioned_limit        = state.get("repositioned_limit", 0.0)
             self.last_stalling_alert_time  = state.get("last_stalling_alert_time", 0.0)
             self.last_alert_time    = state.get("last_alert_time", 0.0)
             self.last_s_total       = state.get("last_s_total", 0.0)
@@ -256,11 +258,11 @@ class AutonomousExecutionEngine:
             strategy_str = "MANAGING ACTIVE SPOT POSITION"
         elif self.market_state in ["STALLING", "REGRESSING"]:
             pos_str = (
-                f"🟡 <b>IN CASH · REGRESSION TRACKING ACTIVE</b>\n"
+                f"🟡 <b>IN CASH · PULLBACK SUPPORT MONITORING</b>\n"
                 f"• Tracked Peak: <b>${self.tracked_peak:,.2f}</b>\n"
-                f"• Repositioned Buy Zone: <b>${self.repositioned_limit:,.2f}</b>"
+                f"• Potential Floor: <b>${self.projected_floor:,.2f}</b>"
             )
-            strategy_str = f"DEFENSIVE CASH · TRACKING DIP RELOAD (${self.repositioned_limit:,.2f})"
+            strategy_str = "DEFENSIVE CASH · AWAITING CONFLUENCE REVERSAL"
         elif s_total >= 55.0:
             pos_str = f"🟢 <b>IN CASH · HIGH BUY CONFLUENCE BUILDING</b>"
             strategy_str = "HIGH CONFLUENCE · PREPARING SPOT BUY"
@@ -481,31 +483,7 @@ class AutonomousExecutionEngine:
                 print("[State Machine] Momentum cooled back to mid-channel. Resetting to SCANNING.")
                 self._save_state()
 
-        # 5. Dynamic Dip Tracking & Buy Zone Repositioning (During Pullback)
-        if self.market_state in ["STALLING", "REGRESSING"] and curr_price < (self.tracked_peak - 0.4 * atr):
-            self.market_state = "REGRESSING"
-            # If aggressive bids step in above the original projected floor
-            if ob.taker_delta >= 0.20 or ob.imbalance_pct >= 8.0:
-                new_repositioned_limit = round(curr_price + 0.15 * atr, 2)
-                if new_repositioned_limit > (self.repositioned_limit + 0.3 * atr) and (now - self.last_alert_time) > 20:
-                    self.repositioned_limit = new_repositioned_limit
-                    rebound_target = round(self.repositioned_limit + 1.8 * atr, 2)
-                    gain_pot = ((rebound_target - self.repositioned_limit) / self.repositioned_limit) * 100.0
-                    msg = (
-                        f"📍 <b>UPDATE: MOVE LIMIT BUY UP TO ${self.repositioned_limit:,.2f}</b>\n"
-                        f"━━━━━━━━━━━━━━━━━━\n"
-                        f"💵 <b>Current Price:</b> <b>${curr_price:,.2f}</b>\n"
-                        f"📊 <b>Tape Shift:</b> Early buyer absorption detected (Delta {ob.taker_delta:+.2f} / Depth +{ob.imbalance_pct:.1f}%).\n"
-                        f"🎯 <b>Rebound Target:</b> ${rebound_target:,.2f} (<b>+{gain_pot:.2f}%</b>)\n"
-                        f"🛑 <b>Stop Loss:</b> ${round(self.repositioned_limit - 1.2*atr, 2):,.2f}\n\n"
-                        f"👉 <b>Action:</b> Cancel previous limit buy. Move Limit Buy up to <b>${self.repositioned_limit:,.2f}</b> now to ensure fill."
-                    )
-                    if self.notifier.send_message(msg):
-                        self.last_alert_time = now
-                    self._save_state()
-                    return
-
-        # 6. Detect Stalling & Anticipate Regression (Using Bollinger Band Geometry)
+        # 5. Detect Stalling & Anticipate Regression (Using Bollinger Band Geometry)
         if pct_b_15m >= 0.78 or pct_b_5m >= 0.80 or pct_b_1m >= 0.85:
             # Throttle to max 1 stalling alert per 20 minutes (1200 seconds) to prevent notification loops
             if self.market_state != "STALLING" and (now - self.last_stalling_alert_time) > 1200:
@@ -517,7 +495,6 @@ class AutonomousExecutionEngine:
                 self.tracked_peak = round(max(curr_price, bb_upper_1m), 2)
                 # Projected reload floor is the Middle Band (SMA 20) or lower, guaranteed strictly < curr_price
                 self.projected_floor = round(min(bb_mid_1m, curr_price - 0.5 * atr), 2)
-                self.repositioned_limit = self.projected_floor
 
                 msg = (
                     f"⚠️ <b>MOMENTUM STALLING AT RESISTANCE · DO NOT BUY</b>\n"
@@ -630,6 +607,14 @@ class AutonomousExecutionEngine:
                 'ratchet_level':   0,
                 'timestamp':       time.time()
             }
+            self.journal.record_entry(
+                setup_name=setup_name,
+                entry_price=price,
+                stop_loss=stop,
+                target_1=tp1,
+                target_2=tp2,
+                rationale=rationale
+            )
             self._save_state()
 
     def _manage_active_trade(self, curr_price: float, ob: Any, atr: float, oi_conf: str,
@@ -762,12 +747,15 @@ class AutonomousExecutionEngine:
                 f"📊 <b>Exit Reason:</b> {'1M Volume/Thrust Stalled at Resistance' if is_micro_stalled else 'Trailing Stop Protected Profit'}\n"
                 f"👉 <b>Action:</b> <b>SELL SPOT AT MARKET NOW.</b> Bank cash. Bot is actively tracking dip reload.{okx_exec_str}"
             )
+            self.journal.record_exit(
+                exit_price=curr_price,
+                exit_reason='1M Volume/Thrust Stalled at Resistance' if is_micro_stalled else 'Trailing Stop Protected Profit'
+            )
             self.notifier.send_message(msg)
             self.active_trade = None
             self.market_state = "SCANNING"
             self.tracked_peak = highest
             self.projected_floor = round(min(highest - 0.5 * atr, curr_price - 0.3 * atr), 2)
-            self.repositioned_limit = self.projected_floor
             self._save_state()
             return
 
@@ -784,9 +772,13 @@ class AutonomousExecutionEngine:
             msg = (
                 f"⚠️ <b>SELL SPOT NOW (CATASTROPHIC ORDER BOOK COLLAPSE)</b>\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
-                f"💵 <b>Current Price:</b> <b>${curr_price:,.2f}</b> (<b>-{loss_pct:.2f}%</b>)\n"
+                f"💵 <b>Exit Price:</b> <b>${curr_price:,.2f}</b> (<b>-{loss_pct:.2f}%</b>)\n"
                 f"🚨 <b>Microstructure Warning:</b> Severe institutional selling (Imbalance {ob.imbalance_pct:.1f}% / Delta {ob.taker_delta:+.2f}).\n"
                 f"👉 <b>Action:</b> <b>SELL SPOT AT MARKET NOW.</b> Cut loss early to protect capital.{okx_exec_str}"
+            )
+            self.journal.record_exit(
+                exit_price=curr_price,
+                exit_reason='Catastrophic Order Book Collapse'
             )
             self.notifier.send_message(msg)
             self.active_trade = None
@@ -814,6 +806,10 @@ class AutonomousExecutionEngine:
                     f"💵 <b>Exit Price:</b> <b>${curr_price:,.2f}</b> (-{loss_pct:.2f}%)\n"
                     f"👉 <b>Action:</b> Exit position immediately. Memory soft stop protected capital.{okx_exec_str}"
                 )
+                self.journal.record_exit(
+                    exit_price=curr_price,
+                    exit_reason='Memory Soft Stop Invalidation'
+                )
                 self.notifier.send_message(msg)
                 self.active_trade = None
                 self.market_state = "SCANNING"
@@ -823,6 +819,10 @@ class AutonomousExecutionEngine:
 
         # Position Timeout (>4h)
         if (time.time() - t["timestamp"]) > 14400:
+            self.journal.record_exit(
+                exit_price=curr_price,
+                exit_reason='Position Timeout (>4h)'
+            )
             self.notifier.send_message(
                 "⏱️ <b>BTCTOOL: POSITION TIMEOUT (4H)</b>\n"
                 "━━━━━━━━━━━━━━━━━━\n"
