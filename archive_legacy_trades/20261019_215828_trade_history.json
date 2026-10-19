@@ -1,0 +1,32 @@
+{
+  "trades": [
+    {
+      "id": 1,
+      "type": "SPOT_BUY",
+      "setup": "ZEBRA AUTONOMOUS: P_up=78.0%",
+      "entry_time": "2026-10-19 21:57:43",
+      "entry_price": 82000.0,
+      "exit_time": "2026-10-19 21:57:43",
+      "exit_price": 82200.0,
+      "duration": "0m",
+      "target_1": 0.0,
+      "target_2": 0.0,
+      "stop_loss": 0.0,
+      "gross_pnl_pct": 0.24,
+      "okx_fee_pct": -0.2,
+      "net_pnl_pct": 0.04,
+      "exit_reason": "ZEBRA EXIT: Edge Exhausted (P_up=42.0%)",
+      "rationale": "Test Multi-Screen Edge",
+      "status": "CLOSED_PROFIT"
+    }
+  ],
+  "stats": {
+    "total_closed_trades": 1,
+    "wins": 1,
+    "losses": 0,
+    "win_rate_pct": 100.0,
+    "gross_cumulative_pct": 0.24,
+    "total_fees_pct": -0.2,
+    "net_cumulative_pct": 0.04
+  }
+}

@@ -1,217 +1,205 @@
 """
-conviction_engine.py — Hierarchical Confluence & Kinetic Brain for Zebra Bot (btctool 2.0)
-Synthesizes the 100-Screen State Matrix using:
-1. Kinetic Push vs Structural Barrier physical forces model.
-2. Sticky Lifecycle State Machine (Zero tick-jitter).
-3. 3-Tier Top-Down Confluence (Macro Tide -> Structural Ground -> Micro Trigger).
-4. The 5 Dynamic Playbooks (Macro Entry, Absorption Reload Lot 2, Uncapped Harvesting, Structural Cut, Chop Gate).
+conviction_engine.py — Truly Free Autonomous Expected Value Agent for Zebra Bot (btctool 2.0)
+Operates on the AlphaGo paradigm:
+- Ingests all 11 screens (1s to 1D), L2 order book depth, CVD tape, and derivatives into continuous directional probability P_up.
+- Calculates Expected Value (E[Edge]) net of OKX fees.
+- Zero leashes, zero static stop lines, zero artificial profit ceilings.
+- Rides winning waves uncapped, scales into verified absorption dips, and cuts immediately when P_up flips negative.
 """
 
 import logging
-from enum import Enum
 from typing import Dict, Optional, Tuple
 import numpy as np
 
 logger = logging.getLogger("conviction_engine")
 
-OKX_ROUNDTRIP_FEE_PCT = 0.0020  # 0.20% OKX Spot maker/taker round-trip fee
+OKX_ROUNDTRIP_FEE_PCT = 0.0020  # 0.20% OKX Spot round-trip fee
+
+# Multi-Horizon Weights across all 11 screens (Total = 1.0)
+HORIZON_WEIGHTS = {
+    # Macro Tier (35%)
+    "1D": 0.10,
+    "6h": 0.08,
+    "4h": 0.09,
+    "2h": 0.08,
+    # Structural Tier (30%)
+    "1h": 0.10,
+    "30m": 0.10,
+    "15m": 0.10,
+    # Tactical Trigger Tier (35%)
+    "5m": 0.10,
+    "3m": 0.08,
+    "1m": 0.10,
+    "1s": 0.07,
+}
 
 
-class LifecycleState(Enum):
-    SCANNING = "SCANNING"
-    OPTIMAL_ENTRY = "OPTIMAL_ENTRY"
-    IN_PROGRESS = "IN_PROGRESS"
-    EXHAUSTION = "EXHAUSTION"
-    TARGET = "TARGET"
-
-
-class ConvictionEngine:
+class FreeConvictionEngine:
     """
-    Quantitative Brain for Zebra Bot.
-    Evaluates expected value, kinetic energy vs barriers, and manages trade lifecycles.
+    Autonomous Expected Value Agent.
+    Evaluates the continuous probability P_up across all 11 screens and decides actions dynamically.
     """
 
     def __init__(self):
-        self.state = LifecycleState.SCANNING
-        self.active_side: Optional[str] = None  # "LONG"
-        self.entry_price: float = 0.0
-        self.current_stop: float = 0.0
-        self.target_1: float = 0.0
-        self.target_2: float = 0.0
-        self.highest_price: float = 0.0
-        self.tranche_2_added: bool = False
-        self.breakeven_set: bool = False
+        pass
+
+    def compute_directional_probability(self, matrix: dict) -> Tuple[float, dict]:
+        """
+        Calculates the continuous directional probability P_up in [0.0, 1.0] across all 11 screens.
+        Returns: (P_up, screen_telemetry_dict)
+        """
+        tf_data = matrix.get("timeframes", {})
+        price = matrix.get("latest_price", 0.0)
+        tanh_imbalance = matrix.get("tanh_imbalance", 0.0)
+        absorption_idx = matrix.get("absorption_index", 0.0)
+        oi_zscore = matrix.get("oi_zscore", 0.0)
+        trade_vel = matrix.get("trade_velocity", 0.0)
+        vwap = matrix.get("session_vwap", price)
+
+        raw_score = 0.0
+        screen_votes = {}
+
+        # 1. Evaluate all 11 Timeframes (Trend alignment + Momentum acceleration)
+        for tf, weight in HORIZON_WEIGHTS.items():
+            item = tf_data.get(tf, {})
+            if not item:
+                continue
+
+            tf_score = 0.0
+
+            # 1.1 Trend Alignment (EMA 9 vs EMA 21 vs EMA 50)
+            ema9 = item.get("ema_9", price)
+            ema21 = item.get("ema_21", price)
+            ema50 = item.get("ema_50", price)
+            if ema9 > ema21 > ema50:
+                tf_score += 1.0
+            elif ema9 > ema21:
+                tf_score += 0.5
+            elif ema9 < ema21 < ema50:
+                tf_score -= 1.0
+            elif ema9 < ema21:
+                tf_score -= 0.5
+
+            # 1.2 MACD Momentum Acceleration
+            macd_hist = item.get("macd_hist", 0.0)
+            if macd_hist > 0:
+                tf_score += 0.5
+            elif macd_hist < 0:
+                tf_score -= 0.5
+
+            # 1.3 Bollinger Band Position
+            pct_b = item.get("bb_pct_b", 0.5)
+            # Normalizing pct_b into [-1.0, +1.0]
+            bb_score = (pct_b - 0.5) * 2.0
+            tf_score += 0.3 * bb_score
+
+            # Weight and accumulate
+            raw_score += tf_score * weight
+            screen_votes[tf] = round(tf_score, 2)
+
+        # 2. Order Book Depth & Wall Mass
+        raw_score += 0.40 * tanh_imbalance
+
+        # 3. Derivatives Leverage Expansion
+        if oi_zscore != 0:
+            norm_oi = float(np.tanh(oi_zscore / 2.0))
+            raw_score += 0.25 * norm_oi
+
+        # 4. Real-Time Absorption (Taker sells swallowed by resting bids)
+        if absorption_idx > 15.0:
+            raw_score += 0.30
+
+        # Convert raw_score into continuous probability P_up using Sigmoid
+        # Sigmoid: P_up = 1 / (1 + exp(-2.2 * raw_score))
+        p_up = float(1.0 / (1.0 + np.exp(-2.2 * raw_score)))
+
+        telemetry = {
+            "p_up": round(p_up, 4),
+            "raw_score": round(raw_score, 3),
+            "screen_votes": screen_votes,
+            "order_book_tanh": round(tanh_imbalance, 3),
+            "oi_zscore": round(oi_zscore, 2),
+            "absorption_index": round(absorption_idx, 2),
+        }
+        return p_up, telemetry
 
     def evaluate(self, matrix: dict, active_trade: Optional[dict] = None) -> dict:
         """
-        Main decision loop.
-        Evaluates current 100-Screen State Matrix and outputs an actionable directive.
+        Evaluates the 11-screen board state and outputs action without leashes or static stop lines.
         """
         price = matrix.get("latest_price", 0.0)
         if price <= 0:
             return {"action": "WAIT", "reason": "Awaiting live price feed"}
 
+        p_up, telemetry = self.compute_directional_probability(matrix)
         tf_data = matrix.get("timeframes", {})
-        benchmarks = matrix.get("benchmarks", {})
-        vwap = matrix.get("session_vwap", price)
-        absorption_idx = matrix.get("absorption_index", 0.0)
-        tanh_imbalance = matrix.get("tanh_imbalance", 0.0)
-        oi_zscore = matrix.get("oi_zscore", 0.0)
-        funding_rate = matrix.get("funding_rate", 0.0)
-
-        # Reference ATR from 15m or 5m
         atr_15m = tf_data.get("15m", {}).get("atr", 150.0)
-        atr_5m = tf_data.get("5m", {}).get("atr", 80.0)
-        atr_ref = max(atr_15m, atr_5m, 50.0)
+        # Dynamic expansion range: at least 0.50% or based on 15m ATR
+        expected_expansion_pct = max((atr_15m * 1.5) / price if price > 0 else 0.005, 0.005)
 
-        # ------------------------------------------------------------------
-        # 1. Kinetic Push vs Structural Barrier Scoring
-        # ------------------------------------------------------------------
-        # Kinetic Energy (Push): Volume surge, Taker CVD, MACD acceleration, EMA alignment
-        kinetic_score = 0.0
+        # Expected Value: Probability * Magnitude - Downside - Fee
+        expected_edge = (p_up * expected_expansion_pct) - ((1.0 - p_up) * expected_expansion_pct * 0.8) - OKX_ROUNDTRIP_FEE_PCT
 
-        # 1.1 EMA Alignment (15m, 1h, 4h)
-        for tf_name in ("15m", "1h", "4h"):
-            tf_item = tf_data.get(tf_name, {})
-            if tf_item.get("ema_9", 0) > tf_item.get("ema_21", 0) > tf_item.get("ema_50", 0):
-                kinetic_score += 10.0
-            elif tf_item.get("ema_9", 0) < tf_item.get("ema_21", 0):
-                kinetic_score -= 10.0
-
-        # 1.2 MACD Velocity (1m, 5m, 15m)
-        for tf_name in ("1m", "5m", "15m"):
-            tf_item = tf_data.get(tf_name, {})
-            if tf_item.get("macd_hist", 0) > 0:
-                kinetic_score += 6.0
-            else:
-                kinetic_score -= 6.0
-
-        # 1.3 Order Flow & CVD Taker Aggression
-        if tanh_imbalance > 0.2:
-            kinetic_score += 15.0 * tanh_imbalance
-        elif tanh_imbalance < -0.2:
-            kinetic_score += 15.0 * tanh_imbalance
-
-        # 1.4 Derivatives Fuel (OI Z-Score)
-        if oi_zscore > 1.5:
-            kinetic_score += 10.0  # Expanding leveraged momentum
-        elif oi_zscore < -1.5:
-            kinetic_score -= 10.0  # Liquidation flush / money leaving
-
-        # Structural Barrier Distance
-        bb_15m = tf_data.get("15m", {})
-        upper_barrier = bb_15m.get("bb_upper", price + 2.0 * atr_ref)
-        lower_barrier = bb_15m.get("bb_lower", price - 2.0 * atr_ref)
-        dist_to_upper_pct = (upper_barrier - price) / price if price > 0 else 0.0
-        dist_to_lower_pct = (price - lower_barrier) / price if price > 0 else 0.0
-
-        # Volatility Chop Gate: Check if market bandwidth is too compressed to beat fees
-        bb_width_15m = bb_15m.get("bb_width", 1.0)
-        if bb_width_15m < 0.35 and abs(kinetic_score) < 20.0:
-            return {
-                "action": "CHOP_GATE_WAIT",
-                "reason": f"Volatility compressed ({bb_width_15m:.2f}% BB width). Sitting in cash to save fees.",
-                "kinetic_score": kinetic_score,
-            }
-
-        # ------------------------------------------------------------------
-        # 2. IF ALREADY IN AN ACTIVE POSITION -> MANAGE LIFECYCLE
-        # ------------------------------------------------------------------
+        # ==================================================================
+        # STATE 1: ALREADY IN POSITION -> UNRESTRICTED AUTONOMOUS MANAGEMENT
+        # ==================================================================
         if active_trade:
             entry = float(active_trade.get("entry", price))
-            current_stop = float(active_trade.get("current_stop", entry - 1.5 * atr_ref))
             gain_pct = (price - entry) / entry
-            high_price = max(float(active_trade.get("highest_price", entry)), price)
             tranche_2 = bool(active_trade.get("tranche_2_added", False))
 
-            # 2.1 Ruthless Structural Invalidation
-            if price <= current_stop:
+            # 1. IMMEDIATE INVALIDATION CUT (No static stop lines, no waiting)
+            # The edge has flipped to sellers. Cut immediately at market.
+            if p_up < 0.44:
+                action_name = "HARVEST_PROFIT" if gain_pct >= 0.0020 else "CUT_IMMEDIATE"
                 return {
-                    "action": "EXIT_STRUCTURAL_STOP",
-                    "reason": f"Price broke structural stop floor at ${current_stop:,.2f}. Exiting to protect capital.",
+                    "action": action_name,
+                    "p_up": p_up,
                     "gain_pct": gain_pct,
+                    "reason": f"Directional edge flipped negative (P_up={p_up*100:.1f}%). Exiting immediately at market.",
+                    "telemetry": telemetry,
                 }
 
-            # 2.2 Bullish Absorption Reload (Scale-in Lot 2)
-            # If price pulls back but holds dynamic support (VWAP or EMA 50) and Absorption Index is high
-            if not tranche_2 and gain_pct < 0.003 and price >= (entry - 0.75 * atr_ref):
-                # Check absorption at support
-                is_near_vwap = abs(price - vwap) / price < 0.003
-                is_near_ema50 = abs(price - tf_data.get("15m", {}).get("ema_50", price)) / price < 0.003
-                if (is_near_vwap or is_near_ema50) and (absorption_idx > 15.0 or tanh_imbalance > 0.25):
+            # 2. SCALE-IN ON ABSORPTION DIP (Deploy Lot 2)
+            # Price pulls back, but higher timeframes remain strongly bullish (P_up >= 0.70)
+            # and order book confirms absorption
+            if not tranche_2 and -0.0060 <= gain_pct <= 0.0020 and p_up >= 0.70:
+                if matrix.get("absorption_index", 0.0) > 15.0 or matrix.get("tanh_imbalance", 0.0) > 0.25:
                     return {
                         "action": "SCALE_IN_LOT_2",
-                        "reason": f"Bullish Absorption detected at dynamic support (${price:,.2f}). Deploying Lot 2.",
-                        "new_stop": max(current_stop, price - 0.8 * atr_ref),
+                        "p_up": p_up,
+                        "gain_pct": gain_pct,
+                        "reason": f"Bullish Absorption Dip at discount. P_up={p_up*100:.1f}%. Deploying Lot 2.",
+                        "telemetry": telemetry,
                     }
 
-            # 2.3 Uncapped Profit Run & Dynamic Trailing Stop
-            # In profit > 0.40% (covers 0.20% OKX fee with margin) -> Move stop to breakeven + fee shield
-            if gain_pct >= 0.0040 and not active_trade.get("breakeven_set", False):
-                be_stop = entry * (1.0 + 0.0022)  # Breakeven + fee shield
-                return {
-                    "action": "RATCHET_BREAKEVEN",
-                    "reason": f"Trade in profit (+{gain_pct*100:.2f}%). Moving stop to Breakeven Fee Shield (${be_stop:,.2f}).",
-                    "new_stop": be_stop,
-                }
-
-            # In profit > 0.80% -> Dynamic Structural Trailing behind 5m swing low
-            if gain_pct >= 0.0080:
-                low_5m = tf_data.get("5m", {}).get("bb_mid", price - 0.8 * atr_ref)
-                if low_5m > current_stop:
-                    return {
-                        "action": "RATCHET_TRAILING_STOP",
-                        "reason": f"Trailing profit at +{gain_pct*100:.2f}%. Ratcheting stop higher to ${low_5m:,.2f}.",
-                        "new_stop": low_5m,
-                    }
-
-            # 2.4 Top Exhaustion (Kinetic Fuel Depletion at Barrier)
-            # Price near upper barrier AND kinetic score collapsing AND MACD 1m/5m negative
-            rsi_15m = tf_data.get("15m", {}).get("rsi", 50.0)
-            if dist_to_upper_pct < 0.0015 and kinetic_score < 0.0 and rsi_15m > 72.0 and gain_pct > 0.004:
-                return {
-                    "action": "HARVEST_PROFIT",
-                    "reason": f"Kinetic push exhausted at structural resistance (${upper_barrier:,.2f}). Banking profit (+{gain_pct*100:.2f}%).",
-                    "gain_pct": gain_pct,
-                }
-
-            # Sticky Hold in Progress
+            # 3. RIDE UNCAPPED (Market is paying us)
             return {
-                "action": "HOLD_IN_PROGRESS",
-                "reason": f"Position healthy. Kinetic Score: {kinetic_score:+.1f}, Gain: +{gain_pct*100:.2f}%.",
-                "highest_price": high_price,
+                "action": "RIDE_UNCAPPED",
+                "p_up": p_up,
+                "gain_pct": gain_pct,
+                "reason": f"Riding winning move uncapped. P_up={p_up*100:.1f}%, Net Gain: {gain_pct*100:+.2f}%.",
+                "telemetry": telemetry,
             }
 
-        # ------------------------------------------------------------------
-        # 3. IF NO ACTIVE POSITION -> SCAN FOR FRESH ENTRY
-        # ------------------------------------------------------------------
-        # Requirement for Macro Continuation Entry:
-        # 1. Macro Tide is Bullish (4H EMA9 > EMA21 or 1H EMA9 > EMA50)
-        # 2. Kinetic Score > +35.0 (Strong institutional fuel)
-        # 3. Order Book tanh imbalance > +0.15 (Buyers dominating depth)
-        # 4. Expected Move to Resistance exceeds Fee Hurdle (0.20%) by at least 2.5x
-        macro_bullish = tf_data.get("4h", {}).get("ema_9", 0) >= tf_data.get("4h", {}).get("ema_21", 0)
-        expected_run_pct = dist_to_upper_pct
-
-        if macro_bullish and kinetic_score >= 35.0 and tanh_imbalance >= 0.15:
-            # Fee Hurdle Validation: Expected move must exceed round-trip fee (0.20%) + buffer
-            if expected_run_pct >= (OKX_ROUNDTRIP_FEE_PCT * 2.0):
-                stop_loss = price - 1.2 * atr_ref
-                target_1 = price + 1.0 * atr_ref
-                target_2 = price + 2.2 * atr_ref
-
-                return {
-                    "action": "ENTER_CORE_LOT_1",
-                    "reason": f"Macro Bullish Continuation confirmed. Kinetic Score: {kinetic_score:+.1f}, Imbalance: {tanh_imbalance:+.2f}.",
-                    "entry_price": price,
-                    "stop_loss": stop_loss,
-                    "target_1": target_1,
-                    "target_2": target_2,
-                    "expected_move_pct": expected_run_pct,
-                }
+        # ==================================================================
+        # STATE 2: IN CASH -> SEEKING HIGH-PROBABILITY OPPORTUNITY
+        # ==================================================================
+        # Enters only when probability is bullish and net expected edge > 0 after fees
+        if p_up >= 0.60 and expected_edge > 0.0:
+            return {
+                "action": "ENTER_CORE_LOT_1",
+                "p_up": p_up,
+                "expected_edge_pct": expected_edge,
+                "entry_price": price,
+                "reason": f"High-probability edge detected (P_up={p_up*100:.1f}%, E[Edge]={expected_edge*100:+.2f}%). Entering Core Lot 1.",
+                "telemetry": telemetry,
+            }
 
         return {
-            "action": "SCANNING",
-            "reason": f"Scanning market. Kinetic Score: {kinetic_score:+.1f}, Imbalance: {tanh_imbalance:+.2f}.",
-            "kinetic_score": kinetic_score,
+            "action": "SCANNING_IN_CASH",
+            "p_up": p_up,
+            "expected_edge_pct": expected_edge,
+            "reason": f"Scanning 11 screens. P_up={p_up*100:.1f}%. Sitting in cash to preserve capital.",
+            "telemetry": telemetry,
         }

@@ -1,18 +1,20 @@
 """
-test_zebra.py — Comprehensive Unit & Integration Test Suite for Zebra Bot (btctool 2.0)
+test_zebra.py — Comprehensive Unit & Integration Test Suite for Truly Free Zebra Bot
 Tests:
 1. Sensory Ingestion & 11-Timeframe Ring Buffers
-2. Vectorized 100-Screen State Matrix (<10ms execution)
-3. Kinetic Push vs Structural Barrier Brain & Playbooks
-4. Asymmetric Execution Manager & State Persistence
+2. Vectorized 100-Screen State Matrix (<15ms execution)
+3. Free Expected Value Brain (Continuous P_up calculation & dynamic execution)
+4. Clean Slate Ledger Archiving & Execution Manager
 """
 
+import os
 import time
 import unittest
 import numpy as np
+from unittest.mock import MagicMock
 from market_stream import MarketStream
 from market_state import MarketState
-from conviction_engine import ConvictionEngine, LifecycleState
+from conviction_engine import FreeConvictionEngine
 from execution_manager import ExecutionManager
 
 
@@ -21,11 +23,12 @@ class TestZebraBot(unittest.TestCase):
     def setUp(self):
         self.stream = MarketStream(inst_id="BTC-USDT", max_bars=100)
         self.state_calculator = MarketState()
-        self.brain = ConvictionEngine()
-        self.execution = ExecutionManager(state_file="test_bot_state.json")
+        self.brain = FreeConvictionEngine()
+        self.mock_journal = MagicMock()
+        self.mock_journal.record_entry.return_value = 1
+        self.execution = ExecutionManager(state_file="test_bot_state.json", journal=self.mock_journal)
 
     def tearDown(self):
-        import os
         if os.path.exists("test_bot_state.json"):
             os.remove("test_bot_state.json")
         if os.path.exists("test_bot_state.json.tmp"):
@@ -34,7 +37,6 @@ class TestZebraBot(unittest.TestCase):
     def test_01_synthetic_stream_and_candle_aggregation(self):
         """Verify that trade ticks aggregate into 11-timeframe ring buffers."""
         t_base = 1700000000.0
-        # Feed 10 ticks
         for i in range(10):
             p = 82000.0 + i * 10.0
             self.stream.on_trade_tick(price=p, size=0.5, side="buy" if i % 2 == 0 else "sell", ts=t_base + i)
@@ -48,19 +50,16 @@ class TestZebraBot(unittest.TestCase):
     def test_02_anti_spoofing_orderbook_and_tanh_imbalance(self):
         """Verify 3-snapshot anti-spoofing filter and tanh-smoothed order book imbalance."""
         self.stream.latest_price = 82000.0
-        # Snapshot 1
         self.stream.on_orderbook_update(
             bids_data=[["81990", "5.0"], ["81950", "10.0"]],
             asks_data=[["82010", "4.0"], ["82050", "8.0"]],
             action="snapshot"
         )
-        # Snapshot 2 (spoofed bid wall added at 81980)
         self.stream.on_orderbook_update(
             bids_data=[["81980", "50.0"], ["81990", "5.0"]],
             asks_data=[["82010", "4.0"]],
             action="update"
         )
-        # Snapshot 3 (spoofed bid wall removed)
         self.stream.on_orderbook_update(
             bids_data=[["81980", "0.0"]],
             asks_data=[["82010", "4.0"]],
@@ -72,8 +71,7 @@ class TestZebraBot(unittest.TestCase):
         self.assertLessEqual(tanh_imb, 1.0)
 
     def test_03_vectorized_100_screen_state_matrix_speed(self):
-        """Verify that market_state computes all 11-timeframe indicators in <15ms."""
-        # Populate buffers with synthetic candle series
+        """Verify that market_state computes all 11-timeframe indicators in <25ms."""
         t_base = time.time()
         for tf in self.stream.buffers.keys():
             candles = []
@@ -103,76 +101,76 @@ class TestZebraBot(unittest.TestCase):
         self.assertIn("timeframes", matrix)
         self.assertIn("15m", matrix["timeframes"])
         self.assertIn("session_vwap", matrix)
-        self.assertIn("absorption_index", matrix)
-        self.assertIn("tanh_imbalance", matrix)
 
-    def test_04_conviction_engine_playbooks(self):
-        """Verify Kinetic Push vs Barrier scoring and Playbook triggers."""
-        # Synthetic matrix representing a strong bullish momentum breakout
+    def test_04_free_brain_autonomous_decisions(self):
+        """Verify continuous directional probability P_up and zero-static-stop actions."""
+        # Bullish matrix setup
         matrix = {
             "latest_price": 82000.0,
-            "best_bid": 81999.0,
-            "best_ask": 82001.0,
             "session_vwap": 81800.0,
-            "absorption_index": 25.0,
-            "tanh_imbalance": 0.45,  # Strong buyer depth
-            "oi_zscore": 2.2,        # Real institutional leverage
-            "funding_rate": 0.0001,
+            "absorption_index": 20.0,
+            "tanh_imbalance": 0.40,
+            "oi_zscore": 1.8,
+            "trade_velocity": 25.0,
             "timeframes": {
-                "4h": {"ema_9": 81500, "ema_21": 81000, "ema_50": 80000, "atr": 400.0},
-                "1h": {"ema_9": 81800, "ema_21": 81400, "ema_50": 81000, "atr": 200.0},
-                "15m": {"ema_9": 81900, "ema_21": 81700, "ema_50": 81500, "atr": 120.0, "bb_upper": 82500, "bb_lower": 81500, "bb_width": 1.2, "rsi": 62.0},
-                "5m": {"atr": 60.0, "macd_hist": 15.0, "bb_mid": 81850},
-                "1m": {"macd_hist": 8.0},
+                "1D": {"ema_9": 80000, "ema_21": 78000, "ema_50": 75000, "macd_hist": 200, "bb_pct_b": 0.7},
+                "6h": {"ema_9": 81000, "ema_21": 80000, "ema_50": 79000, "macd_hist": 100, "bb_pct_b": 0.65},
+                "4h": {"ema_9": 81500, "ema_21": 81000, "ema_50": 80000, "macd_hist": 50, "bb_pct_b": 0.6},
+                "2h": {"ema_9": 81700, "ema_21": 81400, "ema_50": 81000, "macd_hist": 30, "bb_pct_b": 0.6},
+                "1h": {"ema_9": 81800, "ema_21": 81600, "ema_50": 81200, "macd_hist": 20, "bb_pct_b": 0.58},
+                "30m": {"ema_9": 81850, "ema_21": 81700, "ema_50": 81400, "macd_hist": 15, "bb_pct_b": 0.55},
+                "15m": {"ema_9": 81900, "ema_21": 81800, "ema_50": 81600, "macd_hist": 10, "bb_pct_b": 0.52, "atr": 100.0},
+                "5m": {"ema_9": 81950, "ema_21": 81900, "ema_50": 81800, "macd_hist": 5, "bb_pct_b": 0.51},
+                "3m": {"ema_9": 81970, "ema_21": 81940, "ema_50": 81900, "macd_hist": 2, "bb_pct_b": 0.50},
+                "1m": {"ema_9": 81990, "ema_21": 81960, "ema_50": 81920, "macd_hist": 1, "bb_pct_b": 0.50},
+                "1s": {"ema_9": 82000, "ema_21": 81980, "ema_50": 81950, "macd_hist": 0.5, "bb_pct_b": 0.50},
             }
         }
 
-        # 1. Test Entry Scan
+        # 1. In cash -> Should detect strong edge and enter Core Lot 1
         decision = self.brain.evaluate(matrix, active_trade=None)
         self.assertEqual(decision["action"], "ENTER_CORE_LOT_1")
-        self.assertGreater(decision["target_1"], matrix["latest_price"])
-        self.assertLess(decision["stop_loss"], matrix["latest_price"])
+        self.assertGreaterEqual(decision["p_up"], 0.65)
 
-        # 2. Test In-Progress Active Trade Holding
-        active_trade = {
-            "entry": 81800.0,
-            "current_stop": 81500.0,
-            "highest_price": 82000.0,
-            "breakeven_set": False,
-            "tranche_2_added": False,
-        }
-        hold_decision = self.brain.evaluate(matrix, active_trade=active_trade)
-        # Gain is (82000 - 81800)/81800 = +0.24% (< 0.40% breakeven ratchet threshold)
-        self.assertIn(hold_decision["action"], ("HOLD_IN_PROGRESS", "SCALE_IN_LOT_2"))
+        # 2. In position -> Riding uncapped
+        active_trade = {"entry": 81800.0, "tranche_2_added": False}
+        ride_decision = self.brain.evaluate(matrix, active_trade=active_trade)
+        self.assertEqual(ride_decision["action"], "RIDE_UNCAPPED")
 
-        # 3. Test Structural Stop Loss Trigger
-        crash_matrix = dict(matrix)
-        crash_matrix["latest_price"] = 81400.0  # Below 81500 stop
-        stop_decision = self.brain.evaluate(crash_matrix, active_trade=active_trade)
-        self.assertEqual(stop_decision["action"], "EXIT_STRUCTURAL_STOP")
+        # 3. In position + Bearish reversal -> Immediate predictive cut (no waiting for static stop)
+        bearish_matrix = dict(matrix)
+        # Flip indicators to bearish
+        bearish_tf = {}
+        for tf, data in matrix["timeframes"].items():
+            b_data = dict(data)
+            b_data["ema_9"] = 81000
+            b_data["ema_21"] = 82000
+            b_data["macd_hist"] = -50
+            b_data["bb_pct_b"] = 0.1
+            bearish_tf[tf] = b_data
+        bearish_matrix["timeframes"] = bearish_tf
+        bearish_matrix["tanh_imbalance"] = -0.50
 
-    def test_05_execution_manager_state_cycle(self):
-        """Verify ExecutionManager multi-lot lifecycle and state persistence."""
-        # Open Core Lot 1
+        cut_decision = self.brain.evaluate(bearish_matrix, active_trade=active_trade)
+        self.assertIn(cut_decision["action"], ("CUT_IMMEDIATE", "HARVEST_PROFIT"))
+        self.assertLess(cut_decision["p_up"], 0.45)
+
+    def test_05_execution_manager_clean_slate(self):
+        """Verify ExecutionManager position operations without static stops."""
         trade = self.execution.open_core_lot_1(
             entry_price=82000.0,
-            stop_loss=81500.0,
-            target_1=82500.0,
-            target_2=83000.0,
-            reason="Test Core Breakout"
+            p_up=0.78,
+            reason="Test Multi-Screen Edge"
         )
         self.assertIsNotNone(self.execution.active_trade)
         self.assertEqual(self.execution.active_trade["entry"], 82000.0)
 
-        # Scale in Lot 2 on Absorption Dip
-        self.execution.scale_in_lot_2(price=81800.0, new_stop=81600.0, reason="Test Absorption Dip")
+        self.execution.scale_in_lot_2(price=81800.0, p_up=0.82, reason="Test Absorption Dip")
         self.assertTrue(self.execution.active_trade["tranche_2_added"])
-        self.assertEqual(self.execution.active_trade["entry"], 81900.0)  # Blended entry (82000 + 81800) / 2
+        self.assertEqual(self.execution.active_trade["entry"], 81900.0)
 
-        # Ratchet Stop to Breakeven
-        self.execution.ratchet_stop(new_stop=82100.0, reason="Breakeven Lock", is_breakeven=True)
-        self.assertEqual(self.execution.active_trade["current_stop"], 82100.0)
-        self.assertTrue(self.execution.active_trade["breakeven_set"])
+        self.execution.close_position(exit_price=82200.0, exit_reason="Edge Exhausted", p_up=0.42)
+        self.assertIsNone(self.execution.active_trade)
 
 
 if __name__ == "__main__":

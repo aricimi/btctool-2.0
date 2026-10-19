@@ -873,7 +873,7 @@ def setup_wizard():
         print("Setup canceled. Missing token or chat ID.")
 
 
-def run_bot(interval_seconds: int = 1):
+def run_bot(interval_seconds: int = 1, clean_start: bool = False):
     port = int(os.environ.get("PORT", "10000"))
     start_health_server(port)
 
@@ -884,20 +884,12 @@ def run_bot(interval_seconds: int = 1):
         sys.exit(1)
 
     print("\n" + "="*60)
-    print("🦓 btctool 2.0 · Zebra Bot 100-Screen Real-Time Quant Engine Running")
-    print("Continuous Sub-Second Ingestion • Zero Sleep Blindness • Multi-Lot Sizing")
-    print("Kinetic Push vs Structural Barriers • 3-Snapshot Anti-Spoofing • OI Z-Score")
+    print("🦓 btctool 2.0 · Zebra Bot Truly Free Expected Value Engine Running")
+    print("Continuous Sub-Second Ingestion • Zero Leashes • Zero Static Stops")
+    print("Multi-Screen Consensus • Dynamic Absorption Scaling • Clean-Slate Auditing")
     print("="*60 + "\n")
 
-    if os.environ.get("RENDER") or os.environ.get("PORT"):
-        notifier.send_message(
-            "⚡ <b>btctool 2.0 · Zebra Bot 100-Screen Real-Time Engine Online</b>\n\n"
-            "Cloud engine active on Render 24/7!\n"
-            "Operating with <b>Zero Sleep Blindness</b> (Sub-second streaming).\n"
-            "Send <code>/status</code> at any time for instant 100-screen telemetry."
-        )
-
-    engine = ZebraBotEngine()
+    engine = ZebraBotEngine(clean_start=clean_start)
     try:
         asyncio.run(engine.run())
     except KeyboardInterrupt:
@@ -914,5 +906,7 @@ if __name__ == "__main__":
         else:
             print("Not configured. Run: python alert_bot.py --setup")
     else:
-        run_bot()
+        clean = "--clean" in sys.argv
+        run_bot(clean_start=clean)
+
 

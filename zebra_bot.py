@@ -1,7 +1,7 @@
 """
-zebra_bot.py — The Institutional 100-Screen Real-Time Quant Engine for btctool 2.0
-Continuous sub-second event loop, zero sleep blindness, multi-lot capital management,
-Kinetic Push vs Structural Barrier model, and Windows Excel lock-proof trade auditing.
+zebra_bot.py — Truly Free Autonomous 100-Screen Real-Time Quant Engine for btctool 2.0
+Continuous sub-second event loop, AlphaGo-style Expected Value decision brain,
+clean-slate ledger auditing, and instantaneous rich Telegram push alerts on every move.
 """
 
 import asyncio
@@ -20,7 +20,7 @@ import requests
 
 from market_stream import MarketStream
 from market_state import MarketState
-from conviction_engine import ConvictionEngine
+from conviction_engine import FreeConvictionEngine
 from execution_manager import ExecutionManager
 from trade_logger import TradeJournal
 
@@ -45,7 +45,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.end_headers()
         payload = {
             "status": "online",
-            "service": "btctool 2.0 Zebra Bot 100-Screen Engine",
+            "service": "btctool 2.0 Truly Free Zebra Bot Engine",
             "utc_time": datetime.datetime.now(datetime.timezone.utc).isoformat()
         }
         self.wfile.write(json.dumps(payload).encode("utf-8"))
@@ -67,7 +67,7 @@ def start_health_server(port: int = 10000) -> Optional[HTTPServer]:
 
 
 class TelegramNotifier:
-    """Handles secure delivery of instant push alerts and on-demand commands."""
+    """Handles delivery of instant push alerts and on-demand commands."""
 
     def __init__(self, bot_token: Optional[str] = None, chat_id: Optional[str] = None):
         self.bot_token = bot_token or os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -140,126 +140,123 @@ class TelegramNotifier:
 
 class ZebraBotEngine:
     """
-    Main Zebra Bot orchestrator.
-    Manages sensory ingestion, state matrix, kinetic brain, execution, and alerts.
+    Main Zebra Bot orchestrator:
+    Continuous sub-second perception, Expected Value brain, and rich Telegram alerts.
     """
 
-    def __init__(self):
+    def __init__(self, clean_start: bool = False):
         self.stream = MarketStream(inst_id="BTC-USDT", swap_id="BTC-USDT-SWAP")
         self.state_calculator = MarketState()
-        self.brain = ConvictionEngine()
+        self.brain = FreeConvictionEngine()
         self.execution = ExecutionManager()
         self.notifier = TelegramNotifier()
-        self.last_status_alert_time = 0.0
+
+        if clean_start:
+            self.execution.reset_clean_slate()
 
     async def run(self):
-        """Starts the continuous sensory loop and evaluation engine."""
+        """Starts continuous sensory loop and autonomous evaluation."""
         logger.info("=" * 60)
-        logger.info("🦓 ZEBRA BOT 100-SCREEN ENGINE INITIALIZING (btctool 2.0)")
-        logger.info("Continuous Sub-Second Ingestion • Zero Sleep Blindness • Multi-Lot Sizing")
+        logger.info("🦓 ZEBRA BOT: TRULY FREE EXPECTED VALUE ENGINE RUNNING")
+        logger.info("Zero Static Stops • Zero Artificial Ceilings • 100-Screen Autonomous Agent")
         logger.info("=" * 60)
 
         # 1. Start WebSocket Stream
         self.stream.start()
 
-        # 2. Wait for initial tick & book
+        # 2. Wait for initial data buffer
         await asyncio.sleep(2.0)
         logger.info(f"[Zebra] Stream active. Current Price: ${self.stream.latest_price:,.2f}")
 
-        # 3. Main Continuous Evaluation Loop (Sub-second cadence, NO 20-second sleep!)
+        # Send Telegram Online Notification
+        self.notifier.send_message(
+            "⚡ <b>ZEBRA BOT: TRULY FREE ENGINE ONLINE</b>\n\n"
+            "Autonomous Expected Value Agent active 24/7!\n"
+            "• Zero Static Stop Leashes\n"
+            "• Zero Artificial Ceilings (Rides Winners)\n"
+            "• Immediate Predictive Cut on Edge Reversal\n"
+            "• Continuous 11-Screen Sub-Second Streaming\n\n"
+            "Send <code>/status</code> for live 11-screen telemetry."
+        )
+
         cycle_count = 0
         while True:
             try:
                 cycle_count += 1
                 t0 = time.time()
 
-                # Extract 100-Screen State Matrix (<5ms)
+                # Extract 100-Screen State Matrix (<2ms)
                 matrix = self.state_calculator.extract_state_matrix(self.stream)
 
-                # Evaluate Decision Brain
+                # Evaluate Free Autonomous Brain
                 active_trade = self.execution.active_trade
                 decision = self.brain.evaluate(matrix, active_trade=active_trade)
 
-                # Process Decision Directive
                 action = decision.get("action")
+                p_up = decision.get("p_up", 0.5)
 
+                # ----------------------------------------------------------
+                # ACTION DISPATCH & TELEGRAM ALERTS
+                # ----------------------------------------------------------
                 if action == "ENTER_CORE_LOT_1":
                     entry_p = decision["entry_price"]
-                    sl = decision["stop_loss"]
-                    t1 = decision["target_1"]
-                    t2 = decision["target_2"]
                     reason = decision["reason"]
+                    edge_pct = decision.get("expected_edge_pct", 0.0)
 
-                    self.execution.open_core_lot_1(entry_p, sl, t1, t2, reason)
+                    self.execution.open_core_lot_1(entry_p, p_up, reason)
                     self.notifier.send_message(
                         f"🟢 <b>ZEBRA BOT: ENTER CORE LOT 1</b>\n\n"
-                        f"<b>Pair:</b> BTC/USDT\n"
-                        f"<b>Entry:</b> ${entry_p:,.2f}\n"
-                        f"<b>Target 1:</b> ${t1:,.2f}\n"
-                        f"<b>Target 2:</b> ${t2:,.2f} (Uncapped Runner)\n"
-                        f"<b>Structural Stop:</b> ${sl:,.2f}\n\n"
-                        f"<b>Brain Rationale:</b> {reason}"
+                        f"<b>Pair:</b> BTC/USDT (Spot)\n"
+                        f"<b>Entry Price:</b> ${entry_p:,.2f}\n"
+                        f"<b>Upward Probability (P_up):</b> {p_up*100:.1f}%\n"
+                        f"<b>Expected Net Edge:</b> +{edge_pct*100:.2f}%\n\n"
+                        f"<b>Autonomous Directive:</b> High-probability institutional momentum confirmed across 11 screens. "
+                        f"Riding move uncapped without static ceiling."
                     )
 
                 elif action == "SCALE_IN_LOT_2":
                     price = matrix["latest_price"]
-                    new_stop = decision.get("new_stop", price - 100.0)
                     reason = decision["reason"]
 
-                    self.execution.scale_in_lot_2(price, new_stop, reason)
+                    self.execution.scale_in_lot_2(price, p_up, reason)
                     self.notifier.send_message(
-                        f"➕ <b>ZEBRA BOT: BUY MORE SPOT (SCALE-IN LOT 2)</b>\n\n"
-                        f"<b>Reason:</b> Bullish Absorption Dip at Support\n"
+                        f"➕ <b>ZEBRA BOT: SCALE-IN LOT 2 (DIP ABSORPTION)</b>\n\n"
+                        f"<b>Action:</b> Adding Capital at Discount\n"
                         f"<b>Scale Price:</b> ${price:,.2f}\n"
-                        f"<b>Blended Entry:</b> ${self.execution.active_trade['entry']:,.2f}\n"
-                        f"<b>New Ratcheted Stop:</b> ${new_stop:,.2f}\n\n"
-                        f"<i>Inventory increased at discount before continuation run.</i>"
-                    )
-
-                elif action == "RATCHET_BREAKEVEN":
-                    new_stop = decision["new_stop"]
-                    reason = decision["reason"]
-                    self.execution.ratchet_stop(new_stop, reason, is_breakeven=True)
-                    self.notifier.send_message(
-                        f"🛡️ <b>ZEBRA BOT: STOP MOVED TO BREAKEVEN</b>\n\n"
-                        f"<b>New Stop Floor:</b> ${new_stop:,.2f}\n"
-                        f"<b>Protection:</b> Position is 100% risk-free + OKX fee shield."
-                    )
-
-                elif action == "RATCHET_TRAILING_STOP":
-                    new_stop = decision["new_stop"]
-                    reason = decision["reason"]
-                    self.execution.ratchet_stop(new_stop, reason)
-                    self.notifier.send_message(
-                        f"📈 <b>ZEBRA BOT: TRAILING STOP HIGHER</b>\n\n"
-                        f"<b>New Structural Floor:</b> ${new_stop:,.2f}\n"
-                        f"<b>Reason:</b> Trailing behind 5M higher-low shelf."
+                        f"<b>New Blended Entry:</b> ${self.execution.active_trade['entry']:,.2f}\n"
+                        f"<b>Upward Probability (P_up):</b> {p_up*100:.1f}%\n\n"
+                        f"<b>Reason:</b> Pullback into support absorbed by resting institutional bids. Multiplying win on rebound."
                     )
 
                 elif action == "HARVEST_PROFIT":
                     exit_p = matrix["latest_price"]
                     reason = decision["reason"]
                     gain_pct = decision.get("gain_pct", 0.0)
+                    net_gain_pct = gain_pct - 0.0020
 
-                    self.execution.close_position(exit_p, reason)
+                    self.execution.close_position(exit_p, reason, p_up)
                     self.notifier.send_message(
-                        f"🏁 <b>ZEBRA BOT: PROFIT BANKED (+{gain_pct*100:.2f}%)</b>\n\n"
+                        f"🏁 <b>ZEBRA BOT: PROFIT BANKED (+{net_gain_pct*100:.2f}% NET)</b>\n\n"
                         f"<b>Exit Price:</b> ${exit_p:,.2f}\n"
-                        f"<b>Rationale:</b> {reason}\n"
-                        f"<b>Ledger:</b> Flushed to trade_journal.csv & trade_journal.md"
+                        f"<b>Gross Market Move:</b> {gain_pct*100:+.2f}%\n"
+                        f"<b>OKX Fees Deducted:</b> -0.20%\n"
+                        f"<b>Clean Realized Profit:</b> +{net_gain_pct*100:.2f}%\n\n"
+                        f"<b>Reason:</b> Upward momentum exhausted at ceiling (P_up={p_up*100:.1f}%). Profit secured in wallet."
                     )
 
-                elif action == "EXIT_STRUCTURAL_STOP":
+                elif action == "CUT_IMMEDIATE":
                     exit_p = matrix["latest_price"]
                     reason = decision["reason"]
                     gain_pct = decision.get("gain_pct", 0.0)
+                    net_pnl_pct = gain_pct - 0.0020
 
-                    self.execution.close_position(exit_p, reason)
+                    self.execution.close_position(exit_p, reason, p_up)
                     self.notifier.send_message(
-                        f"🛑 <b>ZEBRA BOT: STRUCTURAL STOP EXIT ({gain_pct*100:.2f}%)</b>\n\n"
+                        f"🛑 <b>ZEBRA BOT: IMMEDIATE PREDICTIVE CUT</b>\n\n"
                         f"<b>Exit Price:</b> ${exit_p:,.2f}\n"
-                        f"<b>Reason:</b> {reason}\n"
-                        f"<b>Rule:</b> Zero bag-holding. Capital preserved for next setup."
+                        f"<b>Net PnL Impact:</b> {net_pnl_pct*100:+.2f}%\n"
+                        f"<b>Upward Probability:</b> {p_up*100:.1f}% (Flipped Bearish)\n\n"
+                        f"<b>Rule:</b> Zero waiting for a stop line. Directional edge evaporated; cut immediately to protect capital."
                     )
 
                 # Update highest price if active trade exists
@@ -269,7 +266,7 @@ class ZebraBotEngine:
                 # Check Telegram command listener
                 cmd = self.notifier.poll_incoming_command()
                 if cmd:
-                    self._handle_telegram_cmd(cmd, matrix)
+                    self._handle_telegram_cmd(cmd, matrix, p_up)
 
                 # Periodic garbage collection and CSV auto-flush
                 if cycle_count % 30 == 0:
@@ -279,40 +276,40 @@ class ZebraBotEngine:
             except Exception as e:
                 logger.error(f"[Zebra Loop Error] {e}")
 
-            # Sleep only 1.0 second between evaluation ticks (zero 20-second blindness!)
             await asyncio.sleep(1.0)
 
-    def _handle_telegram_cmd(self, cmd: str, matrix: dict):
-        """Responds to on-demand Telegram commands."""
+    def _handle_telegram_cmd(self, cmd: str, matrix: dict, p_up: float):
+        """Responds to on-demand Telegram commands with 11-screen telemetry."""
         if cmd in ("/status", "/ping", "/info"):
             price = matrix.get("latest_price", 0.0)
             tanh_imb = matrix.get("tanh_imbalance", 0.0)
             oi_z = matrix.get("oi_zscore", 0.0)
             vwap = matrix.get("session_vwap", 0.0)
+            trade_vel = matrix.get("trade_velocity", 0.0)
             active = self.execution.active_trade
 
             status_msg = (
                 f"🦓 <b>ZEBRA BOT 100-SCREEN TELEMETRY</b>\n\n"
                 f"<b>BTC Price:</b> ${price:,.2f}\n"
-                f"<b>Session VWAP:</b> ${vwap:,.2f}\n"
-                f"<b>Order Book Imbalance (tanh):</b> {tanh_imb:+.2f}\n"
+                f"<b>Directional Probability (P_up):</b> {p_up*100:.1f}%\n"
+                f"<b>Order Book Skew (tanh):</b> {tanh_imb:+.2f}\n"
                 f"<b>OI Change Z-Score:</b> {oi_z:+.2f}\n"
-                f"<b>Trade Velocity:</b> {self.stream.trade_velocity:.1f} trades/sec\n\n"
+                f"<b>Session VWAP:</b> ${vwap:,.2f}\n"
+                f"<b>Trade Velocity:</b> {trade_vel:.1f} trades/sec\n\n"
             )
 
             if active:
                 entry = active.get("entry", 0.0)
-                stop = active.get("current_stop", 0.0)
                 gain = ((price - entry) / entry) * 100.0 if entry > 0 else 0.0
                 status_msg += (
                     f"<b>Active Position:</b> LONG\n"
-                    f"<b>Entry:</b> ${entry:,.2f}\n"
-                    f"<b>Current Stop:</b> ${stop:,.2f}\n"
-                    f"<b>Unrealized PnL:</b> {gain:+.2f}%\n"
-                    f"<b>Lot 2 Added:</b> {'YES' if active.get('tranche_2_added') else 'NO'}\n"
+                    f"<b>Blended Entry:</b> ${entry:,.2f}\n"
+                    f"<b>Unrealized Net PnL:</b> {gain - 0.20:+.2f}%\n"
+                    f"<b>Lot 2 Deployed:</b> {'YES' if active.get('tranche_2_added') else 'NO'}\n"
+                    f"<b>Mode:</b> Riding Uncapped (P_up={p_up*100:.1f}%)\n"
                 )
             else:
-                status_msg += "<b>Active Position:</b> 100% CASH (Scanning)\n"
+                status_msg += "<b>Active Position:</b> 100% CASH (Scanning for Edge)\n"
 
             self.notifier.send_message(status_msg)
 
@@ -321,7 +318,8 @@ def main():
     port = int(os.environ.get("PORT", "10000"))
     start_health_server(port)
 
-    engine = ZebraBotEngine()
+    clean_start = "--clean" in sys.argv
+    engine = ZebraBotEngine(clean_start=clean_start)
     try:
         asyncio.run(engine.run())
     except KeyboardInterrupt:

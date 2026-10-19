@@ -306,19 +306,24 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
      - Session Benchmarks (Asian High/Low, London Open, Previous Day High/Low).
      - 3-Snapshot Anti-Spoof Depth Ratios and Real-Time **Absorption Index** ($A_i$).
      - $\Delta \text{OI}$ Z-score and Funding Rate bias.
-3. **`conviction_engine.py` (Kinetic Confluence & EV Brain):**
-   - Top-down 3-tier confluence (Macro Tide $\rightarrow$ Structural Ground $\rightarrow$ Micro Trigger).
-   - Kinetic Push vs Structural Barrier scoring.
-   - The 5 Dynamic Playbooks:
-     1. *Macro Continuation Entry* (Deploy Lot 1).
-     2. *Bullish Absorption Dip* (Deploy Lot 2 on fake dips with verified buyer absorption).
-     3. *Uncapped Profit Harvesting* (Riding 1%, 2%, 5%+ moves, exiting only on true exhaustion at structural barriers).
-     4. *Ruthless Structural Cut* (Cutting losses instantly if structural support fails with volume).
-     5. *Chop Gate* (Sitting 100% in cash during low-volatility drift to preserve capital).
-4. **`execution_manager.py` (Asymmetric Position & Ledger Manager):**
-   - Multi-lot capital allocator (Lot 1 Core + Lot 2 Scale-in).
-   - Dynamic structural trailing stops tied to 5M swing lows and dynamic bands.
+3. **`conviction_engine.py` (Truly Free Autonomous Expected Value Brain):**
+   - AlphaGo-style continuous probability $P_{\text{up}} \in [0.0, 1.0]$ across all 11 horizons:
+     - Macro Tier (1D, 6h, 4h, 2h - 35% weight)
+     - Structural Tier (1h, 30m, 15m - 30% weight)
+     - Tactical Trigger Tier (5m, 3m, 1m, 1s - 35% weight)
+   - Order Book depth skew, live CVD, and Open Interest Z-score.
+   - Dynamic Expected Value calculation ($\mathbb{E}[\text{Edge}]$) net of 0.20% OKX round-trip fee.
+   - **Zero Leashes & Zero Static Stops:**
+     1. *Core Entry (Lot 1):* Deploys when $P_{\text{up}} \ge 0.60$ and $\mathbb{E}[\text{Edge}] > 0.0$.
+     2. *Absorption Scaling (Lot 2):* Deploys at discount when in trade, pullback occurs, but $P_{\text{up}} \ge 0.70$ and order book confirms absorption.
+     3. *Uncapped Trend Riding:* Holds indefinitely as long as $P_{\text{up}} \ge 0.50$ (rides 1%, 2%, 5%+).
+     4. *Immediate Predictive Cut:* When $P_{\text{up}} < 0.44$ (edge evaporates/flips to sellers), exits immediately at market. Zero waiting for static stop lines.
+4. **`execution_manager.py` (Clean-Slate Autonomous Ledger & Execution):**
+   - Clean-slate archiving: Legacy trade logs archived to `archive_legacy_trades/`.
+   - Fresh autonomous ledger starting from Trade #1.
+   - Instant rich Telegram alerts on every action (Entry, Scale-in, Profit Bank, Immediate Cut).
    - Synchronizes `bot_state.json`, `trade_journal.csv` (UTF-8-BOM Excel lock-proof), `trade_journal.md`, and `trade_history.json`.
+
 
 
 
