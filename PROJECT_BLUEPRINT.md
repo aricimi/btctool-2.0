@@ -29,7 +29,11 @@ This document serves as the **Single Source of Truth** for the entire project.
 
 | Layer | Technology | File / Path | Configuration Details |
 | :--- | :--- | :--- | :--- |
-| **Backend Engine** | Python 3.10+ | [`engine.py`](file:///c:/gemini%20proyect/btctool%202.0/engine.py) | Binance live spot & futures feeds, order book depth, Tri-Brain ensemble, macro confluence |
+| **Backend Engine** | Python 3.10+ | [`engine.py`](file:///c:/gemini%20proyect/btctool%202.0/engine.py) | Bybit/OKX live spot & futures feeds, order book depth, Tri-Brain ensemble, macro confluence |
+| **Execution Daemon** | Python Async / Event Loop | [`alert_bot.py`](file:///c:/gemini%20proyect/btctool%202.0/alert_bot.py) | 24/7 continuous autonomous spot execution, Telegram mobile alerts, Render health keep-alive |
+| **OKX Spot Client** | REST API V5 | [`okx_trader.py`](file:///c:/gemini%20proyect/btctool%202.0/okx_trader.py) | Automated execution on OKX Spot with anti-hanging, partial fill, server stops, and IOC whale defense |
+| **Trade Journal & Ledger** | Python CSV / Markdown | [`trade_logger.py`](file:///c:/gemini%20proyect/btctool%202.0/trade_logger.py) | Real-time dual recording to Excel [`trade_journal.csv`](file:///c:/gemini%20proyect/btctool%202.0/trade_journal.csv) and [`trade_journal.md`](file:///c:/gemini%20proyect/btctool%202.0/trade_journal.md) |
+| **Trade History Data** | JSON Persistence | [`trade_history.json`](file:///c:/gemini%20proyect/btctool%202.0/trade_history.json) | Structured trade lifecycle database with full duration, fee, and PnL metrics |
 | **Frontend UI** | Streamlit + Plotly | [`app.py`](file:///c:/gemini%20proyect/btctool%202.0/app.py) | Interactive dark theme, multi-timeframe matrices, trade directive card, triple RSI subplots, persistent disclaimers |
 | **Theme / Server** | Streamlit Config | [`.streamlit/config.toml`](file:///c:/gemini%20proyect/btctool%202.0/.streamlit/config.toml) | Primary: `#00FFA3`, Background: `#0A0E17`, Secondary: `#131B2E`, Headless: `true` |
 | **Dependencies** | Python PIP | [`requirements.txt`](file:///c:/gemini%20proyect/btctool%202.0/requirements.txt) | `pandas`, `numpy`, `yfinance`, `streamlit`, `requests`, `gunicorn`, `plotly` |
@@ -134,7 +138,7 @@ This document serves as the **Single Source of Truth** for the entire project.
     - `EARLY_BAIL`: Cuts losses immediately before stop if order book depth or taker bids collapse ($<-18\%$ depth or $<-0.40$ delta).
     - `HOLD_AND_STRETCH`: If buyer momentum is accelerating ($>+0.20$ delta), delays selling, expands target, and ratchets stop to guaranteed profit.
     - `SCALE_IN`: Adds Tranche 2 on confirmed breakout acceleration with combined risk-free stop.
-    - `BANK_PROFIT`: Sells at market to bank profit when 1M volume collapses and candle thrust flattens at resistance (zero Target 1 lock!).
+    - `BANK_PROFIT`: Sells at market to bank profit when 1M volume collapses and candle thrust flattens at resistance with guaranteed fee-shield threshold (`gain_pct >= +0.30%` to guarantee clean net profit in wallet after OKX 0.20% round-trip fees).
     - `MEMORY_SOFT_STOP`: Stop loss is tracked in memory; when touched, inspects tape live. Holds if buyers are absorbing the wick sweep, exits if bids truly collapse.
   - **Persistent State File (`bot_state.json`):**
     - State is persisted to disk on trade open, ratchet update, and close.
@@ -147,12 +151,13 @@ This document serves as the **Single Source of Truth** for the entire project.
   1. `🟢 BUY SPOT NOW (ENTER TRADE)`: Direct market buy directive with entry, Target 1, Target 2 runner, stop loss, and R:R $\ge 1.5:1$.
   2. `📈 HOLD POSITION (DO NOT SELL YET)`: Clear directive to hold active spot coins while momentum surges, expanding target and ratcheting stop to guaranteed profit.
   3. `➕ BUY MORE SPOT (ADD TO POSITION)`: Tranche 2 scale-in order upon confirmed breakout continuation with stop ratcheted to total breakeven.
-  4. `⚠️ SELL SPOT NOW (EXIT TRADE EARLY)`: Early bail order cutting trade before stop loss when order book support collapses.
-  5. `🏁 SELL SPOT NOW (BANK YOUR PROFIT)`: Direct sell order banking cash at 1M volume/thrust exhaustion at ceiling.
+  4. `⚠️ SELL SPOT NOW (CATASTROPHIC ORDER BOOK COLLAPSE)`: Whale defense order cutting trade before stop loss when order book support collapses.
+  5. `🏁 SELL SPOT NOW (BANK YOUR PROFIT)`: Direct sell order banking cash at 1M volume/thrust exhaustion at ceiling (`gain_pct >= 0.30%`).
   6. `🛑 STOP LOSS HIT (EXIT TRADE)`: Memory-based soft stop exit when bids collapse.
-  7. `📍 UPDATE: MOVE LIMIT BUY UP TO $...`: Dynamic limit buy order repositioning during dip absorption.
-  8. `🛡️ UPDATE: MOVE STOP TO BREAKEVEN`: Breakeven locking order once price pushes forward into profit.
-  9. `📡 On-Demand Telemetry via Telegram (/status)`: Sub-second (<1s) live engine status check via Telegram command listener with 100% spot-pure metrics.
+  7. `⚠️ MOMENTUM STALLING AT RESISTANCE · DO NOT BUY`: Notifies trader of upper ceiling and stays in cash while tracking dip support floor.
+  8. `📈 UPDATE: RATCHET STOP LOSS HIGHER`: Dynamically ratchets trailing stop as price pushes higher into profit.
+  9. `🛡️ UPDATE: MOVE STOP TO BREAKEVEN`: Breakeven locking order once price pushes forward into profit.
+  10. `📡 On-Demand Telemetry via Telegram (/status)`: Sub-second (<1s) live engine status check via Telegram command listener with 100% spot-pure metrics.
 * **24/7 Cloud Architecture (Render + UptimeRobot):**
   - Integrated HTTP Health Check endpoint on `$PORT` (default 10000) supporting both `HEAD` and `GET`.
   - Keeps Render service permanently awake via UptimeRobot 5-minute HTTP keep-alive pings.
@@ -172,6 +177,39 @@ The engine functions in dual-mode through `OKXSpotClient` (`okx_trader.py`):
      2. **Dynamic Partial Fill Tracking:** Automatically queries wallet balances and calculates exact available BTC quantity for sells.
      3. **Server-Side Trigger Stops:** Direct OCO/Trigger stops placed natively on OKX servers with exponential backoff on HTTP 429.
      4. **Slippage-Capped Emergency Exits:** Immediate-Or-Cancel (IOC) limit sells at `best_bid - 0.05%` to prevent slippage during whale dumps.
+
+---
+
+## 8. Automated Trade Journal & Excel PnL Ledger (`trade_logger.py`)
+
+The system automatically records, audits, and publishes every trade lifecycle in real-time without manual intervention:
+1. **Underlying Persistent Database (`trade_history.json`):**
+   - Stores structured JSON objects for each trade: `id`, `type`, `setup`, `entry_time`, `entry_price`, `exit_time`, `exit_price`, `duration`, `target_1`, `target_2`, `stop_loss`, `gross_pnl_pct`, `okx_fee_pct`, `net_pnl_pct`, `exit_reason`, and `status`.
+   - Running stats: `total_closed_trades`, `wins`, `losses`, `win_rate_pct`, `gross_cumulative_pct`, `total_fees_pct`, `net_cumulative_pct`.
+2. **Native Microsoft Excel Spreadsheet (`trade_journal.csv`):**
+   - Formatted with `UTF-8 with BOM` (`utf-8-sig`) encoding for full-screen display in Microsoft Excel on Windows without text import wizards.
+   - Clean columns: `Trade #`, `Status`, `Type`, `Setup`, `Entry Time`, `Exit Time`, `Hold Duration`, `Entry Price ($)`, `Exit Price ($)`, `Target 1 ($)`, `Target 2 ($)`, `Stop Loss ($)`, `Gross PnL (%)`, `OKX Fee (%)`, `Net PnL (%)`, `Result`, and `Exit Reason`.
+   - Includes bottom `=== SUMMARY PERFORMANCE ===` statistics block.
+3. **Markdown Visual Report (`trade_journal.md`):**
+   - Formatted GitHub-style Markdown table and executive summary for rapid preview in Cursor, VS Code, or web dashboards.
+4. **Exchange Fee Accounting Model:**
+   - Standard OKX Spot taker rate: **0.10% buy taker + 0.10% sell taker = 0.20% round-trip**.
+   - Net profit accounting: $\text{Net PnL} = \text{Gross PnL} - 0.20\%$.
+
+---
+
+## 9. Enforced Blueprint Synchronization & Git Pre-Commit Guardrails
+
+To prevent code drift, feature loss, and AI context amnesia, the repository enforces **Atomic Blueprint Synchronization**:
+1. **Git `pre-commit` Hook (`.git/hooks/pre-commit`):**
+   - Programmatically intercepts every `git commit`.
+   - If any Python file (`*.py`) is staged, git checks whether `PROJECT_BLUEPRINT.md` is also staged.
+   - **Rejection Rule:** If `PROJECT_BLUEPRINT.md` is NOT modified and staged in the exact same commit, the commit is physically aborted with code 1.
+2. **Workspace Architecture Directive (`AGENTS.md`):**
+   - Loaded hierarchically by Antigravity in every turn.
+   - Mandates that no code task is complete until `PROJECT_BLUEPRINT.md` is updated.
+3. **The Atomic Definition of Done:**
+   $$\text{Task Complete} \iff \text{Code Tested} \land \text{Blueprint Updated} \land \text{Committed Together}$$
 
 
 
