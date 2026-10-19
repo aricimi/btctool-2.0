@@ -122,7 +122,11 @@ This document serves as the **Single Source of Truth** for the entire project.
 
 ## 6. Telegram Mobile Autonomous Execution Engine (`alert_bot.py`)
 
-* **Continuous Multi-Scale Autonomous Architecture (`AutonomousExecutionEngine`):**
+* **Primary Engine: Zebra Bot 100-Screen Real-Time Quant Engine (`ZebraBotEngine`):**
+  - Continuous sub-second WebSocket event loop (`market_stream.py` + `market_state.py` + `conviction_engine.py` + `execution_manager.py`).
+  - Completely eliminates the legacy 20-second sleep polling loop.
+  - Deploys Kinetic Push vs Structural Barrier mechanics, 3-snapshot anti-spoofing, OI Z-scores, and multi-lot scaling.
+* **Legacy Reference Architecture (`AutonomousExecutionEngine`):**
   - **Dynamic Volatility & Structural Invalidation Shelf:**
     - Stop loss is anchored below the local micro-swing low / order book bid shelf ($P - \text{Floor} + 0.15 \times \text{ATR}$).
     - Target 1 is anchored dynamically to structural resistance with minimum $1.5\times \text{Risk}$ positive asymmetry (zero arbitrary percentage floors).

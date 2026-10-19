@@ -25,6 +25,8 @@ import requests
 from engine import MarketDataService, PredictiveEnsembleEngine, AdvisoryReport
 from okx_trader import OKXSpotClient
 from trade_logger import TradeJournal
+import asyncio
+from zebra_bot import ZebraBotEngine
 
 
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "telegram_config.json")
@@ -871,7 +873,7 @@ def setup_wizard():
         print("Setup canceled. Missing token or chat ID.")
 
 
-def run_bot(interval_seconds: int = 20):
+def run_bot(interval_seconds: int = 1):
     port = int(os.environ.get("PORT", "10000"))
     start_health_server(port)
 
@@ -881,45 +883,25 @@ def run_bot(interval_seconds: int = 20):
         print("Run: python alert_bot.py --setup")
         sys.exit(1)
 
-    print("\n" + "="*50)
-    print("🚀 btctool 2.0 · Institutional Spot Execution Copilot Running")
-    print(f"Scanning: BTC/USDT (15M / Bybit + OKX Order Books)")
-    print("Mode: Spot Early Ignition + Dynamic Parabolic Ratchet + Whale Defense")
-    print(f"Polling Cadence: every {interval_seconds}s")
-    print("="*50 + "\n")
+    print("\n" + "="*60)
+    print("🦓 btctool 2.0 · Zebra Bot 100-Screen Real-Time Quant Engine Running")
+    print("Continuous Sub-Second Ingestion • Zero Sleep Blindness • Multi-Lot Sizing")
+    print("Kinetic Push vs Structural Barriers • 3-Snapshot Anti-Spoofing • OI Z-Score")
+    print("="*60 + "\n")
 
-    # If running on cloud (Render or PORT specified), send boot confirmation
     if os.environ.get("RENDER") or os.environ.get("PORT"):
         notifier.send_message(
-            "⚡ <b>btctool 2.0 · Spot Execution Copilot Online</b>\n\n"
+            "⚡ <b>btctool 2.0 · Zebra Bot 100-Screen Real-Time Engine Online</b>\n\n"
             "Cloud engine active on Render 24/7!\n"
-            "Operating in pure <b>Event-Driven Mode</b> (Zero Clock Spam).\n"
-            "Send <code>/status</code> at any time for instant on-demand telemetry."
+            "Operating with <b>Zero Sleep Blindness</b> (Sub-second streaming).\n"
+            "Send <code>/status</code> at any time for instant 100-screen telemetry."
         )
 
-    engine = AutonomousExecutionEngine(notifier)
-
-    while True:
-        try:
-            engine.evaluate_market_cycle()
-        except KeyboardInterrupt:
-            print("\nBot stopped by user.")
-            break
-        except Exception as e:
-            print(f"[Loop Exception] {e}")
-
-        # Garbage collection after each scan cycle
-        gc.collect()
-
-        # Responsive 1-second cadence command listener during sleep interval
-        for _ in range(interval_seconds):
-            try:
-                cmd = notifier.poll_incoming_command()
-                if cmd:
-                    engine._handle_on_demand_status()
-            except Exception:
-                pass
-            time.sleep(1)
+    engine = ZebraBotEngine()
+    try:
+        asyncio.run(engine.run())
+    except KeyboardInterrupt:
+        print("\nZebra Bot stopped by user.")
 
 
 if __name__ == "__main__":
@@ -932,5 +914,5 @@ if __name__ == "__main__":
         else:
             print("Not configured. Run: python alert_bot.py --setup")
     else:
-        # Default run or loop
-        run_bot(interval_seconds=20)
+        run_bot()
+
