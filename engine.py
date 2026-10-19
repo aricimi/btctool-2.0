@@ -216,13 +216,9 @@ def train_meta_learner():
         min_samples_leaf=20, l2_regularization=1.0,
         random_state=42
     )
-    if len(y) < 300:
-        base.fit(X.iloc[:-20], y[:-20])
-        model = CalibratedClassifierCV(estimator=base, method='sigmoid', cv='prefit')
-        model.fit(X.iloc[-20:], y[-20:])
-    else:
-        model = CalibratedClassifierCV(estimator=base, method='sigmoid', cv=3)
-        model.fit(X, y)
+    cv_folds = 2 if len(y) < 300 else 3
+    model = CalibratedClassifierCV(estimator=base, method='sigmoid', cv=cv_folds)
+    model.fit(X, y)
 
     del X, y
     gc.collect()

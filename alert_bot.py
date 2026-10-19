@@ -179,6 +179,7 @@ class AutonomousExecutionEngine:
         self.market_state: str = "SCANNING"  # SCANNING, EXPANDING, STALLING, REGRESSING
         self.last_alert_time: float = 0.0
         self.last_reentry_time: float = 0.0
+        self.last_stalling_alert_time: float = 0.0
         self.tracked_peak: float = 0.0
         self.projected_floor: float = 0.0
         self.repositioned_limit: float = 0.0
@@ -200,6 +201,7 @@ class AutonomousExecutionEngine:
             "projected_floor": self.projected_floor,
             "repositioned_limit": self.repositioned_limit,
             "last_alert_time": self.last_alert_time,
+            "last_stalling_alert_time": self.last_stalling_alert_time,
             "last_s_total": self.last_s_total,
             "saved_at": time.time()
         }
@@ -218,11 +220,12 @@ class AutonomousExecutionEngine:
             if time.time() - state.get("saved_at", 0) > 14400:
                 print("[State] Stale state discarded (>4h old).")
                 return
-            self.market_state       = state.get("market_state", "SCANNING")
-            self.active_trade       = state.get("active_trade", None)
-            self.tracked_peak       = state.get("tracked_peak", 0.0)
-            self.projected_floor    = state.get("projected_floor", 0.0)
-            self.repositioned_limit = state.get("repositioned_limit", 0.0)
+            self.market_state              = state.get("market_state", "SCANNING")
+            self.active_trade              = state.get("active_trade", None)
+            self.tracked_peak              = state.get("tracked_peak", 0.0)
+            self.projected_floor           = state.get("projected_floor", 0.0)
+            self.repositioned_limit        = state.get("repositioned_limit", 0.0)
+            self.last_stalling_alert_time  = state.get("last_stalling_alert_time", 0.0)
             self.last_alert_time    = state.get("last_alert_time", 0.0)
             self.last_s_total       = state.get("last_s_total", 0.0)
             if self.active_trade:
@@ -463,11 +466,19 @@ class AutonomousExecutionEngine:
                     )
                     self._save_state()
                     return
-            elif curr_price >= (self.tracked_peak * 0.998):
+            # Only reset to SCANNING if price had previously entered REGRESSING and now climbed back to peak
+            elif self.market_state == "REGRESSING" and curr_price >= (self.tracked_peak * 0.998):
                 self.market_state = "SCANNING"
                 self.tracked_peak = 0.0
                 self.projected_floor = 0.0
-                print("[State Machine] Price recovered to peak. Resetting to SCANNING.")
+                print("[State Machine] Price regressed then recovered to peak. Resetting to SCANNING.")
+                self._save_state()
+            # If price cooled off back to the neutral middle channel (<= 50% %B), reset cleanly to SCANNING
+            elif pct_b_15m <= 0.50 and pct_b_5m <= 0.50:
+                self.market_state = "SCANNING"
+                self.tracked_peak = 0.0
+                self.projected_floor = 0.0
+                print("[State Machine] Momentum cooled back to mid-channel. Resetting to SCANNING.")
                 self._save_state()
 
         # 5. Dynamic Dip Tracking & Buy Zone Repositioning (During Pullback)
@@ -496,8 +507,10 @@ class AutonomousExecutionEngine:
 
         # 6. Detect Stalling & Anticipate Regression (Using Bollinger Band Geometry)
         if pct_b_15m >= 0.78 or pct_b_5m >= 0.80 or pct_b_1m >= 0.85:
-            if self.market_state != "STALLING" and (now - self.last_alert_time) > 20:
+            # Throttle to max 1 stalling alert per 20 minutes (1200 seconds) to prevent notification loops
+            if self.market_state != "STALLING" and (now - self.last_stalling_alert_time) > 1200:
                 self.market_state = "STALLING"
+                self.last_stalling_alert_time = now
                 bb_upper_1m = mean_1m + 2.0 * std_1m
                 bb_mid_1m = mean_1m
                 # Ceiling is anchored to the upper Bollinger Band of the active move
