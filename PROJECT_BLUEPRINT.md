@@ -214,5 +214,108 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
 3. **The Atomic Definition of Done:**
    $$\text{Task Complete} \iff \text{Code Tested} \land \text{Blueprint Updated} \land \text{Committed Together}$$
 
+---
+
+## 10. Zebra Bot Architecture: The Institutional 100-Screen Real-Time Quant Engine
+
+### 10.1. Mission & Core Operating Directives
+1. **Single Objective Function:** Maximize Net Realized PnL ($\mathbb{E}[\text{PnL}_{\text{net}}]$) on BTC/USDT 24/7/365 with **zero sleep blindness**.
+2. **Strict Confinement:** All operations, files, scripts, logs, and state reside strictly within `c:\gemini proyect\btctool 2.0`.
+3. **Dynamic Volatility Relativity:** Zero hardcoded percentage limits or rigid "if/else" boxes. All distances, targets, and invalidations are measured in **dynamic volatility units (ATR multiples)** and **market structure swings (higher-lows/lower-highs)**.
+4. **Fee Friction Gate:** Every execution must mathematically exceed the **OKX 0.20% round-trip spot fee + live order book slippage hurdle**. The engine never churns capital for micro-crumbs.
+5. **Multi-Timeframe Confluence:** High-conviction trades occur only when the **Macro Tide (1D–2H)**, **Structural Battleground (1H–15M)**, and **Micro Trigger/Tape (5M–1S)** align.
+
+---
+
+### 10.2. The 5 Mathematical Upgrades Absorbed into Zebra Bot
+1. **Kinetic Push vs Structural Barrier Engine:**
+   - Instead of brittle boolean `if/else` checks, price movement is modeled as physics:
+     - **Kinetic Energy (Push):** Measured by volume surge + taker delta + MACD velocity + EMA momentum.
+     - **Structural Barrier (Resistance/Support):** Nearest Bollinger Band envelope + real L2 order book walls.
+   - Prevents premature exits: When Kinetic Push is expanding, riding the upper band is recognized as **bullish momentum**, NOT an exit ceiling.
+2. **3-Snapshot Anti-Spoofing Order Book Filter:**
+   - Tracks order book bid/ask walls across 3 consecutive time snapshots.
+   - If a wall flickers or disappears before price touches it, it is flagged as **spoofing** and purged from depth calculations.
+3. **Open Interest (OI) Change Z-Score:**
+   - Measures statistical standard deviations of OI change: $Z_{\Delta \text{OI}} = \frac{\Delta \text{OI} - \mu_{20}}{\sigma_{20}}$.
+   - $Z > +2.0$ confirms genuine institutional leverage inflow; $Z \approx 0$ flags retail noise.
+4. **`tanh`-Smoothed Order Book Imbalance Normalization:**
+   - Compresses raw bid/ask volume ratios smoothly into a bounded range of $[-1.0, +1.0]$:
+     $$\text{Imbalance}_{\text{normalized}} = \tanh(\text{Bid/Ask Ratio} - 1)$$
+   - Eliminates formula explosion caused by single massive whale blocks.
+5. **Sticky Lifecycle State Machine:**
+   - Eliminates "tick-jitter" and panic flipping.
+   - State progression: `OPTIMAL_ENTRY` $\rightarrow$ `IN_PROGRESS` $\rightarrow$ `EXHAUSTION` $\rightarrow$ `TARGET`.
+   - Once a trade enters `IN_PROGRESS`, the engine is prohibited from flipping to a sell on minor wicks unless it reaches `EXHAUSTION` or breaks structural invalidation.
+
+---
+
+### 10.3. The 4 Decoupled Subsystems
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                   SUBSYSTEM 1: SENSORY INGESTION                       │
+│  WebSocket Asynchronous Event Loop (Sub-Second Ingestion, Zero Sleep)   │
+│  • Public Trades Tape      • L2 Order Book Depth 50                    │
+│  • Derivatives OI & Funding • Multi-TF Ring Buffers (1s to 1D)         │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                   SUBSYSTEM 2: THE 100-SCREEN MATRIX                   │
+│  Vectorized Rolling Calculations (Numpy Ring Buffers < 10ms execution) │
+│  • 11 Timeframes: 1s, 1m, 3m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 1D         │
+│  • Full Indicator Suite: EMA 9-200, MACD/DEA, RSI, Stoch, Bands, ATR   │
+│  • Order Flow: Session VWAP ±3σ, Volume Profile POC, Live CVD, Delta    │
+│  • Microstructure: Absorption Index, Anti-Spoof Depth, Book Skew       │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                   SUBSYSTEM 3: CONVICTION & EV BRAIN                   │
+│  Kinetic Push vs Barrier Machine & Real-Time Probability Classifier   │
+│  • Macro Regime Classifier (Bull / Bear / Neutral Tide)                │
+│  • Volatility State Governor (Expansion / Compression / Chop)          │
+│  • Bullish Absorption Dip Classifier (Fake Dip vs Trend Break)         │
+│  • Expected Value Engine (E[Net PnL] > Fee Hurdle)                     │
+│  • Sticky Lifecycle State Machine (Zero Tick-Jitter)                   │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                  SUBSYSTEM 4: ASYMMETRIC EXECUTION                     │
+│  Multi-Lot Capital Allocator & Dynamic Lifecycle Manager               │
+│  • Lot 1 (Core Position) + Lot 2 (Absorption Dip Scaling)              │
+│  • Uncapped Structural Trailing (Riding 1%, 2%, 5%+ Trends)            │
+│  • Ruthless Invalidation Cuts (Zero bag-holding on structural failure)  │
+│  • Real-Time Ledger Sync (UTF-8-BOM CSV, Excel Lock-Proof, Markdown)   │
+└────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Detailed Component Specifications:
+1. **`market_stream.py` (Sensory Ingestion):**
+   - Asynchronous WebSocket listener (`asyncio` + `websockets`) streaming OKX public channels (`trades`, `books50-l2-tbt`, `open-interest`, `funding-rate`, `tickers`).
+   - Circular ring buffers maintaining rolling OHLCV for 11 horizons: `[1s, 1m, 3m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 1D]`.
+2. **`market_state.py` (The 100-Screen Vectorized State Matrix):**
+   - Computes technical indicators across all 11 horizons in $<10\text{ms}$:
+     - EMAs (9, 21, 50, 100, 200), VWMA, ADX directional trend strength.
+     - Multi-TF RSI, MACD (DIF, DEA, Histogram), Stochastic RSI.
+     - Bollinger Bands (%B, Bandwidth), dynamic ATR percentile.
+     - Anchored Session VWAP ($\pm 1\sigma, \pm 2\sigma, \pm 3\sigma$), Volume Profile (POC, VAH, VAL), Cumulative Volume Delta (CVD), Trade Velocity.
+     - Session Benchmarks (Asian High/Low, London Open, Previous Day High/Low).
+     - 3-Snapshot Anti-Spoof Depth Ratios and Real-Time **Absorption Index** ($A_i$).
+     - $\Delta \text{OI}$ Z-score and Funding Rate bias.
+3. **`conviction_engine.py` (Kinetic Confluence & EV Brain):**
+   - Top-down 3-tier confluence (Macro Tide $\rightarrow$ Structural Ground $\rightarrow$ Micro Trigger).
+   - Kinetic Push vs Structural Barrier scoring.
+   - The 5 Dynamic Playbooks:
+     1. *Macro Continuation Entry* (Deploy Lot 1).
+     2. *Bullish Absorption Dip* (Deploy Lot 2 on fake dips with verified buyer absorption).
+     3. *Uncapped Profit Harvesting* (Riding 1%, 2%, 5%+ moves, exiting only on true exhaustion at structural barriers).
+     4. *Ruthless Structural Cut* (Cutting losses instantly if structural support fails with volume).
+     5. *Chop Gate* (Sitting 100% in cash during low-volatility drift to preserve capital).
+4. **`execution_manager.py` (Asymmetric Position & Ledger Manager):**
+   - Multi-lot capital allocator (Lot 1 Core + Lot 2 Scale-in).
+   - Dynamic structural trailing stops tied to 5M swing lows and dynamic bands.
+   - Synchronizes `bot_state.json`, `trade_journal.csv` (UTF-8-BOM Excel lock-proof), `trade_journal.md`, and `trade_history.json`.
+
+
 
 

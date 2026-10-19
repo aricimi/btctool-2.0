@@ -1,25 +1,25 @@
 # 📜 BTCTOOL 2.0 · Autonomous Spot Trading Journal
-*Last Updated: 2026-10-19 17:55:35 (Local) | Symbol: BTC/USDT (Spot) | Fee Standard: OKX 0.20% Round-Trip*
+*Last Updated: 2026-10-19 19:45:32 (Local) | Symbol: BTC/USDT (Spot) | Fee Standard: OKX 0.20% Round-Trip*
 
 ---
 ## 📊 Executive Performance Summary
 | Metric | Performance Value | Note |
 | :--- | :--- | :--- |
-| **Total Closed Trades** | **11** | All trades since bot activation |
-| **Win Rate** | **54.5%** (6 Wins / 5 Losses) | Factoring all exchange fees |
-| **Gross Realized Gain** | **+2.01%** | Raw market price movement |
-| **OKX Fees Deducted** | **-2.20%** | 0.10% buy taker + 0.10% sell taker |
-| **Net Realized Profit** | **-0.19% NET** ⚠️ | Clean profit in your wallet |
+| **Total Closed Trades** | **12** | All trades since bot activation |
+| **Win Rate** | **50.0%** (6 Wins / 6 Losses) | Factoring all exchange fees |
+| **Gross Realized Gain** | **+1.25%** | Raw market price movement |
+| **OKX Fees Deducted** | **-2.40%** | 0.10% buy taker + 0.10% sell taker |
+| **Net Realized Profit** | **-1.15% NET** ⚠️ | Clean profit in your wallet |
 
 ---
 ## 🟢 Current Live Position (Open)
-- **Trade ID:** #12
-- **Setup:** `RE-ENGAGEMENT: BREAKOUT MOMENTUM RESUMPTION`
-- **Entry Time:** `2026-10-19 17:21:57`
-- **Entry Price:** **$82,482.30**
-- **Target 1:** **$83,498.59** (Breakeven Trigger)
-- **Runner Target 2:** **$84,379.37**
-- **Memory Stop Loss:** **$81,804.78**
+- **Trade ID:** #13
+- **Setup:** `TAKER IGNITION CONFLUENCE`
+- **Entry Time:** `2026-10-19 18:48:21`
+- **Entry Price:** **$81,956.00**
+- **Target 1:** **$82,362.80** (Breakeven Trigger)
+- **Runner Target 2:** **$82,715.36**
+- **Memory Stop Loss:** **$81,684.80**
 - **Status:** **🟢 ACTIVE SPOT HOLD · MANAGING CONTINUOUSLY**
 
 ---
@@ -37,7 +37,9 @@
 | **9** | 2026-10-19 14:41:54 | 2026-10-19 15:05:25 | 23m | `RE-ENGAGEMENT: BREAKOUT MOMENTUM RESUMPTION` | $82,577.60 | $82,733.50 | +0.19% | -0.20% | **-0.01%** | LOSS 🛑 | 1M Volume/Thrust Stalled at Resistance |
 | **10** | 2026-10-19 16:03:42 | 2026-10-19 16:14:04 | 10m | `TAKER IGNITION CONFLUENCE` | $81,824.40 | $82,142.70 | +0.39% | -0.20% | **+0.19%** | WIN 🏆 | 1M Volume/Thrust Stalled at Resistance |
 | **11** | 2026-10-19 16:18:47 | 2026-10-19 17:20:03 | 1h 01m | `TAKER IGNITION CONFLUENCE` | $82,173.00 | $82,330.00 | +0.19% | -0.20% | **-0.01%** | LOSS 🛑 | 1M Volume/Thrust Stalled at Resistance |
-| **12** | 2026-10-19 17:21:57 | *OPEN* | *Holding* | `RE-ENGAGEMENT: BREAKOUT MOMENTUM RESUMPTION` | $82,482.30 | — | — | -0.20% | — | 🟢 **ACTIVE** | Open Position |
+| **12** | 2026-10-19 17:21:57 | 2026-10-19 18:03:07 | 41m | `RE-ENGAGEMENT: BREAKOUT MOMENTUM RESUMPTION` | $82,482.30 | $81,851.80 | -0.76% | -0.20% | **-0.96%** | LOSS 🛑 | Catastrophic Order Book Collapse |
+| **13** | 2026-10-19 18:48:21 | *OPEN* | *Holding* | `TAKER IGNITION CONFLUENCE` | $81,956.00 | — | — | -0.20% | — | 🟢 **ACTIVE** | Open Position |
+| **14** | 2026-10-19 19:45:32 | *OPEN* | *Holding* | `ZEBRA CORE: Test Core Breakout` | $82,000.00 | — | — | -0.20% | — | 🟢 **ACTIVE** | Open Position |
 
 ---
 *BTCTOOL 2.0 Autonomous Spot Execution Engine · Pure Event-Driven Architecture*
