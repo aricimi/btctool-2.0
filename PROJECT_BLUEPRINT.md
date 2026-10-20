@@ -308,6 +308,7 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
 3. **`conviction_engine.py` (Policy Engine — Mind):**
    - Pure cognitive modeling: Evaluates Kinetic Push vs Structural Barrier and emits structured `TradeIntent` objects (`ENTER_CORE_LOT_1`, `SCALE_IN_LOT_2`, `BANK_PROFIT`, `CUT_THESIS`, `RIDE_UNCAPPED`, `HOLD_POSITION`, `WAIT_IN_CASH`).
    - Evaluates Expected Value ($\mathbb{E}[\text{Net PnL}] > \text{fee}$) and asymmetric runways without touching balance or order execution APIs.
+   - Strict Real Gain Runway Gate: Setup A (Dip Turn) strictly requires immediate runway $\ge 0.45\%$ to resistance and positive order book depth ($\tanh_{\text{imb}} \ge 0.0$), preventing micro-scalps into immediate ceilings.
 4. **`risk_engine.py` (Independent Deterministic Risk Gate — Conscience):**
    - **Core Invariant:** *"Models Propose, Risk Disposes."*
    - Independent deterministic gate evaluating `TradeIntent` against 5 non-negotiable safety laws:

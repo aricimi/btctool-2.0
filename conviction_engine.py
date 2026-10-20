@@ -163,13 +163,15 @@ class FreeConvictionEngine:
         # ==================================================================
 
         # 2.1 REAL GAIN HURDLE: If room to target is too small to make real money after fees -> PASS
-        if immediate_runway < MIN_PROJECTED_RUNWAY_PCT and not is_balloon_expanding:
-            return TradeIntent(
-                action="WAIT_IN_CASH",
-                expected_runway_pct=immediate_runway,
-                reason=f"NO REAL GAIN ON TABLE: Room to target is only +{immediate_runway:.2f}% (requires >= {MIN_PROJECTED_RUNWAY_PCT}% to clear fees). Sitting in cash.",
-                telemetry={"immediate_runway": immediate_runway, "support": nearest_support, "resistance": nearest_resistance},
-            )
+        if immediate_runway < MIN_PROJECTED_RUNWAY_PCT:
+            # If not a macro breakout candidate, sit strictly in cash
+            if not (is_balloon_expanding and macro_runway >= 0.90):
+                return TradeIntent(
+                    action="WAIT_IN_CASH",
+                    expected_runway_pct=immediate_runway,
+                    reason=f"NO REAL GAIN ON TABLE: Room to target is only +{immediate_runway:.2f}% (requires >= {MIN_PROJECTED_RUNWAY_PCT}% to clear fees). Sitting in cash.",
+                    telemetry={"immediate_runway": immediate_runway, "support": nearest_support, "resistance": nearest_resistance},
+                )
 
         # 2.2 SLOW MARKET: Lines are horizontal and slow -> Stay in cash
         if is_slow_market and immediate_runway < 0.60:
@@ -183,7 +185,7 @@ class FreeConvictionEngine:
         # 2.3 SETUP A: BOTTOM / DIP TURN PREDICTION (BUYING LOW AT SUPPORT)
         dist_to_support = abs(price - nearest_support)
         is_at_support_floor = dist_to_support <= (0.75 * atr)
-        is_absorption_confirmed = (tanh_imb > 0.15 or absorption_idx > 12.0 or velocity_slowing)
+        is_absorption_confirmed = (tanh_imb > 0.10 or absorption_idx > 12.0) and tanh_imb >= 0.0 and immediate_runway >= MIN_PROJECTED_RUNWAY_PCT
 
         if is_at_support_floor and is_absorption_confirmed:
             target = nearest_resistance
