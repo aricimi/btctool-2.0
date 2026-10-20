@@ -17,6 +17,8 @@ from market_state import MarketState
 from conviction_engine import FreeConvictionEngine
 from risk_engine import RiskEngine, TradeIntent, RiskDecision
 from execution_manager import ExecutionManager
+from trade_logger import TradeJournal
+from dream_engine import DreamEngine
 
 
 class TestZebraBot(unittest.TestCase):
@@ -31,10 +33,12 @@ class TestZebraBot(unittest.TestCase):
         self.execution = ExecutionManager(state_file="test_bot_state.json", journal=self.mock_journal)
 
     def tearDown(self):
-        if os.path.exists("test_bot_state.json"):
-            os.remove("test_bot_state.json")
-        if os.path.exists("test_bot_state.json.tmp"):
-            os.remove("test_bot_state.json.tmp")
+        for f in ["test_bot_state.json", "test_bot_state.json.tmp", "test_episodes.jsonl", "test_trade_history.json", "test_journal.md", "test_journal.csv"]:
+            if os.path.exists(f):
+                try:
+                    os.remove(f)
+                except Exception:
+                    pass
 
     def test_01_synthetic_stream_and_candle_aggregation(self):
         """Verify that trade ticks aggregate into 11-timeframe ring buffers."""
@@ -286,6 +290,109 @@ class TestZebraBot(unittest.TestCase):
         # Close position
         self.execution.close_position(exit_price=82800.0, exit_reason="Trailing Structural Target")
         self.assertIsNone(self.execution.active_trade)
+
+    def test_06_subconscious_reflexes_and_shadow_self(self):
+        """Verify Priority-0 Reflexes (Blind, Motor, Safety) and Shadow Self stress sizing."""
+        base_intent = TradeIntent(
+            action="ENTER_CORE_LOT_1",
+            scenario="DIP_ABSORPTION_TURN",
+            entry_price=82000.0,
+            target_price=82600.0,
+            proposed_stop=81700.0,
+            expected_runway_pct=0.73,
+        )
+        base_matrix = {
+            "latest_price": 82000.0,
+            "feed_latency_ms": 120.0,
+            "spread_pct": 0.02,
+            "composite_atr": 200.0,
+            "tanh_imbalance": 0.25,
+            "absorption_index": 18.0,
+            "multi_screen_bounds": {
+                "nearest_support": 81750.0,
+                "nearest_resistance": 82600.0,
+                "macro_ceiling": 83500.0,
+                "immediate_runway_pct": 0.73,
+            },
+        }
+
+        # 1. BLIND REFLEX: Stale WebSocket feed (>5000ms latency)
+        blind_matrix = dict(base_matrix, feed_latency_ms=6200.0)
+        blind_decision = self.risk_gate.evaluate(base_intent, blind_matrix)
+        self.assertEqual(blind_decision.status, "REJECT")
+        self.assertEqual(blind_decision.action, "WAIT_IN_CASH")
+        self.assertIn("REFLEX_BLIND_MODE", blind_decision.reason)
+
+        # 2. BLIND REFLEX: Anomalous bid/ask spread (>0.25%)
+        spread_matrix = dict(base_matrix, spread_pct=0.35)
+        spread_decision = self.risk_gate.evaluate(base_intent, spread_matrix)
+        self.assertEqual(spread_decision.status, "REJECT")
+        self.assertIn("REFLEX_BLIND_MODE", spread_decision.reason)
+
+        # 3. MOTOR REFLEX: Consecutive execution API errors (>=2)
+        motor_decision = self.risk_gate.evaluate(base_intent, base_matrix, consecutive_api_errors=2)
+        self.assertEqual(motor_decision.status, "REJECT")
+        self.assertIn("REFLEX_MOTOR_LOCKDOWN", motor_decision.reason)
+
+        # 4. SAFETY REFLEX: Daily drawdown limit breached (>=2.0%)
+        safety_decision = self.risk_gate.evaluate(base_intent, base_matrix, daily_drawdown_pct=2.1)
+        self.assertEqual(safety_decision.status, "REJECT")
+        self.assertIn("REFLEX_SAFETY_LOCKDOWN", safety_decision.reason)
+
+        # 5. SHADOW SELF: Worst-case stress drop clamps Lot 1 size factor
+        stress_matrix = dict(base_matrix)
+        stress_matrix["composite_atr"] = 400.0
+        stress_matrix["multi_screen_bounds"] = dict(base_matrix["multi_screen_bounds"], nearest_support=81000.0, nearest_resistance=83500.0)
+        stress_decision = self.risk_gate.evaluate(base_intent, stress_matrix, max_stress_risk_pct=0.60)
+        self.assertEqual(stress_decision.status, "MODIFY")
+        self.assertLess(stress_decision.approved_size_factor, 1.0)
+        self.assertGreater(stress_decision.approved_size_factor, 0.0)
+        self.assertGreater(stress_decision.stress_loss_pct, 0.60)
+
+    def test_07_episodic_memory_and_dream_engine(self):
+        """Verify EpisodeLog calculation (e = r - r_hat, regret) and DreamEngine analysis."""
+        journal = TradeJournal()
+        journal.history_file = "test_trade_history.json"
+        journal.episodes_file = "test_episodes.jsonl"
+        journal.journal_file = "test_journal.md"
+        journal.csv_file = "test_journal.csv"
+        journal.data = {"trades": [], "stats": {}}
+
+        # Record entry with pre_state
+        trade_id = journal.record_entry(
+            setup_name="ZEBRA WHALE: TEST_SETUP",
+            entry_price=82000.0,
+            stop_loss=81600.0,
+            target_1=82800.0,
+            target_2=0.0,
+            rationale="Test Setup Rationale",
+            feature_vector={"regime": "BULL_TREND", "absorption_index": 20.0},
+            trade_intent={"expected_runway_pct": 0.98},
+            risk_decision={"approved_size_factor": 1.0, "stress_loss_pct": 0.49},
+        )
+        self.assertEqual(trade_id, 1)
+
+        # Record exit (price: 82500 -> gross +0.61%, net +0.41%)
+        journal.record_exit(exit_price=82500.0, exit_reason="Target Trailed")
+
+        # Verify episode stored in episodes.jsonl
+        episodes = journal.get_episodes(limit=10)
+        self.assertEqual(len(episodes), 1)
+        ep = episodes[0]
+        self.assertEqual(ep["episode_id"], 1)
+        self.assertEqual(ep["gross_pnl_pct"], 0.61)
+        self.assertEqual(ep["net_pnl_pct"], 0.41)
+        self.assertEqual(ep["predicted_runway_pct"], 0.98)
+        self.assertEqual(ep["prediction_error_pct"], round(0.61 - 0.98, 2))
+        self.assertEqual(ep["regret"], 0.37)
+
+        # Run DreamEngine on the test episode file
+        dreamer = DreamEngine(episodes_file="test_episodes.jsonl", history_file="test_trade_history.json")
+        analysis = dreamer.analyze()
+        self.assertEqual(analysis["total_episodes"], 1)
+        self.assertEqual(analysis["win_rate_pct"], 100.0)
+        self.assertEqual(analysis["mean_prediction_error"], -0.37)
+        self.assertEqual(analysis["mean_regret"], 0.37)
 
 
 if __name__ == "__main__":

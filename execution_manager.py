@@ -104,8 +104,11 @@ class ExecutionManager:
         invalidation_floor: float,
         reason: str,
         p_up: float = 0.70,
+        feature_vector: Optional[dict] = None,
+        trade_intent: Optional[dict] = None,
+        risk_decision: Optional[dict] = None,
     ) -> dict:
-        """Opens Core Position (Lot 1) with specific Whale Thesis parameters."""
+        """Opens Core Position (Lot 1) with specific Whale Thesis parameters and episodic state."""
         trade_id = self.journal.record_entry(
             setup_name=f"ZEBRA WHALE: {scenario}",
             entry_price=entry_price,
@@ -113,6 +116,9 @@ class ExecutionManager:
             target_1=target_price,
             target_2=0.0,
             rationale=reason,
+            feature_vector=feature_vector,
+            trade_intent=trade_intent,
+            risk_decision=risk_decision,
         )
 
         self.active_trade = {
@@ -126,6 +132,11 @@ class ExecutionManager:
             "tranche_2_added": False,
             "timestamp": time.time(),
             "reason": reason,
+            "pre_state": {
+                "feature_vector": feature_vector or {},
+                "trade_intent": trade_intent or {},
+                "risk_decision": risk_decision or {},
+            },
         }
         self.save_state(market_state="IN_POSITION")
         logger.info(f"[Execution] Core Lot 1 opened: ${entry_price:,.2f} | Scenario: {scenario} | Target: ${target_price:,.2f}")
@@ -162,13 +173,32 @@ class ExecutionManager:
         self.save_state(market_state="SCALED_LOT_2")
         logger.info(f"[Execution] Lot 2 scaled in at ${price:,.2f}. Blended Entry=${blended_entry:,.2f}")
 
-    def close_position(self, exit_price: float, exit_reason: str, p_up: float = 0.50):
-        """Closes position immediately at market and updates ledger."""
+    def close_position(
+        self,
+        exit_price: float,
+        exit_reason: str,
+        p_up: float = 0.50,
+        feature_vector: Optional[dict] = None,
+        trade_intent: Optional[dict] = None,
+        risk_decision: Optional[dict] = None,
+    ):
+        """Closes position immediately at market and updates ledger + episodic memory."""
         if not self.active_trade:
             return
 
+        saved_pre = self.active_trade.get("pre_state", {})
+        f_vec = feature_vector or saved_pre.get("feature_vector")
+        t_intent = trade_intent or saved_pre.get("trade_intent")
+        r_decision = risk_decision or saved_pre.get("risk_decision")
+
         full_reason = f"ZEBRA EXIT: {exit_reason}"
-        self.journal.record_exit(exit_price=exit_price, exit_reason=full_reason)
+        self.journal.record_exit(
+            exit_price=exit_price,
+            exit_reason=full_reason,
+            feature_vector=f_vec,
+            trade_intent=t_intent,
+            risk_decision=r_decision,
+        )
         self.active_trade = None
         self.save_state(market_state="SCANNING")
         self.journal.flush_pending_csv()

@@ -309,20 +309,38 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
    - Pure cognitive modeling: Evaluates Kinetic Push vs Structural Barrier and emits structured `TradeIntent` objects (`ENTER_CORE_LOT_1`, `SCALE_IN_LOT_2`, `BANK_PROFIT`, `CUT_THESIS`, `RIDE_UNCAPPED`, `HOLD_POSITION`, `WAIT_IN_CASH`).
    - Evaluates Expected Value ($\mathbb{E}[\text{Net PnL}] > \text{fee}$) and asymmetric runways without touching balance or order execution APIs.
    - Strict Real Gain Runway Gate: Setup A (Dip Turn) strictly requires immediate runway $\ge 0.45\%$ to resistance and positive order book depth ($\tanh_{\text{imb}} \ge 0.0$), preventing micro-scalps into immediate ceilings.
-4. **`risk_engine.py` (Independent Deterministic Risk Gate — Conscience):**
+4. **`risk_engine.py` (Independent Deterministic Risk Gate — Conscience & Nervous System):**
    - **Core Invariant:** *"Models Propose, Risk Disposes."*
-   - Independent deterministic gate evaluating `TradeIntent` against 5 non-negotiable safety laws:
-     1. *Expectancy Gate:* Rejects entries with projected runway $< 0.45\%$ or reward-to-risk $< 2.0:1$.
+   - **Priority-0 Subconscious Fallback Reflexes (`bot.txt` Nervous System):**
+     1. *Blind Reflex:* If WebSocket feed latency $> 5,000\text{ms}$, or bid/ask spread $> 0.25\%$, or book depth collapses $\rightarrow$ VETO with `REFLEX_BLIND_MODE` (freeze all entries, cancel pending limit orders, hold existing position).
+     2. *Motor Reflex:* If consecutive exchange API execution errors $\ge 2$ $\rightarrow$ VETO with `REFLEX_MOTOR_LOCKDOWN` until connectivity clears.
+     3. *Safety Reflex:* If daily portfolio drawdown $\ge 2.0\%$ $\rightarrow$ VETO with `REFLEX_SAFETY_LOCKDOWN` (disables all new entries; allows only risk-reducing exits).
+   - **Deterministic Risk Invariants (Evaluated after Reflexes Clear):**
+     1. *Expectancy Gate:* Rejects entries with projected runway $< 0.45\%$ or reward-to-risk $< 1.5:1$.
      2. *Noise-Immune Floor Gate:* Enforces ATR-anchored structural stop buffers ($\min(P - 0.8\text{ATR}, P - \text{clamped\_risk})$).
      3. *Anti-Churn / Post-Stop Clearance:* Vetoes breakout intents proposed at or below previous invalidation exit price levels.
      4. *Scale-In / Invalidation Harmonization:* Verifies stop sits strictly below Lot 2 scale-in discount zone.
      5. *In-Situ Memory Soft Stop:* Queries live order book depth when floor is touched. Holds with noise immunity if resting bids absorb sweep ($A_i > 15.0$); approves cut only on bid collapse. Hard backstop ($0.8 \times \text{ATR}$) prevents bag-holding.
-5. **`execution_manager.py` (Execution Adapters & Memory — Hands & Ledger):**
+     6. *Shadow Self Worst-Case Stress Simulation Gate (`bot.txt`):* Calculates simulated adverse drop to noise-immune stop ($\text{stress\_loss\_pct} = \frac{P_{\text{entry}} - P_{\text{stop}}}{P_{\text{entry}}} \times 100$). If stress drop exceeds max risk budget ($0.75\%$), dynamically clamps Lot 1 sizing multiplier: $\text{approved\_size\_factor} = \min(1.0, \frac{\text{max\_risk}}{\text{stress\_drop}})$.
+5. **`trade_logger.py` & `episodes.jsonl` (Episodic Memory Layer — `bot.txt` Organ 6):**
+   - Records full pre-trade cognitive beliefs (`FeatureVector`), `TradeIntent`, and `RiskDecision` at trade entry.
+   - On trade exit, calculates:
+     - Realized return ($r$) vs Predicted runway ($\hat{r}$).
+     - Prediction Error: $e = r - \hat{r}$.
+     - Mathematical Regret: $\text{regret} = |e| \times \text{approved\_size\_factor}$.
+     - Risk-Adjusted Reward: $\text{reward} = \frac{\text{net\_pnl\_pct}}{\max(1.0, \text{stress\_loss\_pct})}$.
+   - Appends complete episode record to `episodes.jsonl` for offline auditing.
+6. **`dream_engine.py` (Offline Dreaming & Parameter Recalibration — `bot.txt` Phase 3):**
+   - Standalone offline calibration organ that replays saved trade episodes from `episodes.jsonl` and `trade_history.json`.
+   - Computes win rate, mean prediction error, mean regret, and performance breakdown by market regime (`BULL_TREND`, `DEAD_CHOP`, `EXPANDING_BALLOON`).
+   - Generates actionable statistical directives for dynamic runway hurdles and stop multipliers without risking live capital.
+   - Exports human-readable audit report to `dream_report.md`.
+7. **`execution_manager.py` (Execution Adapters & Memory — Hands & Ledger):**
    - Clean-slate archiving: Legacy logs safely archived to `archive_legacy_trades/`. Fresh autonomous ledger starting from Trade #1.
-   - Manages active thesis parameters: `scenario`, `target_price`, `invalidation_floor`, `trailing_stop`.
+   - Manages active thesis parameters: `scenario`, `target_price`, `invalidation_floor`, `trailing_stop`, and `pre_state`.
    - Dynamic trailing stop updates (`update_trailing_stop`) and macro target stepping (`update_target_price`).
-   - Dispatches rich instant Telegram alerts on every action (Entry, Scale-in, Bank Profit, Trailing Stop Ratchet, Thesis Cut).
-   - Synchronizes `bot_state.json`, `trade_journal.csv` (UTF-8-BOM Excel lock-proof), `trade_journal.md`, and `trade_history.json`.
+   - Dispatches rich instant Telegram alerts on every action (Entry, Scale-in, Bank Profit, Trailing Stop Ratchet, Thesis Cut, Shadow Self Clamp).
+   - Synchronizes `bot_state.json`, `trade_journal.csv` (UTF-8-BOM Excel lock-proof), `trade_journal.md`, `trade_history.json`, and `episodes.jsonl`.
 
 
 

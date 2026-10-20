@@ -64,6 +64,8 @@ class RiskDecision:
     reason: str = ""
     expected_runway_pct: float = 0.0
     gain_pct: float = 0.0
+    approved_size_factor: float = 1.0  # Volatility / Stress adjusted position sizing multiplier (0.1 to 1.0)
+    stress_loss_pct: float = 0.0       # Shadow Self simulated worst-case drop to stop
     telemetry: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
@@ -93,14 +95,65 @@ class RiskEngine:
         self.last_invalidation_timestamp = float(timestamp)
         logger.info(f"[RiskGate] Recorded invalidation level: ${self.last_invalidation_exit_price:,.2f}")
 
-    def evaluate(self, intent: TradeIntent, matrix: dict, active_trade: Optional[dict] = None) -> RiskDecision:
+    def evaluate(
+        self,
+        intent: TradeIntent,
+        matrix: dict,
+        active_trade: Optional[dict] = None,
+        consecutive_api_errors: int = 0,
+        daily_drawdown_pct: float = 0.0,
+        max_daily_drawdown: float = 2.0,
+        max_stress_risk_pct: float = 0.75,
+    ) -> RiskDecision:
         """
-        Evaluates the Mind's TradeIntent against the 5 cold invariant risk gates.
+        Evaluates the Mind's TradeIntent against Priority-0 Subconscious Reflexes,
+        In-Situ Memory Soft Stop, and deterministic Risk Invariants.
         Returns a concrete RiskDecision: ALLOW, MODIFY, or REJECT.
         """
         price = float(matrix.get("latest_price", 0.0))
+        feed_latency_ms = float(matrix.get("feed_latency_ms", 0.0))
+        spread_pct = float(matrix.get("spread_pct", 0.0))
+
+        # ==================================================================
+        # PRIORITY 0: SUBCONSCIOUS FALLBACK REFLEXES (bot.txt Nervous System)
+        # ==================================================================
+        # Reflex 1: Blind Reflex (Sensory Feed Failure)
         if price <= 0:
-            return RiskDecision(status="REJECT", action="WAIT_IN_CASH", reason="Invalid price data")
+            return RiskDecision(status="REJECT", action="WAIT_IN_CASH", reason="REFLEX_BLIND_MODE: Invalid price data")
+        if feed_latency_ms > 5000.0:
+            return RiskDecision(
+                status="REJECT",
+                action="WAIT_IN_CASH",
+                reason=f"REFLEX_BLIND_MODE: WebSocket stream latency ({feed_latency_ms:.0f}ms) > 5,000ms. Trading frozen until sight returns.",
+                telemetry={"feed_latency_ms": feed_latency_ms},
+            )
+        if spread_pct > 0.25:
+            return RiskDecision(
+                status="REJECT",
+                action="WAIT_IN_CASH",
+                reason=f"REFLEX_BLIND_MODE: Anomalous bid/ask spread ({spread_pct:.2f}%). Execution paused to prevent slippage shock.",
+                telemetry={"spread_pct": spread_pct},
+            )
+
+        # Reflex 2: Motor Reflex (Exchange / API Execution Failure)
+        if consecutive_api_errors >= 2:
+            return RiskDecision(
+                status="REJECT",
+                action="WAIT_IN_CASH",
+                reason=f"REFLEX_MOTOR_LOCKDOWN: {consecutive_api_errors} consecutive exchange API failures. Hands frozen until connectivity clears.",
+                telemetry={"consecutive_api_errors": consecutive_api_errors},
+            )
+
+        # Reflex 3: Safety Reflex (Drawdown Breach / Capital Preservation)
+        if daily_drawdown_pct >= max_daily_drawdown:
+            # Conscience paralysis: exits are allowed, but ALL new entries are unconditionally rejected
+            if intent.action in ("ENTER_CORE_LOT_1", "SCALE_IN_LOT_2"):
+                return RiskDecision(
+                    status="REJECT",
+                    action="WAIT_IN_CASH",
+                    reason=f"REFLEX_SAFETY_LOCKDOWN: Daily drawdown ({daily_drawdown_pct:.2f}%) >= {max_daily_drawdown:.2f}% limit. Account locked against further entries.",
+                    telemetry={"daily_drawdown_pct": daily_drawdown_pct},
+                )
 
         atr = float(matrix.get("composite_atr", 250.0))
         tanh_imb = float(matrix.get("tanh_imbalance", 0.0))
@@ -269,16 +322,39 @@ class RiskEngine:
             else:
                 approved_target = round(intent.target_price, 2)
 
+            # --------------------------------------------------------------
+            # INVARIANT 7: SHADOW SELF WORST-CASE SIMULATION GATE (bot.txt)
+            # --------------------------------------------------------------
+            # Simulated adverse drop to approved noise-immune stop:
+            stress_loss_pct = round(((price - approved_stop) / price) * 100.0, 3)
+            size_factor = 1.0
+            if stress_loss_pct > max_stress_risk_pct and stress_loss_pct > 0:
+                # Dynamically clamp sizing so that dollar risk never breaches risk budget
+                size_factor = round(max(0.1, max_stress_risk_pct / stress_loss_pct), 2)
+                logger.info(
+                    f"[ShadowSelf] Stress drop ({stress_loss_pct:.2f}%) exceeds budget ({max_stress_risk_pct:.2f}%). Clamping Lot 1 size factor to {size_factor:.2f}"
+                )
+
+            final_status = "ALLOW" if (approved_stop == round(intent.proposed_stop, 2) and size_factor == 1.0) else "MODIFY"
+
+            combined_telemetry = dict(intent.telemetry)
+            combined_telemetry.update({
+                "shadow_stress_loss_pct": stress_loss_pct,
+                "approved_size_factor": size_factor,
+            })
+
             return RiskDecision(
-                status="ALLOW" if approved_stop == round(intent.proposed_stop, 2) else "MODIFY",
+                status=final_status,
                 action="ENTER_CORE_LOT_1",
                 scenario=intent.scenario,
                 entry_price=price,
                 target_price=approved_target,
                 trailing_stop=approved_stop,
                 expected_runway_pct=intent.expected_runway_pct,
+                approved_size_factor=size_factor,
+                stress_loss_pct=stress_loss_pct,
                 reason=intent.reason,
-                telemetry=intent.telemetry,
+                telemetry=combined_telemetry,
             )
 
         # Default fallback: Wait in cash

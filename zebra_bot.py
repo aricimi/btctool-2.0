@@ -152,6 +152,7 @@ class ZebraBotEngine:
         self.risk_gate = RiskEngine()
         self.execution = ExecutionManager()
         self.notifier = TelegramNotifier()
+        self.consecutive_api_errors = 0
 
         if clean_start:
             self.execution.reset_clean_slate()
@@ -194,8 +195,13 @@ class ZebraBotEngine:
                 active_trade = self.execution.active_trade
                 intent = self.brain.evaluate(matrix, active_trade=active_trade)
 
-                # 3. RISK GATE (Conscience): Risk Disposes
-                decision = self.risk_gate.evaluate(intent, matrix, active_trade=active_trade)
+                # 3. RISK GATE (Conscience): Risk Disposes (Priority-0 Reflexes & Invariant Rules)
+                decision = self.risk_gate.evaluate(
+                    intent,
+                    matrix,
+                    active_trade=active_trade,
+                    consecutive_api_errors=self.consecutive_api_errors,
+                )
 
                 action = decision.get("action")
                 p_up = decision.get("p_up", 0.5)
@@ -210,6 +216,22 @@ class ZebraBotEngine:
                     inval_p = float(decision.get("trailing_stop", decision.get("invalidation_floor", entry_p * 0.995)))
                     reason = decision["reason"]
                     runway_pct = float(decision.get("expected_runway_pct", 0.0))
+                    size_factor = float(decision.get("approved_size_factor", 1.0))
+                    stress_loss_pct = float(decision.get("stress_loss_pct", 0.0))
+
+                    # Snapshot compact pre-trade feature vector for episodic memory
+                    f_vec = {
+                        "regime": matrix.get("balloon_geometry", {}).get("regime", "UNKNOWN"),
+                        "composite_atr": float(matrix.get("composite_atr", 0.0)),
+                        "tanh_imbalance": float(matrix.get("tanh_imbalance", 0.0)),
+                        "absorption_index": float(matrix.get("absorption_index", 0.0)),
+                        "immediate_runway_pct": float(matrix.get("multi_screen_bounds", {}).get("immediate_runway_pct", 0.0)),
+                        "macro_runway_pct": float(matrix.get("multi_screen_bounds", {}).get("macro_runway_pct", 0.0)),
+                        "trade_velocity": float(matrix.get("trade_velocity", 0.0)),
+                        "oi_zscore": float(matrix.get("oi_zscore", 0.0)),
+                        "funding_rate": float(matrix.get("funding_rate", 0.0)),
+                        "feed_latency_ms": float(matrix.get("feed_latency_ms", 0.0)),
+                    }
 
                     self.execution.open_core_lot_1(
                         entry_price=entry_p,
@@ -217,14 +239,24 @@ class ZebraBotEngine:
                         target_price=target_p,
                         invalidation_floor=inval_p,
                         reason=reason,
+                        feature_vector=f_vec,
+                        trade_intent=intent.__dict__ if hasattr(intent, "__dict__") else dict(intent),
+                        risk_decision=decision.__dict__ if hasattr(decision, "__dict__") else dict(decision),
                     )
+
+                    stress_clamp_note = (
+                        f"<b>Shadow Self Stress Clamp:</b> Lot 1 scaled to {size_factor * 100:.0f}% (Worst-Case Risk: {stress_loss_pct:.2f}%)\n"
+                        if size_factor < 1.0 else ""
+                    )
+
                     self.notifier.send_message(
                         f"🟢 <b>ZEBRA BOT: ENTER CORE LOT 1</b>\n\n"
                         f"<b>Pair:</b> BTC/USDT (Spot)\n"
                         f"<b>Scenario:</b> <code>{scenario}</code>\n"
                         f"<b>Entry Price:</b> ${entry_p:,.2f}\n"
                         f"<b>Target:</b> ${target_p:,.2f} (+{runway_pct:.2f}%)\n"
-                        f"<b>Invalidation Floor:</b> ${inval_p:,.2f}\n\n"
+                        f"<b>Invalidation Floor:</b> ${inval_p:,.2f}\n"
+                        f"{stress_clamp_note}\n"
                         f"<b>Whale Thesis:</b> {reason}\n"
                         f"Patience active: Holding through sub-minute noise toward target."
                     )

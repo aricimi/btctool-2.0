@@ -14,6 +14,7 @@ from typing import Optional, Dict, Any, List
 JOURNAL_MD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trade_journal.md")
 JOURNAL_CSV_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trade_journal.csv")
 HISTORY_JSON_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trade_history.json")
+EPISODES_JSONL_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "episodes.jsonl")
 
 OKX_ROUNDTRIP_FEE_PCT = 0.20  # 0.10% buy + 0.10% sell
 
@@ -25,6 +26,7 @@ class TradeJournal:
         self.history_file = HISTORY_JSON_FILE
         self.journal_file = JOURNAL_MD_FILE
         self.csv_file = JOURNAL_CSV_FILE
+        self.episodes_file = EPISODES_JSONL_FILE
         self.pending_csv_update = False
         self._load_or_init()
 
@@ -124,11 +126,28 @@ class TradeJournal:
         }
         self._recalculate_and_save()
 
-    def record_entry(self, setup_name: str, entry_price: float, stop_loss: float,
-                     target_1: float, target_2: float, rationale: str = "") -> int:
-        """Records a new open trade."""
+    def record_entry(
+        self,
+        setup_name: str,
+        entry_price: float,
+        stop_loss: float,
+        target_1: float,
+        target_2: float,
+        rationale: str = "",
+        feature_vector: Optional[dict] = None,
+        trade_intent: Optional[dict] = None,
+        risk_decision: Optional[dict] = None,
+    ) -> int:
+        """Records a new open trade with pre-trade cognitive and risk state."""
         now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         trade_id = len(self.data["trades"]) + 1
+
+        pred_runway = 0.0
+        if trade_intent and trade_intent.get("expected_runway_pct"):
+            pred_runway = float(trade_intent["expected_runway_pct"])
+        elif entry_price > 0 and target_1 > entry_price:
+            pred_runway = ((target_1 - entry_price) / entry_price) * 100.0
+
         new_trade = {
             "id": trade_id,
             "type": "SPOT_BUY",
@@ -141,19 +160,37 @@ class TradeJournal:
             "target_1": round(target_1, 2),
             "target_2": round(target_2, 2),
             "stop_loss": round(stop_loss, 2),
+            "predicted_runway_pct": round(pred_runway, 2),
+            "prediction_error_pct": None,
+            "regret": None,
             "gross_pnl_pct": None,
             "okx_fee_pct": -OKX_ROUNDTRIP_FEE_PCT,
             "net_pnl_pct": None,
             "exit_reason": None,
             "rationale": rationale,
-            "status": "ACTIVE_OPEN"
+            "pre_state": {
+                "feature_vector": feature_vector or {},
+                "trade_intent": trade_intent or {},
+                "risk_decision": risk_decision or {},
+            },
+            "status": "ACTIVE_OPEN",
         }
         self.data["trades"].append(new_trade)
         self._recalculate_and_save()
         return trade_id
 
-    def record_exit(self, exit_price: float, exit_reason: str) -> None:
-        """Closes the current active open trade with realized PnL calculations."""
+    def record_exit(
+        self,
+        exit_price: float,
+        exit_reason: str,
+        feature_vector: Optional[dict] = None,
+        trade_intent: Optional[dict] = None,
+        risk_decision: Optional[dict] = None,
+    ) -> None:
+        """
+        Closes the active open trade, computes prediction error and mathematical regret,
+        and records a complete EpisodeLog in episodes.jsonl (bot.txt Memory Layer).
+        """
         now_dt = datetime.datetime.now()
         now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -165,7 +202,6 @@ class TradeJournal:
                 break
 
         if not open_trade:
-            # Fallback: create closed trade if missed
             return
 
         entry_p = open_trade["entry_price"]
@@ -184,15 +220,74 @@ class TradeJournal:
         except Exception:
             pass
 
+        # Retrieve pre-trade state
+        saved_pre = open_trade.get("pre_state", {})
+        f_vec = feature_vector or saved_pre.get("feature_vector", {})
+        t_intent = trade_intent or saved_pre.get("trade_intent", {})
+        r_decision = risk_decision or saved_pre.get("risk_decision", {})
+
+        # Prediction Error & Regret Math (bot.txt lines 2615-2691)
+        pred_runway = float(open_trade.get("predicted_runway_pct", 0.0) or t_intent.get("expected_runway_pct", 0.0))
+        error_pct = round(gross_pct - pred_runway, 2)
+        size_factor = float(r_decision.get("approved_size_factor", 1.0))
+        regret = round(abs(error_pct) * size_factor, 2)
+        stress_loss = float(r_decision.get("stress_loss_pct", 1.0))
+        risk_adj_reward = round(net_pct / max(stress_loss, 1.0), 3)
+
         open_trade["exit_time"] = now_str
         open_trade["exit_price"] = exit_p
         open_trade["duration"] = duration_str
         open_trade["gross_pnl_pct"] = gross_pct
         open_trade["net_pnl_pct"] = net_pct
+        open_trade["prediction_error_pct"] = error_pct
+        open_trade["regret"] = regret
+        open_trade["risk_adjusted_reward"] = risk_adj_reward
         open_trade["exit_reason"] = exit_reason
         open_trade["status"] = "CLOSED_PROFIT" if net_pct >= 0 else "CLOSED_LOSS"
 
+        # Persist full episodic memory to episodes.jsonl
+        episode_log = {
+            "episode_id": open_trade["id"],
+            "entry_time": open_trade["entry_time"],
+            "exit_time": now_str,
+            "setup": open_trade.get("setup", "WHALE_TRADE"),
+            "entry_price": entry_p,
+            "exit_price": exit_p,
+            "duration": duration_str,
+            "gross_pnl_pct": gross_pct,
+            "net_pnl_pct": net_pct,
+            "exit_reason": exit_reason,
+            "predicted_runway_pct": pred_runway,
+            "prediction_error_pct": error_pct,
+            "regret": regret,
+            "risk_adjusted_reward": risk_adj_reward,
+            "status": open_trade["status"],
+            "feature_vector": f_vec,
+            "trade_intent": t_intent,
+            "risk_decision": r_decision,
+        }
+        try:
+            with open(self.episodes_file, "a", encoding="utf-8") as ef:
+                ef.write(json.dumps(episode_log) + "\n")
+        except Exception as e:
+            print(f"[Journal] Error writing episode log: {e}")
+
         self._recalculate_and_save()
+
+    def get_episodes(self, limit: int = 100) -> List[dict]:
+        """Reads recent episodes from episodes.jsonl."""
+        if not os.path.exists(self.episodes_file):
+            return []
+        episodes = []
+        try:
+            with open(self.episodes_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        episodes.append(json.loads(line))
+        except Exception as e:
+            print(f"[Journal] Error reading episodes: {e}")
+        return episodes[-limit:]
 
     def _recalculate_and_save(self) -> None:
         """Calculates running stats, persists JSON, and renders Markdown."""

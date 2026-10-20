@@ -289,13 +289,27 @@ class MarketState:
             "funding_rate": stream.funding_rate,
         }
 
-        # 1. Anti-Spoof L2 Order Book Metrics
+        # 1. Sensory Health & Microstructure Telemetry
+        last_ts = getattr(stream, "last_update_ts", 0.0)
+        feed_latency_ms = (t0 - last_ts) * 1000.0 if last_ts > 0 else 0.0
+        best_bid = float(stream.best_bid)
+        best_ask = float(stream.best_ask)
+        spread = max(best_ask - best_bid, 0.0)
+        spread_pct = (spread / stream.latest_price) * 100.0 if stream.latest_price > 0 else 0.0
+        is_feed_healthy = (feed_latency_ms < 5000.0) and (spread_pct < 0.25) and (stream.latest_price > 0)
+
+        matrix["feed_latency_ms"] = feed_latency_ms
+        matrix["spread"] = spread
+        matrix["spread_pct"] = spread_pct
+        matrix["is_feed_healthy"] = is_feed_healthy
+
+        # 2. Anti-Spoof L2 Order Book Metrics
         bid_vol, ask_vol, tanh_imbalance = stream.get_anti_spoof_depth(distance_pct=0.005)
         matrix["bid_depth_05"] = bid_vol
         matrix["ask_depth_05"] = ask_vol
         matrix["tanh_imbalance"] = tanh_imbalance
 
-        # 2. Multi-Timeframe Technical Indicators across all 11 horizons
+        # 3. Multi-Timeframe Technical Indicators across all 11 horizons
         tf_indicators = {}
         for tf in stream.buffers.keys():
             candles = stream.get_candles(tf)
