@@ -237,6 +237,32 @@ class ZebraBotEngine:
                         f"<b>Reason:</b> Pullback absorbed by resting institutional bids. Multiplying profit on rebound."
                     )
 
+                elif action == "RIDE_UNCAPPED":
+                    macro_target = float(decision.get("target_price", 0.0))
+                    new_stop = float(decision.get("trailing_stop", 0.0))
+                    gain_pct = float(decision.get("gain_pct", 0.0))
+                    current_target = active_trade.get("target_price", 0.0) if active_trade else 0.0
+
+                    if new_stop > 0:
+                        self.execution.update_trailing_stop(new_stop)
+                    if macro_target > 0:
+                        self.execution.update_target_price(macro_target)
+
+                    # Notify once when uncapped expansion begins
+                    if macro_target > current_target and macro_target > 0:
+                        self.notifier.send_message(
+                            f"🚀 <b>ZEBRA BOT: RIDING MACRO BALLOON (+{gain_pct*100:.2f}%)</b>\n\n"
+                            f"<b>BTC Price:</b> ${matrix['latest_price']:,.2f}\n"
+                            f"<b>Macro Target Stepped To:</b> ${macro_target:,.2f}\n"
+                            f"<b>Trailing Stop Ratcheted To:</b> ${new_stop:,.2f}\n\n"
+                            f"<b>Engine Logic:</b> Balloon expanding outward with open overhead space. Uncapped wave runner active."
+                        )
+
+                elif action == "HOLD_POSITION":
+                    new_stop = float(decision.get("trailing_stop", 0.0))
+                    if new_stop > 0:
+                        self.execution.update_trailing_stop(new_stop)
+
                 elif action == "BANK_PROFIT":
                     exit_p = float(matrix["latest_price"])
                     reason = decision["reason"]
@@ -287,28 +313,40 @@ class ZebraBotEngine:
             await asyncio.sleep(1.0)
 
     def _handle_telegram_cmd(self, cmd: str, matrix: dict, p_up: float = 0.0):
-        """Responds to on-demand Telegram commands with Whale & Liquidity telemetry."""
+        """Responds to on-demand Telegram commands with Whale & Multi-Screen telemetry."""
         if cmd in ("/status", "/ping", "/info"):
             price = matrix.get("latest_price", 0.0)
             tanh_imb = matrix.get("tanh_imbalance", 0.0)
-            regime_data = matrix.get("regime_analysis", {})
-            liq_gravity = matrix.get("liquidity_gravity", {})
-            regime = regime_data.get("regime", "UNKNOWN")
-            runway = regime_data.get("runway_pct", 0.0)
-            fuel_ratio = liq_gravity.get("fuel_ratio", 1.0)
-            overhead_fuel = liq_gravity.get("overhead_fuel_pct", 0.0)
-            downside_fuel = liq_gravity.get("downside_fuel_pct", 0.0)
+            absorption = matrix.get("absorption_index", 0.0)
+
+            bounds = matrix.get("multi_screen_bounds", {})
+            balloon = matrix.get("balloon_geometry", {})
+            micro_turn = matrix.get("micro_turn", {})
+
+            nearest_sup = bounds.get("nearest_support", 0.0)
+            nearest_res = bounds.get("nearest_resistance", 0.0)
+            macro_ceil = bounds.get("macro_ceiling", 0.0)
+            imm_runway = bounds.get("immediate_runway_pct", 0.0)
+            macro_runway = bounds.get("macro_runway_pct", 0.0)
+
+            regime = balloon.get("regime", "UNKNOWN")
+            is_expanding = balloon.get("is_balloon_expanding", False)
+            is_slow = balloon.get("is_slow_market", False)
+
             active = self.execution.active_trade
 
             status_msg = (
-                f"🦓 <b>ZEBRA BOT WHALE TELEMETRY</b>\n\n"
+                f"🦓 <b>ZEBRA BOT MULTI-SCREEN TELEMETRY</b>\n\n"
                 f"<b>BTC Price:</b> ${price:,.2f}\n"
-                f"<b>Market Scenario:</b> <code>{regime}</code>\n"
-                f"<b>Asymmetric Runway:</b> +{runway:.2f}%\n"
+                f"<b>Regime:</b> <code>{regime}</code>\n"
+                f"<b>Nearest Support:</b> ${nearest_sup:,.2f}\n"
+                f"<b>Nearest Resistance:</b> ${nearest_res:,.2f}\n"
+                f"<b>Immediate Runway:</b> +{imm_runway:.2f}%\n"
+                f"<b>Macro Runway:</b> +{macro_runway:.2f}% (Ceiling: ${macro_ceil:,.2f})\n"
+                f"<b>Balloon Expanding:</b> {'YES' if is_expanding else 'NO'}\n"
+                f"<b>Slow Market:</b> {'YES' if is_slow else 'NO'}\n"
                 f"<b>Order Book Skew:</b> {tanh_imb:+.2f}\n"
-                f"<b>Overhead Fuel (Shorts):</b> +{overhead_fuel:.2f}%\n"
-                f"<b>Downside Fuel (Longs):</b> -{downside_fuel:.2f}%\n"
-                f"<b>Fuel Ratio (Over/Down):</b> {fuel_ratio:.2f}\n\n"
+                f"<b>Absorption Index:</b> {absorption:.1f}\n\n"
             )
 
             if active:
@@ -316,19 +354,20 @@ class ZebraBotEngine:
                 gain = ((price - entry) / entry) * 100.0 if entry > 0 else 0.0
                 target = active.get("target_price", 0.0)
                 floor = active.get("invalidation_floor", 0.0)
+                trailing = active.get("trailing_stop", floor)
                 scenario = active.get("scenario", "TRADE")
                 status_msg += (
                     f"<b>Active Position:</b> LONG ({scenario})\n"
                     f"<b>Blended Entry:</b> ${entry:,.2f}\n"
                     f"<b>Target:</b> ${target:,.2f}\n"
-                    f"<b>Invalidation Floor:</b> ${floor:,.2f}\n"
+                    f"<b>Trailing Stop:</b> ${trailing:,.2f}\n"
+                    f"<b>Floor:</b> ${floor:,.2f}\n"
                     f"<b>Unrealized Net PnL:</b> {gain - 0.20:+.2f}%\n"
                     f"<b>Lot 2 Deployed:</b> {'YES' if active.get('tranche_2_added') else 'NO'}\n"
-                    f"<b>Noise Immunity:</b> ACTIVE\n"
                 )
             else:
-                chop_str = "LOCKED (Chop Gate)" if regime_data.get("is_dead_chop") else "PATIENT SCANNING"
-                status_msg += f"<b>Active Position:</b> 100% DEFENSIVE CASH ({chop_str})\n"
+                gate_str = "SLOW MARKET (Chop Filter)" if is_slow else ("WAITING FOR RUNWAY" if imm_runway < 0.45 else "PATIENT SCANNING")
+                status_msg += f"<b>Active Position:</b> 100% DEFENSIVE CASH ({gate_str})\n"
 
             self.notifier.send_message(status_msg)
 

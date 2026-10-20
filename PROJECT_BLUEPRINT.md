@@ -302,22 +302,21 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
      - EMAs (9, 21, 50), RSI, MACD (DIF, DEA, Histogram), Bollinger Bands (%B, Bandwidth), dynamic ATR.
      - Anchored Session VWAP ($\pm 1\sigma, \pm 2\sigma$), Cumulative Volume Delta (CVD), Trade Velocity, $\Delta \text{OI}$ Z-score, Funding Rate.
      - 3-Snapshot Anti-Spoof Depth Ratios and Real-Time **Absorption Index** ($A_i$).
-     - **Liquidity Gravity & Fuel Model (`LiqMap`):** Rolling 15m/1h swing highs/lows, uncollected overhead vs downside liquidation density, sweep detection (`is_bottom_swept`, `is_top_swept`), and overhead fuel exhaustion flag (`overhead_fuel_cleared`).
-     - **Regime & Volatility Analyzer:** 15m/1h bandwidth and Middle Band slope. Distinguishes `DEAD_CHOP` (bandwidth $<0.45\%$), `BULL_TREND` (dynamic support = Middle Band), `RANGE` (dynamic support = Lower Band), and `BEAR_TREND`.
-     - **Micro Reversal:** Sub-minute green candle body building upward out of support.
-3. **`conviction_engine.py` (Institutional Whale & Liquidity Thesis Brain):**
+     - **Dynamic Multi-Screen Boundaries (`extract_multi_screen_boundaries`):** Gathers all 33 Bollinger bands across all 11 horizons ($1\text{s}$ to $1\text{D}$) and macro swing extremes into dynamic physical support/resistance pools. Zero single-timeframe proxy lock.
+     - **Balloon Geometry Analyzer (`compute_balloon_and_regimes`):** Evaluates whether Bollinger bands are actively blowing open outward (`EXPANDING_BALLOON`) or horizontal and slow (`SLOW_MARKET`).
+     - **Micro Turn (`compute_micro_turn`):** Sub-minute green candle body building upward out of support with kinetic deceleration.
+3. **`conviction_engine.py` (Predictive Multi-Screen Autonomous Brain):**
    - **Capital Preservation Directive:** The goal is making money, not making trades. Sitting 100% in cash during low-volatility dead drift is mandatory.
-   - **The 4 Whale Gates & Playbooks:**
-     1. *Hard Chop Gate:* If 15m bandwidth $< 0.45\%$ and range $< 0.35\%$, bot is hard-locked in cash. Zero trades.
-     2. *Asymmetric Runway Gate:* Requires minimum $\ge +0.45\%$ clearance to next structural resistance before entry.
-     3. *Dip Absorption Entry (Catching Green Building Out of Support):* Price tests dynamic support ($MB$ in Bull Trend, $DN$ in Range), order book bids absorb selling, and 1m/3m green candle turns up. Deploys Core Lot 1 with target and invalidation floor.
-     4. *Peak Exhaustion Cash-Out:* When overhead short stops are cleared and downside long liquidations sit thick below, cashes out at the peak before the whale flush occurs.
-     5. *Thesis-Driven Noise Immunity:* Position is held patiently through 1s/1m wicks; only cut if the structural thesis floor is broken on volume.
-     6. *Target Decision Point:* Banks profit if resistance caps momentum; rides uncapped with breakeven fee protection if volatility balloon expands.
+   - **Real Gain Runway Hurdle ($\ge 0.45\%$):** Never enters unless projected room to the next structural resistance is $\ge 0.45\%$ to comfortably clear the 0.20% OKX fee with $>2.5:1$ reward-to-risk.
+   - **Predictive Turn Entries:** Predicts bottoms and dips before they move by measuring kinetic deceleration, resting bid absorption ($A_i$), and green candle reversal building up. Supports can be Middle Band in an uptrend, or Lower Band in a range.
+   - **Uncapped Macro Trailing:** When catching a winning wave, never caps profit at a small fixed target ($0.20\%$). Trails the rising Middle Band to ride $+1.0\%$ to $+2.5\%$ waves ($81,600 \rightarrow 83,600+$).
+   - **Guaranteed Non-Inverted Stop:** Invalidation floor is mathematically guaranteed to sit below the actual entry fill price: $\text{invalidation} = \min(P, \text{support}) - \max(P \times 0.0022, 60.0)$.
+   - **Dynamic Trailing Stop Ratchet:** Breakeven fee protection at $+0.30\%$ gross, ratchets upward behind rising Middle Bands at $\ge +0.70\%$ gain.
 4. **`execution_manager.py` (Thesis Ledger & Multi-Action Manager):**
    - Clean-slate archiving: Legacy logs safely archived to `archive_legacy_trades/`. Fresh autonomous ledger starting from Trade #1.
-   - Manages active thesis parameters: `scenario`, `target_price`, `invalidation_floor`, `anchor_tf`.
-   - Dispatches rich instant Telegram alerts on every action (Entry, Scale-in, Bank Profit, Thesis Cut).
+   - Manages active thesis parameters: `scenario`, `target_price`, `invalidation_floor`, `trailing_stop`.
+   - Dynamic trailing stop updates (`update_trailing_stop`) and macro target stepping (`update_target_price`).
+   - Dispatches rich instant Telegram alerts on every action (Entry, Scale-in, Bank Profit, Trailing Stop Ratchet, Thesis Cut).
    - Synchronizes `bot_state.json`, `trade_journal.csv` (UTF-8-BOM Excel lock-proof), `trade_journal.md`, and `trade_history.json`.
 
 

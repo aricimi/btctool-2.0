@@ -122,6 +122,7 @@ class ExecutionManager:
             "scenario": scenario,
             "target_price": round(target_price, 2),
             "invalidation_floor": round(invalidation_floor, 2),
+            "trailing_stop": round(invalidation_floor, 2),
             "tranche_2_added": False,
             "timestamp": time.time(),
             "reason": reason,
@@ -129,6 +130,24 @@ class ExecutionManager:
         self.save_state(market_state="IN_POSITION")
         logger.info(f"[Execution] Core Lot 1 opened: ${entry_price:,.2f} | Scenario: {scenario} | Target: ${target_price:,.2f}")
         return self.active_trade
+
+    def update_trailing_stop(self, new_stop: float):
+        """Ratchets trailing stop higher to lock in profits without capping the run."""
+        if self.active_trade:
+            current_stop = self.active_trade.get("trailing_stop", self.active_trade.get("invalidation_floor", 0.0))
+            if new_stop > current_stop:
+                self.active_trade["trailing_stop"] = round(new_stop, 2)
+                self.save_state(market_state="IN_POSITION")
+                logger.info(f"[Execution] Trailing stop ratcheted to: ${new_stop:,.2f}")
+
+    def update_target_price(self, new_target: float):
+        """Updates target price when riding uncapped macro breakout."""
+        if self.active_trade:
+            current_target = self.active_trade.get("target_price", 0.0)
+            if new_target > current_target:
+                self.active_trade["target_price"] = round(new_target, 2)
+                self.save_state(market_state="IN_POSITION")
+                logger.info(f"[Execution] Target price updated to macro level: ${new_target:,.2f}")
 
     def scale_in_lot_2(self, price: float, reason: str, p_up: float = 0.75):
         """Scales in Lot 2 on verified Bullish Absorption Dip."""

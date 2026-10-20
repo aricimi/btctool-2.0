@@ -1,13 +1,13 @@
 """
 market_state.py — The 100-Screen Vectorized State Matrix for Zebra Bot (btctool 2.0)
 Computes trend, oscillators, volatility regimes, session benchmarks, order flow,
-and microstructure metrics across 11 timeframes in <10ms using vectorized numpy math.
+and microstructure metrics across all 11 timeframes in <10ms using vectorized numpy math.
+ZERO hardcoded single-timeframe proxies. All 11 screens pooled dynamically.
 """
 
 import time
 from typing import Dict, List, Optional, Tuple
 import numpy as np
-import pandas as pd
 
 
 class MarketState:
@@ -92,13 +92,10 @@ class MarketState:
 
     @staticmethod
     def compute_vwap_and_bands(candles: List[dict]) -> Tuple[float, float, float, float]:
-        """
-        Compute Session Anchored VWAP (resetting at 00:00 UTC) with 1, 2, 3 sigma standard deviation bands.
-        """
+        """Compute Session Anchored VWAP with 1, 2 sigma standard deviation bands."""
         if not candles:
             return 0.0, 0.0, 0.0, 0.0
 
-        # Find candles belonging to the current UTC day
         now_ts = candles[-1]["ts"]
         session_start = (int(now_ts) // 86400) * 86400
         session_candles = [c for c in candles if c["ts"] >= session_start]
@@ -124,9 +121,7 @@ class MarketState:
 
     @staticmethod
     def compute_session_benchmarks(candles_1d: List[dict]) -> Dict[str, float]:
-        """
-        Calculates Previous Day High (PDH), Previous Day Low (PDL), Previous Day Close (PDC).
-        """
+        """Calculates Previous Day High (PDH), Previous Day Low (PDL), Previous Day Close (PDC)."""
         if len(candles_1d) >= 2:
             prev_day = candles_1d[-2]
             return {
@@ -141,155 +136,135 @@ class MarketState:
 
     @staticmethod
     def compute_absorption_index(recent_trades: List[dict], bid_depth: float, price_drop: float) -> float:
-        """
-        Real-Time Absorption Index:
-        Measures aggressive taker selling absorbed by replenishing bid limit orders.
-        High Absorption Index with minimal price drop = Bullish Institutional Absorption.
-        """
+        """Real-Time Absorption Index: Measures aggressive taker selling absorbed by replenishing bid limit orders."""
         if not recent_trades or bid_depth <= 0:
             return 0.0
 
         taker_sells = sum(t["size"] for t in recent_trades if t["side"] == "sell")
-        price_drop_safe = max(abs(price_drop), 0.5)  # Avoid division by zero
-        # Ratio of aggressive sell volume to price impact, weighted by bid depth
+        price_drop_safe = max(abs(price_drop), 0.5)
         absorption = (taker_sells / price_drop_safe) * np.log1p(bid_depth)
         return float(absorption)
 
     @staticmethod
-    def compute_liquidity_gravity(candles_15m: List[dict], candles_1h: List[dict], current_price: float) -> dict:
+    def extract_multi_screen_boundaries(tf_indicators: dict, stream, current_price: float) -> dict:
         """
-        Computes institutional liquidity gravity, swing high/low clusters, and sweep exhaustion.
+        Gathers all 33 Bollinger band levels across ALL 11 timeframes (1s to 1D)
+        and swing extremes, sorting them into physical Support & Resistance pools.
+        ZERO hardcoded single-timeframe bias.
         """
-        if not candles_15m or current_price <= 0:
-            return {
-                "swing_high": current_price * 1.01,
-                "swing_low": current_price * 0.99,
-                "overhead_fuel_pct": 1.0,
-                "downside_fuel_pct": 1.0,
-                "fuel_ratio": 1.0,
-                "is_bottom_swept": False,
-                "is_top_swept": False,
-                "overhead_fuel_cleared": False,
-            }
+        support_pool = []
+        resistance_pool = []
 
-        recent_highs = [c["high"] for c in candles_15m[-20:]]
-        recent_lows = [c["low"] for c in candles_15m[-20:]]
-        swing_high = float(max(recent_highs))
-        swing_low = float(min(recent_lows))
+        # 1. Pool all 33 Bollinger bands from all 11 timeframes
+        for tf, data in tf_indicators.items():
+            for band_key in ("bb_lower", "bb_mid", "bb_upper"):
+                lvl = data.get(band_key)
+                if lvl and lvl > 0:
+                    if lvl < current_price:
+                        support_pool.append((lvl, f"{tf}_{band_key}"))
+                    elif lvl > current_price:
+                        resistance_pool.append((lvl, f"{tf}_{band_key}"))
 
-        overhead_dist = max(swing_high - current_price, 0.0)
-        downside_dist = max(current_price - swing_low, 0.0)
+        # 2. Pool swing highs and swing lows across macro timeframes (15m, 1h, 4h, 1D)
+        for tf in ("15m", "1h", "4h", "1D"):
+            candles = stream.get_candles(tf)
+            if candles and len(candles) >= 5:
+                recent_high = float(max(c["high"] for c in candles[-20:]))
+                recent_low = float(min(c["low"] for c in candles[-20:]))
+                if recent_low < current_price:
+                    support_pool.append((recent_low, f"{tf}_swing_low"))
+                if recent_high > current_price:
+                    resistance_pool.append((recent_high, f"{tf}_swing_high"))
 
-        overhead_fuel_pct = (overhead_dist / current_price) * 100.0
-        downside_fuel_pct = (downside_dist / current_price) * 100.0
-        fuel_ratio = (overhead_fuel_pct / max(downside_fuel_pct, 0.05))
+        # Sort by distance to current price
+        support_pool.sort(key=lambda x: x[0], reverse=True)  # Nearest support is [0]
+        resistance_pool.sort(key=lambda x: x[0])             # Nearest resistance is [0]
 
-        # Sweep detection: recent candle wicked beyond the extreme but closed back inside
-        is_bottom_swept = False
-        is_top_swept = False
-        if len(candles_15m) >= 3:
-            last_candle = candles_15m[-1]
-            prev_candle = candles_15m[-2]
-            # Bottom sweep: wicked below previous low, closed green back above
-            if (last_candle["low"] <= swing_low or prev_candle["low"] <= swing_low) and last_candle["close"] > last_candle["open"]:
-                is_bottom_swept = True
-            # Top sweep: wicked above previous high, closed red back below
-            if (last_candle["high"] >= swing_high or prev_candle["high"] >= swing_high) and last_candle["close"] < last_candle["open"]:
-                is_top_swept = True
+        nearest_support, s_label = support_pool[0] if support_pool else (current_price * 0.99, "fallback")
+        nearest_resistance, r_label = resistance_pool[0] if resistance_pool else (current_price * 1.01, "fallback")
 
-        overhead_fuel_cleared = (overhead_fuel_pct < 0.15) or is_top_swept
+        # Macro targets: the highest upper bands (e.g. 1h, 4h, 1D upper bands)
+        macro_targets = [r[0] for r in resistance_pool if "1h" in r[1] or "4h" in r[1] or "1D" in r[1]]
+        macro_ceiling = max(macro_targets) if macro_targets else (nearest_resistance * 1.02)
+
+        immediate_runway_pct = max(((nearest_resistance - current_price) / current_price) * 100.0, 0.0) if current_price > 0 else 0.0
+        macro_runway_pct = max(((macro_ceiling - current_price) / current_price) * 100.0, 0.0) if current_price > 0 else 0.0
 
         return {
-            "swing_high": swing_high,
-            "swing_low": swing_low,
-            "overhead_fuel_pct": overhead_fuel_pct,
-            "downside_fuel_pct": downside_fuel_pct,
-            "fuel_ratio": fuel_ratio,
-            "is_bottom_swept": is_bottom_swept,
-            "is_top_swept": is_top_swept,
-            "overhead_fuel_cleared": overhead_fuel_cleared,
+            "nearest_support": nearest_support,
+            "support_label": s_label,
+            "nearest_resistance": nearest_resistance,
+            "resistance_label": r_label,
+            "macro_ceiling": macro_ceiling,
+            "immediate_runway_pct": immediate_runway_pct,
+            "macro_runway_pct": macro_runway_pct,
+            "all_supports": [s[0] for s in support_pool[:5]],
+            "all_resistances": [r[0] for r in resistance_pool[:5]],
         }
 
     @staticmethod
-    def compute_regime_and_volatility(tf_indicators: dict, candles_15m: List[dict], current_price: float) -> dict:
+    def compute_balloon_and_regimes(tf_indicators: dict, current_price: float) -> dict:
         """
-        Identifies market scenario (BULL_TREND, RANGE, BEAR_TREND, DEAD_CHOP)
-        and identifies dynamic support and target levels without rigid timeframes.
+        Evaluates Bollinger Balloon geometry across all screens:
+        - Are bands expanding outward (balloon opening = directional trend)?
+        - Or are bands flat/pinched (compression / slow market)?
         """
-        ind_15m = tf_indicators.get("15m", {})
-        ind_1h = tf_indicators.get("1h", {})
+        expanding_count = 0
+        pinched_count = 0
+        total_counted = 0
 
-        bb_width_15m = ind_15m.get("bb_width", 1.0)
-        bb_width_1h = ind_1h.get("bb_width", 2.0)
-        mb_15m = ind_15m.get("bb_mid", current_price)
-        dn_15m = ind_15m.get("bb_lower", current_price * 0.99)
-        up_15m = ind_15m.get("bb_upper", current_price * 1.01)
+        for tf in ("1m", "3m", "5m", "15m", "30m", "1h", "4h"):
+            data = tf_indicators.get(tf)
+            if not data:
+                continue
+            width = data.get("bb_width", 1.0)
+            pct_b = data.get("bb_pct_b", 0.5)
+            total_counted += 1
+            if width > 1.2:
+                expanding_count += 1
+            elif width < 0.45:
+                pinched_count += 1
 
-        # 15m candle range over last 3 candles
-        recent_ranges = []
-        if candles_15m:
-            for c in candles_15m[-3:]:
-                recent_ranges.append((c["high"] - c["low"]) / current_price * 100.0)
-        avg_range_15m = float(np.mean(recent_ranges)) if recent_ranges else 1.0
-
-        # Middle Band slope
-        mb_slope_pct = 0.0
-        if len(candles_15m) >= 4:
-            c_prev = candles_15m[-4]["close"]
-            mb_slope_pct = ((mb_15m - c_prev) / c_prev) * 100.0 if c_prev > 0 else 0.0
-
-        # DEAD CHOP GATE: Volatility compressed into narrow drift
-        is_dead_chop = (bb_width_15m < 0.45 and avg_range_15m < 0.35)
-
-        # Regime determination
-        if is_dead_chop:
-            regime = "DEAD_CHOP"
-            dynamic_support = dn_15m
-            dynamic_target = up_15m
-        elif mb_slope_pct > 0.05 and current_price >= (mb_15m * 0.998):
-            regime = "BULL_TREND"
-            dynamic_support = mb_15m  # In bull trend, dips bounce off Middle Band!
-            dynamic_target = up_15m   # Target is Upper Band / new highs
-        elif mb_slope_pct < -0.05 and current_price <= (mb_15m * 1.002):
-            regime = "BEAR_TREND"
-            dynamic_support = dn_15m
-            dynamic_target = mb_15m
-        else:
-            regime = "RANGE"
-            dynamic_support = dn_15m  # In range, dips bounce off Lower Band
-            dynamic_target = up_15m   # Target is Upper Band
-
-        # Distance to target in %
-        runway_pct = max(((dynamic_target - current_price) / current_price) * 100.0, 0.0) if current_price > 0 else 0.0
+        is_balloon_expanding = (expanding_count >= 2)
+        is_slow_market = (pinched_count >= 3)
 
         return {
-            "regime": regime,
-            "is_dead_chop": is_dead_chop,
-            "dynamic_support": dynamic_support,
-            "dynamic_target": dynamic_target,
-            "runway_pct": runway_pct,
-            "bb_width_15m": bb_width_15m,
-            "bb_width_1h": bb_width_1h,
-            "mb_slope_pct": mb_slope_pct,
-            "avg_range_15m": avg_range_15m,
+            "is_balloon_expanding": is_balloon_expanding,
+            "is_slow_market": is_slow_market,
+            "expanding_screens": expanding_count,
+            "pinched_screens": pinched_count,
         }
 
     @staticmethod
-    def compute_micro_reversal(candles_1m: List[dict], candles_3m: List[dict]) -> dict:
+    def compute_micro_turn(candles_1m: List[dict], candles_3m: List[dict]) -> dict:
         """
-        Detects whether a green candle body is currently building upward out of a dip.
+        Detects whether the turn is physically forming:
+        - Downside velocity dying
+        - Green candle body building upward out of the low
         """
         is_green_building = False
         candle_pct = 0.0
-        if candles_1m and len(candles_1m) >= 2:
+        velocity_slowing = False
+
+        if candles_1m and len(candles_1m) >= 3:
             last_1m = candles_1m[-1]
+            prev_1m = candles_1m[-2]
+            prev2_1m = candles_1m[-3]
+
             if last_1m["close"] > last_1m["open"]:
                 is_green_building = True
                 candle_pct = ((last_1m["close"] - last_1m["open"]) / last_1m["open"]) * 100.0
 
+            # Velocity check: price drop of last bar is smaller than previous bar
+            drop_prev = abs(prev_1m["close"] - prev_1m["open"])
+            drop_prev2 = abs(prev2_1m["close"] - prev2_1m["open"])
+            if drop_prev < drop_prev2:
+                velocity_slowing = True
+
         return {
             "is_green_building": is_green_building,
             "candle_pct": candle_pct,
+            "velocity_slowing": velocity_slowing,
         }
 
     def extract_state_matrix(self, stream) -> dict:
@@ -315,7 +290,7 @@ class MarketState:
         matrix["ask_depth_05"] = ask_vol
         matrix["tanh_imbalance"] = tanh_imbalance
 
-        # 2. Multi-Timeframe Technical Indicators across 11 horizons
+        # 2. Multi-Timeframe Technical Indicators across all 11 horizons
         tf_indicators = {}
         for tf in stream.buffers.keys():
             candles = stream.get_candles(tf)
@@ -357,7 +332,7 @@ class MarketState:
 
         matrix["timeframes"] = tf_indicators
 
-        # 3. Session Anchored VWAP (using 1m or 5m candles)
+        # 3. Session Anchored VWAP
         ref_candles = stream.get_candles("5m") or stream.get_candles("1m")
         vwap, vwap_std, vwap_u2, vwap_l1 = MarketState.compute_vwap_and_bands(ref_candles)
         matrix["session_vwap"] = vwap
@@ -376,18 +351,16 @@ class MarketState:
             price_drop = recent_trades[0]["price"] - recent_trades[-1]["price"]
         matrix["absorption_index"] = MarketState.compute_absorption_index(recent_trades, bid_vol, price_drop)
 
-        # 6. Institutional Liquidity Gravity & Sweeps
-        candles_15m = stream.get_candles("15m") or []
-        candles_1h = stream.get_candles("1h") or []
+        # 6. Global Multi-Screen Boundaries (Zero single-timeframe bias)
+        matrix["multi_screen_bounds"] = MarketState.extract_multi_screen_boundaries(tf_indicators, stream, stream.latest_price)
+
+        # 7. Balloon Geometry across all horizons
+        matrix["balloon_geometry"] = MarketState.compute_balloon_and_regimes(tf_indicators, stream.latest_price)
+
+        # 8. Micro Turn (Green Candle Building out of Support)
         candles_1m = stream.get_candles("1m") or []
         candles_3m = stream.get_candles("3m") or []
-        matrix["liquidity_gravity"] = MarketState.compute_liquidity_gravity(candles_15m, candles_1h, stream.latest_price)
-
-        # 7. Volatility Regime & Asymmetric Runway
-        matrix["regime_analysis"] = MarketState.compute_regime_and_volatility(tf_indicators, candles_15m, stream.latest_price)
-
-        # 8. Micro Reversal (Green Candle Building out of Support)
-        matrix["micro_reversal"] = MarketState.compute_micro_reversal(candles_1m, candles_3m)
+        matrix["micro_turn"] = MarketState.compute_micro_turn(candles_1m, candles_3m)
 
         matrix["compute_time_ms"] = (time.time() - t0) * 1000.0
         return matrix

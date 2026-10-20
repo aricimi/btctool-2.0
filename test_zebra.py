@@ -99,110 +99,148 @@ class TestZebraBot(unittest.TestCase):
         print(f"\n[Performance Benchmark] 100-Screen State Matrix computed in: {elapsed_ms:.2f} ms")
         self.assertLess(elapsed_ms, 25.0, "State matrix calculation must be ultra-fast (<25ms)")
         self.assertIn("timeframes", matrix)
-        self.assertIn("liquidity_gravity", matrix)
-        self.assertIn("regime_analysis", matrix)
-        self.assertIn("micro_reversal", matrix)
+        self.assertIn("multi_screen_bounds", matrix)
+        self.assertIn("balloon_geometry", matrix)
+        self.assertIn("micro_turn", matrix)
+        self.assertIn("absorption_index", matrix)
 
-    def test_04_whale_scenarios_and_chop_gate(self):
-        """Verify Chop Gate lock, Dip Absorption entry, Peak Exhaustion banking, and Invalidation Cut."""
-        # 1. DEAD CHOP TEST: Small range, narrow bandwidth -> Must lock to cash!
-        chop_matrix = {
+    def test_04_predictive_brain_and_multi_screen_decisions(self):
+        """Verify Real Gain Hurdle, Dip Turn Prediction, Trailing Ratchet, Uncapped Runner, and Invalidation Cut."""
+        # 1. LOW RUNWAY HURDLE (<0.45%): Bot refuses to enter dead chop or insufficient profit runway
+        low_runway_matrix = {
             "latest_price": 82000.0,
             "tanh_imbalance": 0.05,
             "absorption_index": 5.0,
-            "trade_velocity": 3.0,
-            "regime_analysis": {
-                "regime": "DEAD_CHOP",
-                "is_dead_chop": True,
-                "bb_width_15m": 0.30,
-                "runway_pct": 0.20,
+            "multi_screen_bounds": {
+                "nearest_support": 81950.0,
+                "nearest_resistance": 82100.0,
+                "macro_ceiling": 82300.0,
+                "immediate_runway_pct": 0.12,  # Too small to clear fees!
+                "macro_runway_pct": 0.36,
             },
-            "liquidity_gravity": {"overhead_fuel_cleared": False},
-            "micro_reversal": {"is_green_building": False},
+            "balloon_geometry": {
+                "regime": "DEAD_CHOP",
+                "is_balloon_expanding": False,
+                "is_slow_market": True,
+            },
+            "micro_turn": {"is_green_building": False, "velocity_slowing": False},
         }
-        chop_decision = self.brain.evaluate(chop_matrix, active_trade=None)
-        self.assertEqual(chop_decision["action"], "WAIT_IN_CASH")
-        self.assertIn("CHOP GATE", chop_decision["reason"])
+        hurdle_decision = self.brain.evaluate(low_runway_matrix, active_trade=None)
+        self.assertEqual(hurdle_decision["action"], "WAIT_IN_CASH")
+        self.assertIn("NO REAL GAIN ON TABLE", hurdle_decision["reason"])
 
-        # 2. DIP ABSORPTION ENTRY TEST: Bull trend dip to support with bids and green candle building
+        # 2. DIP TURN PREDICTION ENTRY: Testing support floor, absorption confirmed, green candle building
         dip_matrix = {
             "latest_price": 81750.0,
             "tanh_imbalance": 0.45,
             "absorption_index": 22.0,
-            "trade_velocity": 12.0,
-            "regime_analysis": {
+            "multi_screen_bounds": {
+                "nearest_support": 81720.0,
+                "nearest_resistance": 82300.0,
+                "macro_ceiling": 83500.0,
+                "immediate_runway_pct": 0.67,  # > 0.45% minimum hurdle
+                "macro_runway_pct": 2.14,
+            },
+            "balloon_geometry": {
                 "regime": "BULL_TREND",
-                "is_dead_chop": False,
-                "dynamic_support": 81750.0,
-                "dynamic_target": 82250.0,
-                "runway_pct": 0.61,  # > 0.45% minimum hurdle
+                "is_balloon_expanding": False,
+                "is_slow_market": False,
             },
-            "liquidity_gravity": {
-                "overhead_fuel_pct": 1.20,
-                "downside_fuel_pct": 0.30,
-                "overhead_fuel_cleared": False,
-                "is_bottom_swept": True,
-            },
-            "micro_reversal": {
+            "micro_turn": {
                 "is_green_building": True,
-                "candle_pct": 0.15,
+                "velocity_slowing": True,
             },
         }
         dip_decision = self.brain.evaluate(dip_matrix, active_trade=None)
         self.assertEqual(dip_decision["action"], "ENTER_CORE_LOT_1")
-        self.assertIn("DIP ABSORPTION", dip_decision["reason"])
+        self.assertEqual(dip_decision["scenario"], "DIP_ABSORPTION_TURN")
         self.assertGreaterEqual(dip_decision["expected_runway_pct"], 0.45)
+        # Mathematical guarantee: Stop MUST sit below actual entry price
+        self.assertLess(dip_decision["invalidation_floor"], dip_decision["entry_price"])
 
-        # 3. PEAK EXHAUSTION EXIT TEST: In profit + overhead fuel cleared + downside liquidations thick
+        # 3. RIDE UNCAPPED MACRO BREAKOUT: Target reached, balloon blowing open outward
         active_trade = {
             "entry": 81750.0,
-            "target_price": 82250.0,
-            "invalidation_floor": 81600.0,
-            "scenario": "DIP_ABSORPTION_BULL_TREND",
+            "target_price": 82300.0,
+            "invalidation_floor": 81650.0,
+            "trailing_stop": 81650.0,
+            "scenario": "DIP_ABSORPTION_TURN",
             "tranche_2_added": False,
         }
-        peak_matrix = {
-            "latest_price": 82200.0,  # +0.55% gain
-            "tanh_imbalance": -0.20,
-            "absorption_index": 2.0,
-            "trade_velocity": 8.0,
-            "regime_analysis": {"is_dead_chop": False, "dynamic_target": 82250.0},
-            "liquidity_gravity": {
-                "overhead_fuel_cleared": True,  # Upper stops cleared!
-                "downside_fuel_pct": 0.85,      # Massive pool waiting below
-                "fuel_ratio": 0.15,
+        uncapped_matrix = {
+            "latest_price": 82350.0,  # Hit initial target
+            "tanh_imbalance": 0.35,
+            "absorption_index": 18.0,
+            "multi_screen_bounds": {
+                "nearest_support": 82100.0,     # Rising Middle Band support
+                "nearest_resistance": 82300.0,
+                "macro_ceiling": 83600.0,       # Wide open macro space
+                "immediate_runway_pct": 0.10,
+                "macro_runway_pct": 1.52,
             },
-            "micro_reversal": {"is_green_building": False},
+            "balloon_geometry": {
+                "regime": "EXPANDING_BALLOON",
+                "is_balloon_expanding": True,   # Volatility balloon opening!
+                "is_slow_market": False,
+            },
+            "micro_turn": {"is_green_building": True, "velocity_slowing": False},
         }
-        exit_decision = self.brain.evaluate(peak_matrix, active_trade=active_trade)
-        self.assertEqual(exit_decision["action"], "BANK_PROFIT")
-        self.assertIn("PEAK EXHAUSTION", exit_decision["reason"])
+        uncapped_decision = self.brain.evaluate(uncapped_matrix, active_trade=active_trade)
+        self.assertEqual(uncapped_decision["action"], "RIDE_UNCAPPED")
+        self.assertEqual(uncapped_decision["target_price"], 83600.0)
+        self.assertGreater(uncapped_decision["trailing_stop"], active_trade["entry"])
 
-        # 4. THESIS INVALIDATION CUT: Price drops below invalidation floor -> Rectify mistake immediately
+        # 4. TRAILING STOP BANK: Profit locked in when trailing stop breached
+        trailing_trade = {
+            "entry": 81750.0,
+            "target_price": 83600.0,
+            "invalidation_floor": 81650.0,
+            "trailing_stop": 82250.0,  # Ratcheted above entry (+0.61%)
+            "scenario": "MACRO_BALLOON_EXPANSION",
+            "tranche_2_added": False,
+        }
+        trailing_matrix = dict(uncapped_matrix)
+        trailing_matrix["latest_price"] = 82240.0  # Fell back below trailing stop
+        bank_decision = self.brain.evaluate(trailing_matrix, active_trade=trailing_trade)
+        self.assertEqual(bank_decision["action"], "BANK_PROFIT")
+        self.assertIn("TRAILING STOP HIT", bank_decision["reason"])
+
+        # 5. CONTROLLED THESIS INVALIDATION CUT: Price drops below initial stop floor
         inval_matrix = dict(dip_matrix)
-        inval_matrix["latest_price"] = 81550.0  # Dropped below 81,600 floor
+        inval_matrix["latest_price"] = 81600.0  # Dropped below 81,650 floor
         cut_decision = self.brain.evaluate(inval_matrix, active_trade=active_trade)
         self.assertEqual(cut_decision["action"], "CUT_THESIS_INVALIDATED")
 
-    def test_05_execution_manager_clean_slate(self):
-        """Verify ExecutionManager position operations with thesis parameters."""
+    def test_05_execution_manager_clean_slate_and_trailing(self):
+        """Verify ExecutionManager position operations, trailing ratcheting, and target stepping."""
         trade = self.execution.open_core_lot_1(
             entry_price=81750.0,
-            scenario="DIP_ABSORPTION",
-            target_price=82200.0,
+            scenario="DIP_ABSORPTION_TURN",
+            target_price=82300.0,
             invalidation_floor=81650.0,
-            reason="Whale Floor Support",
+            reason="Predictive Multi-Screen Turn",
         )
         self.assertIsNotNone(self.execution.active_trade)
         self.assertEqual(self.execution.active_trade["entry"], 81750.0)
-        self.assertEqual(self.execution.active_trade["target_price"], 82200.0)
+        self.assertEqual(self.execution.active_trade["target_price"], 82300.0)
         self.assertEqual(self.execution.active_trade["invalidation_floor"], 81650.0)
+        self.assertEqual(self.execution.active_trade["trailing_stop"], 81650.0)
 
+        # Ratchet trailing stop higher
+        self.execution.update_trailing_stop(82050.0)
+        self.assertEqual(self.execution.active_trade["trailing_stop"], 82050.0)
+
+        # Step target to macro ceiling
+        self.execution.update_target_price(83600.0)
+        self.assertEqual(self.execution.active_trade["target_price"], 83600.0)
+
+        # Scale in Lot 2
         self.execution.scale_in_lot_2(price=81680.0, reason="Discount Support Scale")
         self.assertTrue(self.execution.active_trade["tranche_2_added"])
         self.assertEqual(self.execution.active_trade["entry"], 81715.0)
 
-        self.execution.close_position(exit_price=82250.0, exit_reason="Target Reached")
+        # Close position
+        self.execution.close_position(exit_price=82800.0, exit_reason="Trailing Structural Target")
         self.assertIsNone(self.execution.active_trade)
 
 
