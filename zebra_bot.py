@@ -21,6 +21,7 @@ import requests
 from market_stream import MarketStream
 from market_state import MarketState
 from conviction_engine import FreeConvictionEngine
+from risk_engine import RiskEngine, TradeIntent, RiskDecision
 from execution_manager import ExecutionManager
 from trade_logger import TradeJournal
 
@@ -148,6 +149,7 @@ class ZebraBotEngine:
         self.stream = MarketStream(inst_id="BTC-USDT", swap_id="BTC-USDT-SWAP")
         self.state_calculator = MarketState()
         self.brain = FreeConvictionEngine()
+        self.risk_gate = RiskEngine()
         self.execution = ExecutionManager()
         self.notifier = TelegramNotifier()
 
@@ -185,12 +187,15 @@ class ZebraBotEngine:
                 cycle_count += 1
                 t0 = time.time()
 
-                # Extract 100-Screen State Matrix (<2ms)
+                # 1. PERCEPTION: Extract 100-Screen State Matrix (<2ms)
                 matrix = self.state_calculator.extract_state_matrix(self.stream)
 
-                # Evaluate Free Autonomous Brain
+                # 2. COGNITION (Mind): Models Propose TradeIntent
                 active_trade = self.execution.active_trade
-                decision = self.brain.evaluate(matrix, active_trade=active_trade)
+                intent = self.brain.evaluate(matrix, active_trade=active_trade)
+
+                # 3. RISK GATE (Conscience): Risk Disposes
+                decision = self.risk_gate.evaluate(intent, matrix, active_trade=active_trade)
 
                 action = decision.get("action")
                 p_up = decision.get("p_up", 0.5)
@@ -202,7 +207,7 @@ class ZebraBotEngine:
                     entry_p = float(decision["entry_price"])
                     scenario = decision.get("scenario", "WHALE_EDGE")
                     target_p = float(decision.get("target_price", entry_p * 1.01))
-                    inval_p = float(decision.get("invalidation_floor", entry_p * 0.998))
+                    inval_p = float(decision.get("trailing_stop", decision.get("invalidation_floor", entry_p * 0.995)))
                     reason = decision["reason"]
                     runway_pct = float(decision.get("expected_runway_pct", 0.0))
 
@@ -285,6 +290,7 @@ class ZebraBotEngine:
                     gain_pct = float(decision.get("gain_pct", 0.0))
                     net_pnl_pct = gain_pct - 0.0020
 
+                    self.risk_gate.record_invalidation_exit(exit_p, matrix.get("timestamp", 0.0))
                     self.execution.close_position(exit_price=exit_p, exit_reason=reason)
                     self.notifier.send_message(
                         f"🛑 <b>ZEBRA BOT: THESIS CUT (PRESERVE CAPITAL)</b>\n\n"

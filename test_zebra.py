@@ -15,6 +15,7 @@ from unittest.mock import MagicMock
 from market_stream import MarketStream
 from market_state import MarketState
 from conviction_engine import FreeConvictionEngine
+from risk_engine import RiskEngine, TradeIntent, RiskDecision
 from execution_manager import ExecutionManager
 
 
@@ -24,6 +25,7 @@ class TestZebraBot(unittest.TestCase):
         self.stream = MarketStream(inst_id="BTC-USDT", max_bars=100)
         self.state_calculator = MarketState()
         self.brain = FreeConvictionEngine()
+        self.risk_gate = RiskEngine()
         self.mock_journal = MagicMock()
         self.mock_journal.record_entry.return_value = 1
         self.execution = ExecutionManager(state_file="test_bot_state.json", journal=self.mock_journal)
@@ -213,14 +215,16 @@ class TestZebraBot(unittest.TestCase):
         cut_decision = self.brain.evaluate(inval_matrix, active_trade=active_trade)
         self.assertEqual(cut_decision["action"], "CUT_THESIS_INVALIDATED")
 
-        # 6. MEMORY SOFT STOP WICK IMMUNITY: Price touches stop, but resting bids are absorbing the sweep
+        # 6. MEMORY SOFT STOP WICK IMMUNITY: Mind proposes CUT, but Risk Gate overrides to HOLD
         wick_matrix = dict(dip_matrix)
         wick_matrix["latest_price"] = 81640.0   # Touching stop floor ($81,650)
         wick_matrix["tanh_imbalance"] = 0.35    # Resting bids thick!
         wick_matrix["absorption_index"] = 22.0  # Whale absorption active!
-        wick_decision = self.brain.evaluate(wick_matrix, active_trade=active_trade)
+        wick_intent = self.brain.evaluate(wick_matrix, active_trade=active_trade)
+        wick_decision = self.risk_gate.evaluate(wick_intent, wick_matrix, active_trade=active_trade)
         self.assertEqual(wick_decision["action"], "HOLD_POSITION")
-        self.assertIn("ABSORPTION AT FLOOR", wick_decision["reason"])
+        self.assertEqual(wick_decision.status, "MODIFY")
+        self.assertIn("RISK GATE OVERRIDE", wick_decision["reason"])
 
         # 7. CONTEXTUAL SCALE-IN LOT 2 AT STRUCTURAL SUPPORT DISCOUNT
         scale_trade = dict(active_trade)
@@ -229,8 +233,27 @@ class TestZebraBot(unittest.TestCase):
         scale_matrix["latest_price"] = 81710.0  # Testing support floor ($81,720) at discount to entry ($81,750)
         scale_matrix["tanh_imbalance"] = 0.30   # Institutional bids active
         scale_matrix["absorption_index"] = 18.0
-        scale_decision = self.brain.evaluate(scale_matrix, active_trade=scale_trade)
+        scale_intent = self.brain.evaluate(scale_matrix, active_trade=scale_trade)
+        scale_decision = self.risk_gate.evaluate(scale_intent, scale_matrix, active_trade=scale_trade)
         self.assertEqual(scale_decision["action"], "SCALE_IN_LOT_2")
+        self.assertEqual(scale_decision.status, "ALLOW")
+
+        # 8. ANTI-CHURN BREAKOUT VETO: Risk Gate vetoes breakout proposed at or below failed stop
+        self.risk_gate.record_invalidation_exit(82453.30, time.time())
+        churn_matrix = dict(dip_matrix)
+        churn_matrix["latest_price"] = 82450.0  # Below failed level ($82,453.30)
+        churn_intent = TradeIntent(
+            action="ENTER_CORE_LOT_1",
+            scenario="MACRO_BALLOON_BREAKOUT",
+            entry_price=82450.0,
+            target_price=87200.0,
+            proposed_stop=82200.0,
+            expected_runway_pct=5.5,
+        )
+        churn_decision = self.risk_gate.evaluate(churn_intent, churn_matrix, active_trade=None)
+        self.assertEqual(churn_decision["action"], "WAIT_IN_CASH")
+        self.assertEqual(churn_decision.status, "REJECT")
+        self.assertIn("REJECTED BY RISK GATE", churn_decision["reason"])
 
     def test_05_execution_manager_clean_slate_and_trailing(self):
         """Verify ExecutionManager position operations, trailing ratcheting, and target stepping."""

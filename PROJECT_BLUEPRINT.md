@@ -294,27 +294,29 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
 ```
 
 #### Detailed Component Specifications:
-1. **`market_stream.py` (Sensory Ingestion):**
+1. **`market_stream.py` (Sensory Ingress — Eyes):**
    - Asynchronous WebSocket listener (`asyncio` + `websockets`) streaming OKX public channels (`trades`, `books50-l2-tbt`, `open-interest`, `funding-rate`, `tickers`).
    - Circular ring buffers maintaining rolling OHLCV for 11 horizons: `[1s, 1m, 3m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 1D]`.
-2. **`market_state.py` (The 100-Screen Vectorized State Matrix):**
+2. **`market_state.py` (The 100-Screen Vectorized State Matrix — Perception):**
    - Computes technical indicators across all 11 horizons in $<5\text{ms}$:
      - EMAs (9, 21, 50), RSI, MACD (DIF, DEA, Histogram), Bollinger Bands (%B, Bandwidth), dynamic ATR.
      - Anchored Session VWAP ($\pm 1\sigma, \pm 2\sigma$), Cumulative Volume Delta (CVD), Trade Velocity, $\Delta \text{OI}$ Z-score, Funding Rate.
      - 3-Snapshot Anti-Spoof Depth Ratios and Real-Time **Absorption Index** ($A_i$).
-     - **Dynamic Multi-Screen Boundaries (`extract_multi_screen_boundaries`):** Gathers all 33 Bollinger bands across all 11 horizons ($1\text{s}$ to $1\text{D}$) and macro swing extremes into dynamic physical support/resistance pools. Zero single-timeframe proxy lock.
+     - **Dynamic Multi-Screen Boundaries (`extract_multi_screen_boundaries`):** Gathers all 33 Bollinger bands, pooled swing highs, and `composite_atr` (median across active horizons). Zero single-timeframe proxy lock.
      - **Balloon Geometry Analyzer (`compute_balloon_and_regimes`):** Evaluates whether Bollinger bands are actively blowing open outward (`EXPANDING_BALLOON`) or horizontal and slow (`SLOW_MARKET`).
-     - **Micro Turn (`compute_micro_turn`):** Sub-minute green candle body building upward out of support with kinetic deceleration.
-3. **`conviction_engine.py` (Predictive Multi-Screen Autonomous Brain):**
-   - **Capital Preservation Directive:** The goal is making money, not making trades. Sitting 100% in cash during low-volatility dead drift is mandatory.
-   - **Real Gain Runway Hurdle ($\ge 0.45\%$):** Never enters unless projected room to the next structural resistance is $\ge 0.45\%$ to comfortably clear the 0.20% OKX fee with $>2.5:1$ reward-to-risk.
-   - **Dynamic Volatility Structural Stops:** Invalidation floor is anchored behind the nearest pooled structural support with an ATR buffer: $\text{invalidation} = \min(P - 0.8\text{ATR}, P - \text{clamped\_risk})$. Prevents getting shaken out by normal $\$100-\$250$ candle noise.
-   - **In-Situ Memory Soft Stop Audit:** When price touches the trailing stop floor, the engine inspects live order book depth and absorption index ($A_i$). If resting bids are absorbing the wick sweep, holds through noise. Cuts immediately only if order book bids collapse on aggressive selling. An emergency hard floor ($0.8 \times \text{ATR}$ past soft stop) guarantees zero bag-holding.
-   - **Contextual Structural Scale-In (Lot 2):** Deploys at verified structural support discounts ($\text{dist\_to\_support} \le 0.75 \times \text{ATR}$ and $P < \text{entry}$) when resting bids confirm absorption. Lowers blended entry to amplify profits on the reversal wave.
-   - **Physics-Based Breakout Clearance:** Eliminates false breakout entries during pullbacks. Requires price to physically trade at or above the pooled swing high (`price >= pooled_swing_high`) with positive kinetic push (`tanh_imbalance > 0`, `CVD >= 0`).
-   - **Uncapped Macro Trailing:** When catching a winning wave, never caps profit at a small fixed target ($0.20\%$). Trails the rising Middle Band to ride $+1.0\%$ to $+2.5\%$ waves ($81,600 \rightarrow 83,600+$).
-   - **Dynamic Trailing Stop Ratchet:** Breakeven fee protection at $+0.35\%$ gross, ratchets upward behind rising Middle Bands at $\ge +0.70\%$ gain.
-4. **`execution_manager.py` (Thesis Ledger & Multi-Action Manager):**
+     - **Micro Turn (`compute_micro_turn`):** Sub-minute kinetic deceleration and velocity slowing.
+3. **`conviction_engine.py` (Policy Engine — Mind):**
+   - Pure cognitive modeling: Evaluates Kinetic Push vs Structural Barrier and emits structured `TradeIntent` objects (`ENTER_CORE_LOT_1`, `SCALE_IN_LOT_2`, `BANK_PROFIT`, `CUT_THESIS`, `RIDE_UNCAPPED`, `HOLD_POSITION`, `WAIT_IN_CASH`).
+   - Evaluates Expected Value ($\mathbb{E}[\text{Net PnL}] > \text{fee}$) and asymmetric runways without touching balance or order execution APIs.
+4. **`risk_engine.py` (Independent Deterministic Risk Gate — Conscience):**
+   - **Core Invariant:** *"Models Propose, Risk Disposes."*
+   - Independent deterministic gate evaluating `TradeIntent` against 5 non-negotiable safety laws:
+     1. *Expectancy Gate:* Rejects entries with projected runway $< 0.45\%$ or reward-to-risk $< 2.0:1$.
+     2. *Noise-Immune Floor Gate:* Enforces ATR-anchored structural stop buffers ($\min(P - 0.8\text{ATR}, P - \text{clamped\_risk})$).
+     3. *Anti-Churn / Post-Stop Clearance:* Vetoes breakout intents proposed at or below previous invalidation exit price levels.
+     4. *Scale-In / Invalidation Harmonization:* Verifies stop sits strictly below Lot 2 scale-in discount zone.
+     5. *In-Situ Memory Soft Stop:* Queries live order book depth when floor is touched. Holds with noise immunity if resting bids absorb sweep ($A_i > 15.0$); approves cut only on bid collapse. Hard backstop ($0.8 \times \text{ATR}$) prevents bag-holding.
+5. **`execution_manager.py` (Execution Adapters & Memory — Hands & Ledger):**
    - Clean-slate archiving: Legacy logs safely archived to `archive_legacy_trades/`. Fresh autonomous ledger starting from Trade #1.
    - Manages active thesis parameters: `scenario`, `target_price`, `invalidation_floor`, `trailing_stop`.
    - Dynamic trailing stop updates (`update_trailing_stop`) and macro target stepping (`update_target_price`).
