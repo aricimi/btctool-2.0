@@ -298,30 +298,26 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
    - Asynchronous WebSocket listener (`asyncio` + `websockets`) streaming OKX public channels (`trades`, `books50-l2-tbt`, `open-interest`, `funding-rate`, `tickers`).
    - Circular ring buffers maintaining rolling OHLCV for 11 horizons: `[1s, 1m, 3m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 1D]`.
 2. **`market_state.py` (The 100-Screen Vectorized State Matrix):**
-   - Computes technical indicators across all 11 horizons in $<10\text{ms}$:
-     - EMAs (9, 21, 50, 100, 200), VWMA, ADX directional trend strength.
-     - Multi-TF RSI, MACD (DIF, DEA, Histogram), Stochastic RSI.
-     - Bollinger Bands (%B, Bandwidth), dynamic ATR percentile.
-     - Anchored Session VWAP ($\pm 1\sigma, \pm 2\sigma, \pm 3\sigma$), Volume Profile (POC, VAH, VAL), Cumulative Volume Delta (CVD), Trade Velocity.
-     - Session Benchmarks (Asian High/Low, London Open, Previous Day High/Low).
+   - Computes technical indicators across all 11 horizons in $<5\text{ms}$:
+     - EMAs (9, 21, 50), RSI, MACD (DIF, DEA, Histogram), Bollinger Bands (%B, Bandwidth), dynamic ATR.
+     - Anchored Session VWAP ($\pm 1\sigma, \pm 2\sigma$), Cumulative Volume Delta (CVD), Trade Velocity, $\Delta \text{OI}$ Z-score, Funding Rate.
      - 3-Snapshot Anti-Spoof Depth Ratios and Real-Time **Absorption Index** ($A_i$).
-     - $\Delta \text{OI}$ Z-score and Funding Rate bias.
-3. **`conviction_engine.py` (Truly Free Autonomous Expected Value Brain):**
-   - AlphaGo-style continuous probability $P_{\text{up}} \in [0.0, 1.0]$ across all 11 horizons:
-     - Macro Tier (1D, 6h, 4h, 2h - 35% weight)
-     - Structural Tier (1h, 30m, 15m - 30% weight)
-     - Tactical Trigger Tier (5m, 3m, 1m, 1s - 35% weight)
-   - Order Book depth skew, live CVD, and Open Interest Z-score.
-   - Dynamic Expected Value calculation ($\mathbb{E}[\text{Edge}]$) net of 0.20% OKX round-trip fee.
-   - **Zero Leashes & Zero Static Stops:**
-     1. *Core Entry (Lot 1):* Deploys when $P_{\text{up}} \ge 0.60$ and $\mathbb{E}[\text{Edge}] > 0.0$.
-     2. *Absorption Scaling (Lot 2):* Deploys at discount when in trade, pullback occurs, but $P_{\text{up}} \ge 0.70$ and order book confirms absorption.
-     3. *Uncapped Trend Riding:* Holds indefinitely as long as $P_{\text{up}} \ge 0.50$ (rides 1%, 2%, 5%+).
-     4. *Immediate Predictive Cut:* When $P_{\text{up}} < 0.44$ (edge evaporates/flips to sellers), exits immediately at market. Zero waiting for static stop lines.
-4. **`execution_manager.py` (Clean-Slate Autonomous Ledger & Execution):**
-   - Clean-slate archiving: Legacy trade logs archived to `archive_legacy_trades/`.
-   - Fresh autonomous ledger starting from Trade #1.
-   - Instant rich Telegram alerts on every action (Entry, Scale-in, Profit Bank, Immediate Cut).
+     - **Liquidity Gravity & Fuel Model (`LiqMap`):** Rolling 15m/1h swing highs/lows, uncollected overhead vs downside liquidation density, sweep detection (`is_bottom_swept`, `is_top_swept`), and overhead fuel exhaustion flag (`overhead_fuel_cleared`).
+     - **Regime & Volatility Analyzer:** 15m/1h bandwidth and Middle Band slope. Distinguishes `DEAD_CHOP` (bandwidth $<0.45\%$), `BULL_TREND` (dynamic support = Middle Band), `RANGE` (dynamic support = Lower Band), and `BEAR_TREND`.
+     - **Micro Reversal:** Sub-minute green candle body building upward out of support.
+3. **`conviction_engine.py` (Institutional Whale & Liquidity Thesis Brain):**
+   - **Capital Preservation Directive:** The goal is making money, not making trades. Sitting 100% in cash during low-volatility dead drift is mandatory.
+   - **The 4 Whale Gates & Playbooks:**
+     1. *Hard Chop Gate:* If 15m bandwidth $< 0.45\%$ and range $< 0.35\%$, bot is hard-locked in cash. Zero trades.
+     2. *Asymmetric Runway Gate:* Requires minimum $\ge +0.45\%$ clearance to next structural resistance before entry.
+     3. *Dip Absorption Entry (Catching Green Building Out of Support):* Price tests dynamic support ($MB$ in Bull Trend, $DN$ in Range), order book bids absorb selling, and 1m/3m green candle turns up. Deploys Core Lot 1 with target and invalidation floor.
+     4. *Peak Exhaustion Cash-Out:* When overhead short stops are cleared and downside long liquidations sit thick below, cashes out at the peak before the whale flush occurs.
+     5. *Thesis-Driven Noise Immunity:* Position is held patiently through 1s/1m wicks; only cut if the structural thesis floor is broken on volume.
+     6. *Target Decision Point:* Banks profit if resistance caps momentum; rides uncapped with breakeven fee protection if volatility balloon expands.
+4. **`execution_manager.py` (Thesis Ledger & Multi-Action Manager):**
+   - Clean-slate archiving: Legacy logs safely archived to `archive_legacy_trades/`. Fresh autonomous ledger starting from Trade #1.
+   - Manages active thesis parameters: `scenario`, `target_price`, `invalidation_floor`, `anchor_tf`.
+   - Dispatches rich instant Telegram alerts on every action (Entry, Scale-in, Bank Profit, Thesis Cut).
    - Synchronizes `bot_state.json`, `trade_journal.csv` (UTF-8-BOM Excel lock-proof), `trade_journal.md`, and `trade_history.json`.
 
 

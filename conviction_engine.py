@@ -1,10 +1,12 @@
 """
-conviction_engine.py — Truly Free Autonomous Expected Value Agent for Zebra Bot (btctool 2.0)
-Operates on the AlphaGo paradigm:
-- Ingests all 11 screens (1s to 1D), L2 order book depth, CVD tape, and derivatives into continuous directional probability P_up.
-- Calculates Expected Value (E[Edge]) net of OKX fees.
-- Zero leashes, zero static stop lines, zero artificial profit ceilings.
-- Rides winning waves uncapped, scales into verified absorption dips, and cuts immediately when P_up flips negative.
+conviction_engine.py — Institutional Whale & Liquidity Thesis Brain for Zebra Bot (btctool 2.0)
+Architecture:
+- The bot is here to make money, not trades (Patience over compulsive activity).
+- Hard Chop Gate: Locked in 100% defensive cash during dead consolidation (<0.45% bandwidth).
+- Liquidity Gravity & Fuel Model (LiqMap): Knows when overhead fuel is swept and gravity points down.
+- Dip Absorption on Green Candle Turn: Buys dips at Middle Band in Bull Trend, Lower Band in Range.
+- Asymmetric Runway Gate: Requires >= 0.45% room to target before risking a dollar.
+- Thesis-Driven Trade Management: Prohibits sub-minute noise panics; holds until target or structural invalidation.
 """
 
 import logging
@@ -14,192 +16,186 @@ import numpy as np
 logger = logging.getLogger("conviction_engine")
 
 OKX_ROUNDTRIP_FEE_PCT = 0.0020  # 0.20% OKX Spot round-trip fee
-
-# Multi-Horizon Weights across all 11 screens (Total = 1.0)
-HORIZON_WEIGHTS = {
-    # Macro Tier (35%)
-    "1D": 0.10,
-    "6h": 0.08,
-    "4h": 0.09,
-    "2h": 0.08,
-    # Structural Tier (30%)
-    "1h": 0.10,
-    "30m": 0.10,
-    "15m": 0.10,
-    # Tactical Trigger Tier (35%)
-    "5m": 0.10,
-    "3m": 0.08,
-    "1m": 0.10,
-    "1s": 0.07,
-}
+MIN_RUNWAY_PCT = 0.45           # 0.45% minimum required room to structural target
 
 
 class FreeConvictionEngine:
     """
-    Autonomous Expected Value Agent.
-    Evaluates the continuous probability P_up across all 11 screens and decides actions dynamically.
+    Whale & Liquidity Thesis-Driven Decision Engine.
+    Operates without indicator lag or single-timeframe restrictions.
     """
 
     def __init__(self):
         pass
 
-    def compute_directional_probability(self, matrix: dict) -> Tuple[float, dict]:
-        """
-        Calculates the continuous directional probability P_up in [0.0, 1.0] across all 11 screens.
-        Returns: (P_up, screen_telemetry_dict)
-        """
-        tf_data = matrix.get("timeframes", {})
-        price = matrix.get("latest_price", 0.0)
-        tanh_imbalance = matrix.get("tanh_imbalance", 0.0)
-        absorption_idx = matrix.get("absorption_index", 0.0)
-        oi_zscore = matrix.get("oi_zscore", 0.0)
-        trade_vel = matrix.get("trade_velocity", 0.0)
-        vwap = matrix.get("session_vwap", price)
-
-        raw_score = 0.0
-        screen_votes = {}
-
-        # 1. Evaluate all 11 Timeframes (Trend alignment + Momentum acceleration)
-        for tf, weight in HORIZON_WEIGHTS.items():
-            item = tf_data.get(tf, {})
-            if not item:
-                continue
-
-            tf_score = 0.0
-
-            # 1.1 Trend Alignment (EMA 9 vs EMA 21 vs EMA 50)
-            ema9 = item.get("ema_9", price)
-            ema21 = item.get("ema_21", price)
-            ema50 = item.get("ema_50", price)
-            if ema9 > ema21 > ema50:
-                tf_score += 1.0
-            elif ema9 > ema21:
-                tf_score += 0.5
-            elif ema9 < ema21 < ema50:
-                tf_score -= 1.0
-            elif ema9 < ema21:
-                tf_score -= 0.5
-
-            # 1.2 MACD Momentum Acceleration
-            macd_hist = item.get("macd_hist", 0.0)
-            if macd_hist > 0:
-                tf_score += 0.5
-            elif macd_hist < 0:
-                tf_score -= 0.5
-
-            # 1.3 Bollinger Band Position
-            pct_b = item.get("bb_pct_b", 0.5)
-            # Normalizing pct_b into [-1.0, +1.0]
-            bb_score = (pct_b - 0.5) * 2.0
-            tf_score += 0.3 * bb_score
-
-            # Weight and accumulate
-            raw_score += tf_score * weight
-            screen_votes[tf] = round(tf_score, 2)
-
-        # 2. Order Book Depth & Wall Mass
-        raw_score += 0.40 * tanh_imbalance
-
-        # 3. Derivatives Leverage Expansion
-        if oi_zscore != 0:
-            norm_oi = float(np.tanh(oi_zscore / 2.0))
-            raw_score += 0.25 * norm_oi
-
-        # 4. Real-Time Absorption (Taker sells swallowed by resting bids)
-        if absorption_idx > 15.0:
-            raw_score += 0.30
-
-        # Convert raw_score into continuous probability P_up using Sigmoid
-        # Sigmoid: P_up = 1 / (1 + exp(-2.2 * raw_score))
-        p_up = float(1.0 / (1.0 + np.exp(-2.2 * raw_score)))
-
-        telemetry = {
-            "p_up": round(p_up, 4),
-            "raw_score": round(raw_score, 3),
-            "screen_votes": screen_votes,
-            "order_book_tanh": round(tanh_imbalance, 3),
-            "oi_zscore": round(oi_zscore, 2),
-            "absorption_index": round(absorption_idx, 2),
-        }
-        return p_up, telemetry
-
     def evaluate(self, matrix: dict, active_trade: Optional[dict] = None) -> dict:
         """
-        Evaluates the 11-screen board state and outputs action without leashes or static stop lines.
+        Evaluates the multi-screen matrix, liquidity gravity, and thesis state.
+        Outputs decisive autonomous actions.
         """
-        price = matrix.get("latest_price", 0.0)
+        price = float(matrix.get("latest_price", 0.0))
         if price <= 0:
-            return {"action": "WAIT", "reason": "Awaiting live price feed"}
+            return {"action": "WAIT_IN_CASH", "reason": "Awaiting live price feed"}
 
-        p_up, telemetry = self.compute_directional_probability(matrix)
-        tf_data = matrix.get("timeframes", {})
-        atr_15m = tf_data.get("15m", {}).get("atr", 150.0)
-        # Dynamic expansion range: at least 0.50% or based on 15m ATR
-        expected_expansion_pct = max((atr_15m * 1.5) / price if price > 0 else 0.005, 0.005)
+        liq_gravity = matrix.get("liquidity_gravity", {})
+        regime_data = matrix.get("regime_analysis", {})
+        micro_data = matrix.get("micro_reversal", {})
+        tanh_imb = float(matrix.get("tanh_imbalance", 0.0))
+        absorption_idx = float(matrix.get("absorption_index", 0.0))
+        trade_vel = float(matrix.get("trade_velocity", 0.0))
 
-        # Expected Value: Probability * Magnitude - Downside - Fee
-        expected_edge = (p_up * expected_expansion_pct) - ((1.0 - p_up) * expected_expansion_pct * 0.8) - OKX_ROUNDTRIP_FEE_PCT
+        regime = regime_data.get("regime", "RANGE")
+        is_dead_chop = bool(regime_data.get("is_dead_chop", False))
+        dynamic_support = float(regime_data.get("dynamic_support", price * 0.99))
+        dynamic_target = float(regime_data.get("dynamic_target", price * 1.01))
+        runway_pct = float(regime_data.get("runway_pct", 0.0))
+
+        overhead_fuel_pct = float(liq_gravity.get("overhead_fuel_pct", 1.0))
+        downside_fuel_pct = float(liq_gravity.get("downside_fuel_pct", 1.0))
+        overhead_fuel_cleared = bool(liq_gravity.get("overhead_fuel_cleared", False))
+        is_bottom_swept = bool(liq_gravity.get("is_bottom_swept", False))
+        is_green_building = bool(micro_data.get("is_green_building", False))
 
         # ==================================================================
-        # STATE 1: ALREADY IN POSITION -> UNRESTRICTED AUTONOMOUS MANAGEMENT
+        # STATE 1: ALREADY IN A POSITION (THESIS-DRIVEN MANAGEMENT)
         # ==================================================================
         if active_trade:
             entry = float(active_trade.get("entry", price))
-            gain_pct = (price - entry) / entry
+            gain_pct = (price - entry) / entry if entry > 0 else 0.0
+            target_price = float(active_trade.get("target_price", dynamic_target))
+            invalidation_floor = float(active_trade.get("invalidation_floor", dynamic_support * 0.998))
             tranche_2 = bool(active_trade.get("tranche_2_added", False))
+            scenario = active_trade.get("scenario", "TRADE")
 
-            # 1. IMMEDIATE INVALIDATION CUT (No static stop lines, no waiting)
-            # The edge has flipped to sellers. Cut immediately at market.
-            if p_up < 0.44:
-                action_name = "HARVEST_PROFIT" if gain_pct >= 0.0020 else "CUT_IMMEDIATE"
+            # 1.1 PEAK EXHAUSTION / WHALE FLUSH IMMINENT
+            # If in profit and the overhead short liquidations have been swept while downside liquidations are thick
+            if gain_pct >= 0.0018 and overhead_fuel_cleared and downside_fuel_pct > 0.50:
                 return {
-                    "action": action_name,
-                    "p_up": p_up,
+                    "action": "BANK_PROFIT",
                     "gain_pct": gain_pct,
-                    "reason": f"Directional edge flipped negative (P_up={p_up*100:.1f}%). Exiting immediately at market.",
-                    "telemetry": telemetry,
+                    "exit_price": price,
+                    "reason": f"PEAK EXHAUSTION: Overhead short stops cleared. Downside pool active ({downside_fuel_pct:.2f}%). Banking profit at peak (+{gain_pct*100:.2f}%).",
+                    "telemetry": {"scenario": scenario, "gain_pct": gain_pct, "fuel_ratio": liq_gravity.get("fuel_ratio", 1.0)},
                 }
 
-            # 2. SCALE-IN ON ABSORPTION DIP (Deploy Lot 2)
-            # Price pulls back, but higher timeframes remain strongly bullish (P_up >= 0.70)
-            # and order book confirms absorption
-            if not tranche_2 and -0.0060 <= gain_pct <= 0.0020 and p_up >= 0.70:
-                if matrix.get("absorption_index", 0.0) > 15.0 or matrix.get("tanh_imbalance", 0.0) > 0.25:
+            # 1.2 TARGET REACHED
+            if price >= target_price:
+                # Check if volatility balloon is actively expanding (trend riding mode)
+                ind_15m = matrix.get("timeframes", {}).get("15m", {})
+                bb_width = ind_15m.get("bb_width", 1.0)
+                if bb_width > 1.2 and overhead_fuel_pct > 0.80 and tanh_imb > 0.20:
                     return {
-                        "action": "SCALE_IN_LOT_2",
-                        "p_up": p_up,
+                        "action": "RIDE_UNCAPPED",
                         "gain_pct": gain_pct,
-                        "reason": f"Bullish Absorption Dip at discount. P_up={p_up*100:.1f}%. Deploying Lot 2.",
-                        "telemetry": telemetry,
+                        "reason": f"Target reached (+{gain_pct*100:.2f}%), but Volatility Balloon expanding with untouched overhead fuel. Riding wave.",
+                        "telemetry": {"scenario": scenario, "gain_pct": gain_pct},
+                    }
+                else:
+                    return {
+                        "action": "BANK_PROFIT",
+                        "gain_pct": gain_pct,
+                        "exit_price": price,
+                        "reason": f"TARGET REACHED (+{gain_pct*100:.2f}%). Momentum capping at resistance. Profit secured in wallet.",
+                        "telemetry": {"scenario": scenario, "gain_pct": gain_pct},
                     }
 
-            # 3. RIDE UNCAPPED (Market is paying us)
+            # 1.3 SCALE-IN ON ABSORPTION DIP (DEPLOY LOT 2)
+            # Price pulls back to discount (-0.40% to -0.10%), stays above invalidation floor, and bids absorb
+            if not tranche_2 and -0.0050 <= gain_pct <= -0.0010 and price > invalidation_floor:
+                if tanh_imb > 0.25 or absorption_idx > 15.0 or is_green_building:
+                    return {
+                        "action": "SCALE_IN_LOT_2",
+                        "gain_pct": gain_pct,
+                        "price": price,
+                        "reason": f"BULLISH ABSORPTION DIP: Price tested support discount with heavy resting bids. Deploying Lot 2.",
+                        "telemetry": {"scenario": scenario, "gain_pct": gain_pct},
+                    }
+
+            # 1.4 THESIS INVALIDATION (RECTIFYING A BAD CHOICE)
+            # Support floor breached on volume -> cut immediately
+            if price < invalidation_floor:
+                return {
+                    "action": "CUT_THESIS_INVALIDATED",
+                    "gain_pct": gain_pct,
+                    "exit_price": price,
+                    "reason": f"THESIS INVALIDATED: Price broke support floor (${invalidation_floor:,.2f}) with volume. Cutting immediately to protect capital.",
+                    "telemetry": {"scenario": scenario, "gain_pct": gain_pct},
+                }
+
+            # 1.5 NOISE IMMUNITY HOLD
             return {
-                "action": "RIDE_UNCAPPED",
-                "p_up": p_up,
+                "action": "HOLD_POSITION",
                 "gain_pct": gain_pct,
-                "reason": f"Riding winning move uncapped. P_up={p_up*100:.1f}%, Net Gain: {gain_pct*100:+.2f}%.",
-                "telemetry": telemetry,
+                "reason": f"THESIS INTACT: Holding {scenario} toward target ${target_price:,.2f}. Current PnL: {gain_pct*100:+.2f}%.",
+                "telemetry": {"scenario": scenario, "gain_pct": gain_pct, "invalidation_floor": invalidation_floor},
             }
 
         # ==================================================================
-        # STATE 2: IN CASH -> SEEKING HIGH-PROBABILITY OPPORTUNITY
+        # STATE 2: IN CASH (SEEKING HIGH-EV OPPORTUNITY OR WAITING PATIENTLY)
         # ==================================================================
-        # Enters only when probability is bullish and net expected edge > 0 after fees
-        if p_up >= 0.60 and expected_edge > 0.0:
+
+        # 2.1 CHOP GATE: Refuse to trade inside dead horizontal consolidation
+        if is_dead_chop:
+            return {
+                "action": "WAIT_IN_CASH",
+                "reason": f"CHOP GATE: Dead horizontal consolidation ({regime_data.get('bb_width_15m', 0):.2f}% bandwidth). Zero trades to preserve capital.",
+                "telemetry": {"regime": regime, "runway_pct": runway_pct},
+            }
+
+        # 2.2 ASYMMETRIC RUNWAY GATE: Room to target must exceed fee hurdle
+        if runway_pct < MIN_RUNWAY_PCT:
+            return {
+                "action": "WAIT_IN_CASH",
+                "reason": f"INSUFFICIENT RUNWAY: Room to target is only +{runway_pct:.2f}% (requires >= {MIN_RUNWAY_PCT}%). Sitting in cash.",
+                "telemetry": {"regime": regime, "runway_pct": runway_pct},
+            }
+
+        # 2.3 DO NOT BUY EXHAUSTED CEILINGS
+        if overhead_fuel_cleared and runway_pct < 0.60:
+            return {
+                "action": "WAIT_IN_CASH",
+                "reason": "CEILING GATE: Overhead short liquidity cleared. Risk of whale flush downward. Waiting in cash.",
+                "telemetry": {"regime": regime, "overhead_fuel_pct": overhead_fuel_pct},
+            }
+
+        # 2.4 SCENARIO A: DIP ABSORPTION (CATCHING GREEN BODY OUT OF SUPPORT)
+        # Price is near dynamic support (MB in Bull Trend, DN in Range)
+        is_near_support = (price <= dynamic_support * 1.002) or is_bottom_swept
+        if is_near_support and is_green_building:
+            if tanh_imb > 0.15 or absorption_idx > 12.0 or is_bottom_swept:
+                invalidation = dynamic_support * 0.9982  # 0.18% below support
+                return {
+                    "action": "ENTER_CORE_LOT_1",
+                    "entry_price": price,
+                    "scenario": f"DIP_ABSORPTION_{regime}",
+                    "target_price": dynamic_target,
+                    "invalidation_floor": invalidation,
+                    "expected_runway_pct": runway_pct,
+                    "reason": f"DIP ABSORPTION: Green candle building from {regime} support (${dynamic_support:,.2f}) with bid absorption. Target: ${dynamic_target:,.2f} (+{runway_pct:.2f}%).",
+                    "telemetry": {"regime": regime, "runway_pct": runway_pct, "invalidation": invalidation},
+                }
+
+        # 2.5 SCENARIO B: VOLATILITY BREAKOUT WITH OPEN LIQUIDITY FUEL
+        # Piercing upper band with wide open overhead runway and aggressive tape
+        ind_15m = matrix.get("timeframes", {}).get("15m", {})
+        up_15m = ind_15m.get("bb_upper", price * 1.01)
+        if price >= up_15m and overhead_fuel_pct >= 0.75 and tanh_imb > 0.30 and trade_vel > 15.0:
+            invalidation = up_15m * 0.998
+            target = price * 1.012  # +1.20% breakout wave
             return {
                 "action": "ENTER_CORE_LOT_1",
-                "p_up": p_up,
-                "expected_edge_pct": expected_edge,
                 "entry_price": price,
-                "reason": f"High-probability edge detected (P_up={p_up*100:.1f}%, E[Edge]={expected_edge*100:+.2f}%). Entering Core Lot 1.",
-                "telemetry": telemetry,
+                "scenario": "FUELED_BREAKOUT",
+                "target_price": target,
+                "invalidation_floor": invalidation,
+                "expected_runway_pct": 1.20,
+                "reason": f"FUELED BREAKOUT: Upper band pierced with open short liquidation fuel ahead (+{overhead_fuel_pct:.2f}%). Takers lifting book.",
+                "telemetry": {"regime": regime, "overhead_fuel_pct": overhead_fuel_pct},
             }
 
+        # Default: Patiently wait in 100% cash
         return {
-            "action": "SCANNING_IN_CASH",
-            "p_up": p_up,
-            "expected_edge_pct": expected_edge,
-            "reason": f"Scanning 11 screens. P_up={p_up*100:.1f}%. Sitting in cash to preserve capital.",
-            "telemetry": telemetry,
+            "action": "WAIT_IN_CASH",
+            "reason": f"PATIENT SCANNING: Market in {regime}. No high-probability whale setup active. Sitting in 100% cash.",
+            "telemetry": {"regime": regime, "runway_pct": runway_pct, "tanh_imb": tanh_imb},
         }

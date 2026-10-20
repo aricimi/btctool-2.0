@@ -199,64 +199,72 @@ class ZebraBotEngine:
                 # ACTION DISPATCH & TELEGRAM ALERTS
                 # ----------------------------------------------------------
                 if action == "ENTER_CORE_LOT_1":
-                    entry_p = decision["entry_price"]
+                    entry_p = float(decision["entry_price"])
+                    scenario = decision.get("scenario", "WHALE_EDGE")
+                    target_p = float(decision.get("target_price", entry_p * 1.01))
+                    inval_p = float(decision.get("invalidation_floor", entry_p * 0.998))
                     reason = decision["reason"]
-                    edge_pct = decision.get("expected_edge_pct", 0.0)
+                    runway_pct = float(decision.get("expected_runway_pct", 0.0))
 
-                    self.execution.open_core_lot_1(entry_p, p_up, reason)
+                    self.execution.open_core_lot_1(
+                        entry_price=entry_p,
+                        scenario=scenario,
+                        target_price=target_p,
+                        invalidation_floor=inval_p,
+                        reason=reason,
+                    )
                     self.notifier.send_message(
                         f"🟢 <b>ZEBRA BOT: ENTER CORE LOT 1</b>\n\n"
                         f"<b>Pair:</b> BTC/USDT (Spot)\n"
+                        f"<b>Scenario:</b> <code>{scenario}</code>\n"
                         f"<b>Entry Price:</b> ${entry_p:,.2f}\n"
-                        f"<b>Upward Probability (P_up):</b> {p_up*100:.1f}%\n"
-                        f"<b>Expected Net Edge:</b> +{edge_pct*100:.2f}%\n\n"
-                        f"<b>Autonomous Directive:</b> High-probability institutional momentum confirmed across 11 screens. "
-                        f"Riding move uncapped without static ceiling."
+                        f"<b>Target:</b> ${target_p:,.2f} (+{runway_pct:.2f}%)\n"
+                        f"<b>Invalidation Floor:</b> ${inval_p:,.2f}\n\n"
+                        f"<b>Whale Thesis:</b> {reason}\n"
+                        f"Patience active: Holding through sub-minute noise toward target."
                     )
 
                 elif action == "SCALE_IN_LOT_2":
-                    price = matrix["latest_price"]
+                    price = float(matrix["latest_price"])
                     reason = decision["reason"]
 
-                    self.execution.scale_in_lot_2(price, p_up, reason)
+                    self.execution.scale_in_lot_2(price=price, reason=reason)
                     self.notifier.send_message(
                         f"➕ <b>ZEBRA BOT: SCALE-IN LOT 2 (DIP ABSORPTION)</b>\n\n"
-                        f"<b>Action:</b> Adding Capital at Discount\n"
+                        f"<b>Action:</b> Adding Capital at Support Discount\n"
                         f"<b>Scale Price:</b> ${price:,.2f}\n"
-                        f"<b>New Blended Entry:</b> ${self.execution.active_trade['entry']:,.2f}\n"
-                        f"<b>Upward Probability (P_up):</b> {p_up*100:.1f}%\n\n"
-                        f"<b>Reason:</b> Pullback into support absorbed by resting institutional bids. Multiplying win on rebound."
+                        f"<b>New Blended Entry:</b> ${self.execution.active_trade['entry']:,.2f}\n\n"
+                        f"<b>Reason:</b> Pullback absorbed by resting institutional bids. Multiplying profit on rebound."
                     )
 
-                elif action == "HARVEST_PROFIT":
-                    exit_p = matrix["latest_price"]
+                elif action == "BANK_PROFIT":
+                    exit_p = float(matrix["latest_price"])
                     reason = decision["reason"]
-                    gain_pct = decision.get("gain_pct", 0.0)
+                    gain_pct = float(decision.get("gain_pct", 0.0))
                     net_gain_pct = gain_pct - 0.0020
 
-                    self.execution.close_position(exit_p, reason, p_up)
+                    self.execution.close_position(exit_price=exit_p, exit_reason=reason)
                     self.notifier.send_message(
                         f"🏁 <b>ZEBRA BOT: PROFIT BANKED (+{net_gain_pct*100:.2f}% NET)</b>\n\n"
                         f"<b>Exit Price:</b> ${exit_p:,.2f}\n"
                         f"<b>Gross Market Move:</b> {gain_pct*100:+.2f}%\n"
                         f"<b>OKX Fees Deducted:</b> -0.20%\n"
                         f"<b>Clean Realized Profit:</b> +{net_gain_pct*100:.2f}%\n\n"
-                        f"<b>Reason:</b> Upward momentum exhausted at ceiling (P_up={p_up*100:.1f}%). Profit secured in wallet."
+                        f"<b>Whale Action:</b> {reason}"
                     )
 
-                elif action == "CUT_IMMEDIATE":
-                    exit_p = matrix["latest_price"]
+                elif action == "CUT_THESIS_INVALIDATED":
+                    exit_p = float(matrix["latest_price"])
                     reason = decision["reason"]
-                    gain_pct = decision.get("gain_pct", 0.0)
+                    gain_pct = float(decision.get("gain_pct", 0.0))
                     net_pnl_pct = gain_pct - 0.0020
 
-                    self.execution.close_position(exit_p, reason, p_up)
+                    self.execution.close_position(exit_price=exit_p, exit_reason=reason)
                     self.notifier.send_message(
-                        f"🛑 <b>ZEBRA BOT: IMMEDIATE PREDICTIVE CUT</b>\n\n"
+                        f"🛑 <b>ZEBRA BOT: THESIS CUT (PRESERVE CAPITAL)</b>\n\n"
                         f"<b>Exit Price:</b> ${exit_p:,.2f}\n"
-                        f"<b>Net PnL Impact:</b> {net_pnl_pct*100:+.2f}%\n"
-                        f"<b>Upward Probability:</b> {p_up*100:.1f}% (Flipped Bearish)\n\n"
-                        f"<b>Rule:</b> Zero waiting for a stop line. Directional edge evaporated; cut immediately to protect capital."
+                        f"<b>Net PnL Impact:</b> {net_pnl_pct*100:+.2f}%\n\n"
+                        f"<b>Rectification:</b> {reason}"
                     )
 
                 # Update highest price if active trade exists
@@ -266,7 +274,7 @@ class ZebraBotEngine:
                 # Check Telegram command listener
                 cmd = self.notifier.poll_incoming_command()
                 if cmd:
-                    self._handle_telegram_cmd(cmd, matrix, p_up)
+                    self._handle_telegram_cmd(cmd, matrix, p_up=0.0)
 
                 # Periodic garbage collection and CSV auto-flush
                 if cycle_count % 30 == 0:
@@ -278,38 +286,49 @@ class ZebraBotEngine:
 
             await asyncio.sleep(1.0)
 
-    def _handle_telegram_cmd(self, cmd: str, matrix: dict, p_up: float):
-        """Responds to on-demand Telegram commands with 11-screen telemetry."""
+    def _handle_telegram_cmd(self, cmd: str, matrix: dict, p_up: float = 0.0):
+        """Responds to on-demand Telegram commands with Whale & Liquidity telemetry."""
         if cmd in ("/status", "/ping", "/info"):
             price = matrix.get("latest_price", 0.0)
             tanh_imb = matrix.get("tanh_imbalance", 0.0)
-            oi_z = matrix.get("oi_zscore", 0.0)
-            vwap = matrix.get("session_vwap", 0.0)
-            trade_vel = matrix.get("trade_velocity", 0.0)
+            regime_data = matrix.get("regime_analysis", {})
+            liq_gravity = matrix.get("liquidity_gravity", {})
+            regime = regime_data.get("regime", "UNKNOWN")
+            runway = regime_data.get("runway_pct", 0.0)
+            fuel_ratio = liq_gravity.get("fuel_ratio", 1.0)
+            overhead_fuel = liq_gravity.get("overhead_fuel_pct", 0.0)
+            downside_fuel = liq_gravity.get("downside_fuel_pct", 0.0)
             active = self.execution.active_trade
 
             status_msg = (
-                f"🦓 <b>ZEBRA BOT 100-SCREEN TELEMETRY</b>\n\n"
+                f"🦓 <b>ZEBRA BOT WHALE TELEMETRY</b>\n\n"
                 f"<b>BTC Price:</b> ${price:,.2f}\n"
-                f"<b>Directional Probability (P_up):</b> {p_up*100:.1f}%\n"
-                f"<b>Order Book Skew (tanh):</b> {tanh_imb:+.2f}\n"
-                f"<b>OI Change Z-Score:</b> {oi_z:+.2f}\n"
-                f"<b>Session VWAP:</b> ${vwap:,.2f}\n"
-                f"<b>Trade Velocity:</b> {trade_vel:.1f} trades/sec\n\n"
+                f"<b>Market Scenario:</b> <code>{regime}</code>\n"
+                f"<b>Asymmetric Runway:</b> +{runway:.2f}%\n"
+                f"<b>Order Book Skew:</b> {tanh_imb:+.2f}\n"
+                f"<b>Overhead Fuel (Shorts):</b> +{overhead_fuel:.2f}%\n"
+                f"<b>Downside Fuel (Longs):</b> -{downside_fuel:.2f}%\n"
+                f"<b>Fuel Ratio (Over/Down):</b> {fuel_ratio:.2f}\n\n"
             )
 
             if active:
                 entry = active.get("entry", 0.0)
                 gain = ((price - entry) / entry) * 100.0 if entry > 0 else 0.0
+                target = active.get("target_price", 0.0)
+                floor = active.get("invalidation_floor", 0.0)
+                scenario = active.get("scenario", "TRADE")
                 status_msg += (
-                    f"<b>Active Position:</b> LONG\n"
+                    f"<b>Active Position:</b> LONG ({scenario})\n"
                     f"<b>Blended Entry:</b> ${entry:,.2f}\n"
+                    f"<b>Target:</b> ${target:,.2f}\n"
+                    f"<b>Invalidation Floor:</b> ${floor:,.2f}\n"
                     f"<b>Unrealized Net PnL:</b> {gain - 0.20:+.2f}%\n"
                     f"<b>Lot 2 Deployed:</b> {'YES' if active.get('tranche_2_added') else 'NO'}\n"
-                    f"<b>Mode:</b> Riding Uncapped (P_up={p_up*100:.1f}%)\n"
+                    f"<b>Noise Immunity:</b> ACTIVE\n"
                 )
             else:
-                status_msg += "<b>Active Position:</b> 100% CASH (Scanning for Edge)\n"
+                chop_str = "LOCKED (Chop Gate)" if regime_data.get("is_dead_chop") else "PATIENT SCANNING"
+                status_msg += f"<b>Active Position:</b> 100% DEFENSIVE CASH ({chop_str})\n"
 
             self.notifier.send_message(status_msg)
 

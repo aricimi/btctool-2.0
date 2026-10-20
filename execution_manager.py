@@ -96,13 +96,21 @@ class ExecutionManager:
         except Exception as e:
             logger.error(f"[Execution] Error saving state: {e}")
 
-    def open_core_lot_1(self, entry_price: float, p_up: float, reason: str) -> dict:
-        """Opens Core Position (Lot 1) without static stops or artificial ceilings."""
+    def open_core_lot_1(
+        self,
+        entry_price: float,
+        scenario: str,
+        target_price: float,
+        invalidation_floor: float,
+        reason: str,
+        p_up: float = 0.70,
+    ) -> dict:
+        """Opens Core Position (Lot 1) with specific Whale Thesis parameters."""
         trade_id = self.journal.record_entry(
-            setup_name=f"ZEBRA AUTONOMOUS: P_up={p_up*100:.1f}%",
+            setup_name=f"ZEBRA WHALE: {scenario}",
             entry_price=entry_price,
-            stop_loss=0.0,  # Zero static stop; governed by dynamic P_up invalidation
-            target_1=0.0,   # Zero static target; rides uncapped
+            stop_loss=invalidation_floor,
+            target_1=target_price,
             target_2=0.0,
             rationale=reason,
         )
@@ -111,16 +119,18 @@ class ExecutionManager:
             "trade_id": trade_id,
             "entry": round(entry_price, 2),
             "highest_price": round(entry_price, 2),
-            "p_up": round(p_up, 4),
+            "scenario": scenario,
+            "target_price": round(target_price, 2),
+            "invalidation_floor": round(invalidation_floor, 2),
             "tranche_2_added": False,
             "timestamp": time.time(),
             "reason": reason,
         }
         self.save_state(market_state="IN_POSITION")
-        logger.info(f"[Execution] Core Lot 1 opened: ${entry_price:,.2f} | P_up={p_up*100:.1f}%")
+        logger.info(f"[Execution] Core Lot 1 opened: ${entry_price:,.2f} | Scenario: {scenario} | Target: ${target_price:,.2f}")
         return self.active_trade
 
-    def scale_in_lot_2(self, price: float, p_up: float, reason: str):
+    def scale_in_lot_2(self, price: float, reason: str, p_up: float = 0.75):
         """Scales in Lot 2 on verified Bullish Absorption Dip."""
         if not self.active_trade:
             return
@@ -129,17 +139,16 @@ class ExecutionManager:
         blended_entry = round((old_entry + price) / 2.0, 2)
         self.active_trade["entry"] = blended_entry
         self.active_trade["tranche_2_added"] = True
-        self.active_trade["p_up"] = round(p_up, 4)
 
         self.save_state(market_state="SCALED_LOT_2")
         logger.info(f"[Execution] Lot 2 scaled in at ${price:,.2f}. Blended Entry=${blended_entry:,.2f}")
 
-    def close_position(self, exit_price: float, exit_reason: str, p_up: float):
+    def close_position(self, exit_price: float, exit_reason: str, p_up: float = 0.50):
         """Closes position immediately at market and updates ledger."""
         if not self.active_trade:
             return
 
-        full_reason = f"ZEBRA EXIT: {exit_reason} (P_up={p_up*100:.1f}%)"
+        full_reason = f"ZEBRA EXIT: {exit_reason}"
         self.journal.record_exit(exit_price=exit_price, exit_reason=full_reason)
         self.active_trade = None
         self.save_state(market_state="SCANNING")
