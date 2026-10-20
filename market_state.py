@@ -166,15 +166,19 @@ class MarketState:
                         resistance_pool.append((lvl, f"{tf}_{band_key}"))
 
         # 2. Pool swing highs and swing lows across macro timeframes (15m, 1h, 4h, 1D)
+        all_recent_highs = []
         for tf in ("15m", "1h", "4h", "1D"):
             candles = stream.get_candles(tf)
             if candles and len(candles) >= 5:
                 recent_high = float(max(c["high"] for c in candles[-20:]))
                 recent_low = float(min(c["low"] for c in candles[-20:]))
+                all_recent_highs.append(recent_high)
                 if recent_low < current_price:
                     support_pool.append((recent_low, f"{tf}_swing_low"))
                 if recent_high > current_price:
                     resistance_pool.append((recent_high, f"{tf}_swing_high"))
+
+        pooled_swing_high = max(all_recent_highs) if all_recent_highs else current_price
 
         # Sort by distance to current price
         support_pool.sort(key=lambda x: x[0], reverse=True)  # Nearest support is [0]
@@ -195,6 +199,7 @@ class MarketState:
             "support_label": s_label,
             "nearest_resistance": nearest_resistance,
             "resistance_label": r_label,
+            "pooled_swing_high": pooled_swing_high,
             "macro_ceiling": macro_ceiling,
             "immediate_runway_pct": immediate_runway_pct,
             "macro_runway_pct": macro_runway_pct,
@@ -331,6 +336,10 @@ class MarketState:
             }
 
         matrix["timeframes"] = tf_indicators
+
+        # Multi-Screen Dynamic Composite ATR (median across active horizons)
+        atrs = [float(data["atr"]) for data in tf_indicators.values() if data.get("atr", 0.0) > 0.0]
+        matrix["composite_atr"] = float(np.median(atrs)) if atrs else max(float(stream.latest_price) * 0.003, 150.0)
 
         # 3. Session Anchored VWAP
         ref_candles = stream.get_candles("5m") or stream.get_candles("1m")

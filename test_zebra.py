@@ -205,11 +205,32 @@ class TestZebraBot(unittest.TestCase):
         self.assertEqual(bank_decision["action"], "BANK_PROFIT")
         self.assertIn("TRAILING STOP HIT", bank_decision["reason"])
 
-        # 5. CONTROLLED THESIS INVALIDATION CUT: Price drops below initial stop floor
+        # 5. CONTROLLED THESIS INVALIDATION CUT: Price drops below stop and order book bids collapse
         inval_matrix = dict(dip_matrix)
-        inval_matrix["latest_price"] = 81600.0  # Dropped below 81,650 floor
+        inval_matrix["latest_price"] = 81400.0  # Plunged past emergency buffer
+        inval_matrix["tanh_imbalance"] = -0.30  # Aggressive selling
+        inval_matrix["absorption_index"] = 1.0  # Zero absorption
         cut_decision = self.brain.evaluate(inval_matrix, active_trade=active_trade)
         self.assertEqual(cut_decision["action"], "CUT_THESIS_INVALIDATED")
+
+        # 6. MEMORY SOFT STOP WICK IMMUNITY: Price touches stop, but resting bids are absorbing the sweep
+        wick_matrix = dict(dip_matrix)
+        wick_matrix["latest_price"] = 81640.0   # Touching stop floor ($81,650)
+        wick_matrix["tanh_imbalance"] = 0.35    # Resting bids thick!
+        wick_matrix["absorption_index"] = 22.0  # Whale absorption active!
+        wick_decision = self.brain.evaluate(wick_matrix, active_trade=active_trade)
+        self.assertEqual(wick_decision["action"], "HOLD_POSITION")
+        self.assertIn("ABSORPTION AT FLOOR", wick_decision["reason"])
+
+        # 7. CONTEXTUAL SCALE-IN LOT 2 AT STRUCTURAL SUPPORT DISCOUNT
+        scale_trade = dict(active_trade)
+        scale_trade["tranche_2_added"] = False
+        scale_matrix = dict(dip_matrix)
+        scale_matrix["latest_price"] = 81710.0  # Testing support floor ($81,720) at discount to entry ($81,750)
+        scale_matrix["tanh_imbalance"] = 0.30   # Institutional bids active
+        scale_matrix["absorption_index"] = 18.0
+        scale_decision = self.brain.evaluate(scale_matrix, active_trade=scale_trade)
+        self.assertEqual(scale_decision["action"], "SCALE_IN_LOT_2")
 
     def test_05_execution_manager_clean_slate_and_trailing(self):
         """Verify ExecutionManager position operations, trailing ratcheting, and target stepping."""

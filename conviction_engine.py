@@ -43,6 +43,7 @@ class FreeConvictionEngine:
 
         nearest_support = float(bounds.get("nearest_support", price * 0.99))
         nearest_resistance = float(bounds.get("nearest_resistance", price * 1.01))
+        pooled_swing_high = float(bounds.get("pooled_swing_high", nearest_resistance))
         macro_ceiling = float(bounds.get("macro_ceiling", nearest_resistance * 1.02))
         immediate_runway = float(bounds.get("immediate_runway_pct", 0.0))
         macro_runway = float(bounds.get("macro_runway_pct", 0.0))
@@ -52,8 +53,16 @@ class FreeConvictionEngine:
 
         tanh_imb = float(matrix.get("tanh_imbalance", 0.0))
         absorption_idx = float(matrix.get("absorption_index", 0.0))
-        is_green_building = bool(micro_turn.get("is_green_building", False))
         velocity_slowing = bool(micro_turn.get("velocity_slowing", False))
+        cvd = float(matrix.get("cvd", 0.0))
+        trade_vel = float(matrix.get("trade_velocity", 0.0))
+
+        atr = float(matrix.get("composite_atr", 250.0))
+
+        # Dynamic Volatility Invalidation: anchored behind nearest support with ATR buffer
+        raw_risk = max(price - nearest_support, 0.0) + (0.5 * atr)
+        clamped_risk = min(max(raw_risk, 0.8 * atr), 2.0 * atr)
+        dynamic_invalidation = min(price - (0.8 * atr), price - clamped_risk)
 
         # ==================================================================
         # STATE 1: ALREADY IN A POSITION (TRAILING & RIDING THE WAVE)
@@ -66,9 +75,10 @@ class FreeConvictionEngine:
             tranche_2 = bool(active_trade.get("tranche_2_added", False))
             scenario = active_trade.get("scenario", "TRADE")
 
-            # 1.1 TRAILING STOP / INVALIDATION HIT
+            # 1.1 IN-SITU MEMORY SOFT STOP EVALUATION
             if price <= trailing_stop:
                 if gain_pct >= 0.0020:
+                    # In profit: Trailing stop reached -> Bank profit
                     return {
                         "action": "BANK_PROFIT",
                         "gain_pct": gain_pct,
@@ -77,13 +87,34 @@ class FreeConvictionEngine:
                         "telemetry": {"scenario": scenario, "gain_pct": gain_pct},
                     }
                 else:
-                    return {
-                        "action": "CUT_THESIS_INVALIDATED",
-                        "gain_pct": gain_pct,
-                        "exit_price": price,
-                        "reason": f"STOP HIT: Price crossed floor at ${trailing_stop:,.2f}. Controlled cut small ({gain_pct*100:+.2f}%).",
-                        "telemetry": {"scenario": scenario, "gain_pct": gain_pct},
-                    }
+                    # Underwater: At invalidation floor. In-Situ Audit:
+                    # Hard Emergency Floor: if price drops past floor by > 0.8 * ATR, cut unconditionally
+                    if price <= (trailing_stop - (0.8 * atr)):
+                        return {
+                            "action": "CUT_THESIS_INVALIDATED",
+                            "gain_pct": gain_pct,
+                            "exit_price": price,
+                            "reason": f"HARD FLOOR BREACH: Price broke past floor buffer (${price:,.2f}). Position closed to preserve capital.",
+                            "telemetry": {"scenario": scenario, "gain_pct": gain_pct},
+                        }
+
+                    # Memory Soft Stop: Check if resting bids are absorbing the wick sweep
+                    if tanh_imb > 0.15 or absorption_idx > 15.0:
+                        return {
+                            "action": "HOLD_POSITION",
+                            "gain_pct": gain_pct,
+                            "trailing_stop": trailing_stop,
+                            "reason": f"ABSORPTION AT FLOOR: Price touching ${price:,.2f}, but bids absorbing sweep (tanh_imb={tanh_imb:+.2f}, Ai={absorption_idx:.1f}). Holding.",
+                            "telemetry": {"scenario": scenario, "gain_pct": gain_pct, "trailing_stop": trailing_stop},
+                        }
+                    else:
+                        return {
+                            "action": "CUT_THESIS_INVALIDATED",
+                            "gain_pct": gain_pct,
+                            "exit_price": price,
+                            "reason": f"STRUCTURAL BREAKDOWN: Support broken without bid absorption. Controlled cut small ({gain_pct*100:+.2f}%).",
+                            "telemetry": {"scenario": scenario, "gain_pct": gain_pct},
+                        }
 
             # 1.2 DYNAMIC TRAILING RATCHET (PROTECTING PROFITS & RIDING)
             updated_trailing_stop = trailing_stop
@@ -94,7 +125,7 @@ class FreeConvictionEngine:
 
             # As price surges higher, ratchet stop behind the rising nearest support
             if gain_pct >= 0.0070 and nearest_support > entry:
-                ratchet_level = nearest_support * 0.9990
+                ratchet_level = nearest_support - (0.3 * atr)
                 if ratchet_level > updated_trailing_stop:
                     updated_trailing_stop = ratchet_level
                     logger.info(f"[Brain] Ratchet trailing stop higher behind rising support: ${updated_trailing_stop:,.2f}")
@@ -120,15 +151,16 @@ class FreeConvictionEngine:
                         "telemetry": {"scenario": scenario, "gain_pct": gain_pct},
                     }
 
-            # 1.4 SCALE-IN LOT 2 ON CONFIRMED ABSORPTION PULLBACK
-            if not tranche_2 and -0.0040 <= gain_pct <= -0.0010 and price > trailing_stop:
-                if tanh_imb > 0.25 or absorption_idx > 15.0 or is_green_building:
-                    return {
-                        "action": "SCALE_IN_LOT_2",
-                        "price": price,
-                        "reason": f"ABSORPTION PULLBACK: Dip absorbed by resting bids. Adding capital at discount.",
-                        "telemetry": {"scenario": scenario, "gain_pct": gain_pct},
-                    }
+            # 1.4 SCALE-IN LOT 2 ON CONFIRMED STRUCTURAL ABSORPTION DISCOUNT
+            dist_to_support = abs(price - nearest_support)
+            is_at_support_zone = (dist_to_support <= (0.75 * atr)) and (price < entry)
+            if not tranche_2 and is_at_support_zone and (tanh_imb > 0.15 or absorption_idx > 15.0 or velocity_slowing):
+                return {
+                    "action": "SCALE_IN_LOT_2",
+                    "price": price,
+                    "reason": f"STRUCTURAL DISCOUNT ABSORPTION: Pullback to support (${nearest_support:,.2f}) absorbed by resting bids. Adding Lot 2 at discount.",
+                    "telemetry": {"scenario": scenario, "gain_pct": gain_pct},
+                }
 
             # 1.5 NOISE-IMMUNE HOLD
             return {
@@ -159,50 +191,43 @@ class FreeConvictionEngine:
                 "telemetry": {"immediate_runway": immediate_runway},
             }
 
-        # 2.3 SETUP A: BOTTOM / DIP TURN PREDICTION (BUYING LOW)
-        # Price is testing support from any screen (Middle Band in uptrend, Lower Band in range)
-        dist_to_support_pct = ((price - nearest_support) / price) * 100.0 if price > 0 else 999.0
-        is_at_support_floor = (0.0 <= dist_to_support_pct <= 0.40) or (dist_to_support_pct < 0.0 and dist_to_support_pct >= -0.30)
+        # 2.3 SETUP A: BOTTOM / DIP TURN PREDICTION (BUYING LOW AT SUPPORT)
+        dist_to_support = abs(price - nearest_support)
+        is_at_support_floor = dist_to_support <= (0.75 * atr)
+        is_absorption_confirmed = (tanh_imb > 0.15 or absorption_idx > 12.0 or velocity_slowing)
 
-        if is_at_support_floor and is_green_building:
-            # Absorption confirmation: bids swallowing sells or velocity slowing
-            if tanh_imb > 0.15 or absorption_idx > 12.0 or velocity_slowing:
-                # Invalidation is GUARANTEED below actual entry price:
-                risk_dist = max(price * 0.0022, 60.0)
-                invalidation = min(price, nearest_support) - risk_dist
-                target = nearest_resistance
+        if is_at_support_floor and is_absorption_confirmed:
+            target = nearest_resistance
+            return {
+                "action": "ENTER_CORE_LOT_1",
+                "entry_price": price,
+                "scenario": "DIP_ABSORPTION_TURN",
+                "target_price": target,
+                "invalidation_floor": dynamic_invalidation,
+                "trailing_stop": dynamic_invalidation,
+                "expected_runway_pct": immediate_runway,
+                "reason": f"DIP TURN PREDICTED: Tested support (${nearest_support:,.2f}) with bid absorption (Ai={absorption_idx:.1f}, tanh_imb={tanh_imb:+.2f}). Target: ${target:,.2f} (+{immediate_runway:.2f}%).",
+                "telemetry": {"support": nearest_support, "target": target, "invalidation": dynamic_invalidation},
+            }
 
-                return {
-                    "action": "ENTER_CORE_LOT_1",
-                    "entry_price": price,
-                    "scenario": "DIP_ABSORPTION_TURN",
-                    "target_price": target,
-                    "invalidation_floor": invalidation,
-                    "trailing_stop": invalidation,
-                    "expected_runway_pct": immediate_runway,
-                    "reason": f"DIP TURN PREDICTED: Green candle expanding from support (${nearest_support:,.2f}) with bid absorption. Target: ${target:,.2f} (+{immediate_runway:.2f}%).",
-                    "telemetry": {"support": nearest_support, "target": target, "invalidation": invalidation},
-                }
+        # 2.4 SETUP B: MACRO FUELED BREAKOUT (BUYING REAL EXPANSION)
+        # Physics Breakout: Price physically at or above the pooled swing high, with positive kinetic push
+        is_clearing_high = price >= (pooled_swing_high - 1.0)
+        is_kinetic_push_positive = (tanh_imb > 0.0) and (cvd >= 0.0 or trade_vel > 8.0)
 
-        # 2.4 SETUP B: MACRO FUELED BREAKOUT (BUYING EXPANSION)
-        # Piercing resistance with expanding balloon and wide open macro ceiling
-        if price >= (nearest_resistance * 0.999) and is_balloon_expanding and macro_runway >= 0.90:
-            if tanh_imb > 0.20 or float(matrix.get("trade_velocity", 0.0)) > 10.0:
-                risk_dist = max(price * 0.0022, 60.0)
-                invalidation = price - risk_dist
-                target = macro_ceiling
-
-                return {
-                    "action": "ENTER_CORE_LOT_1",
-                    "entry_price": price,
-                    "scenario": "MACRO_BALLOON_BREAKOUT",
-                    "target_price": target,
-                    "invalidation_floor": invalidation,
-                    "trailing_stop": invalidation,
-                    "expected_runway_pct": macro_runway,
-                    "reason": f"BALLOON BREAKOUT: Multi-screen balloon opening into macro space (${macro_ceiling:,.2f}, +{macro_runway:.2f}%). Takers lifting book.",
-                    "telemetry": {"target": target, "invalidation": invalidation, "macro_runway": macro_runway},
-                }
+        if is_clearing_high and is_balloon_expanding and is_kinetic_push_positive and macro_runway >= 0.90:
+            target = macro_ceiling
+            return {
+                "action": "ENTER_CORE_LOT_1",
+                "entry_price": price,
+                "scenario": "MACRO_BALLOON_BREAKOUT",
+                "target_price": target,
+                "invalidation_floor": dynamic_invalidation,
+                "trailing_stop": dynamic_invalidation,
+                "expected_runway_pct": macro_runway,
+                "reason": f"BALLOON BREAKOUT: Price cleared swing high (${pooled_swing_high:,.2f}) into macro space (${macro_ceiling:,.2f}, +{macro_runway:.2f}%) with positive kinetic flow.",
+                "telemetry": {"target": target, "invalidation": dynamic_invalidation, "macro_runway": macro_runway},
+            }
 
         # Default: Patiently sitting 100% in cash
         return {

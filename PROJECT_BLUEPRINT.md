@@ -308,10 +308,12 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
 3. **`conviction_engine.py` (Predictive Multi-Screen Autonomous Brain):**
    - **Capital Preservation Directive:** The goal is making money, not making trades. Sitting 100% in cash during low-volatility dead drift is mandatory.
    - **Real Gain Runway Hurdle ($\ge 0.45\%$):** Never enters unless projected room to the next structural resistance is $\ge 0.45\%$ to comfortably clear the 0.20% OKX fee with $>2.5:1$ reward-to-risk.
-   - **Predictive Turn Entries:** Predicts bottoms and dips before they move by measuring kinetic deceleration, resting bid absorption ($A_i$), and green candle reversal building up. Supports can be Middle Band in an uptrend, or Lower Band in a range.
+   - **Dynamic Volatility Structural Stops:** Invalidation floor is anchored behind the nearest pooled structural support with an ATR buffer: $\text{invalidation} = \min(P - 0.8\text{ATR}, P - \text{clamped\_risk})$. Prevents getting shaken out by normal $\$100-\$250$ candle noise.
+   - **In-Situ Memory Soft Stop Audit:** When price touches the trailing stop floor, the engine inspects live order book depth and absorption index ($A_i$). If resting bids are absorbing the wick sweep, holds through noise. Cuts immediately only if order book bids collapse on aggressive selling. An emergency hard floor ($0.8 \times \text{ATR}$ past soft stop) guarantees zero bag-holding.
+   - **Contextual Structural Scale-In (Lot 2):** Deploys at verified structural support discounts ($\text{dist\_to\_support} \le 0.75 \times \text{ATR}$ and $P < \text{entry}$) when resting bids confirm absorption. Lowers blended entry to amplify profits on the reversal wave.
+   - **Physics-Based Breakout Clearance:** Eliminates false breakout entries during pullbacks. Requires price to physically trade at or above the pooled swing high (`price >= pooled_swing_high`) with positive kinetic push (`tanh_imbalance > 0`, `CVD >= 0`).
    - **Uncapped Macro Trailing:** When catching a winning wave, never caps profit at a small fixed target ($0.20\%$). Trails the rising Middle Band to ride $+1.0\%$ to $+2.5\%$ waves ($81,600 \rightarrow 83,600+$).
-   - **Guaranteed Non-Inverted Stop:** Invalidation floor is mathematically guaranteed to sit below the actual entry fill price: $\text{invalidation} = \min(P, \text{support}) - \max(P \times 0.0022, 60.0)$.
-   - **Dynamic Trailing Stop Ratchet:** Breakeven fee protection at $+0.30\%$ gross, ratchets upward behind rising Middle Bands at $\ge +0.70\%$ gain.
+   - **Dynamic Trailing Stop Ratchet:** Breakeven fee protection at $+0.35\%$ gross, ratchets upward behind rising Middle Bands at $\ge +0.70\%$ gain.
 4. **`execution_manager.py` (Thesis Ledger & Multi-Action Manager):**
    - Clean-slate archiving: Legacy logs safely archived to `archive_legacy_trades/`. Fresh autonomous ledger starting from Trade #1.
    - Manages active thesis parameters: `scenario`, `target_price`, `invalidation_floor`, `trailing_stop`.
