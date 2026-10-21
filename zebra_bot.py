@@ -396,7 +396,7 @@ class ZebraBotEngine:
                 b_state = belief.state
                 status_msg += (
                     f"<b>Explicit Belief:</b> <code>{b_state.regime_belief}</code> (Bias: {b_state.directional_bias:+.2f}, Pers: {b_state.persistence_ticks})\n"
-                    f"<b>Adaptive Hurdles:</b> Runway $\ge$ {b_state.adaptive_runway_hurdle:.2f}% | Conf $\ge$ {b_state.adaptive_conf_hurdle:.2f}\n"
+                    f"<b>Adaptive Hurdles:</b> Runway >= {b_state.adaptive_runway_hurdle:.2f}% | Conf >= {b_state.adaptive_conf_hurdle:.2f}\n"
                 )
 
             # Governor & Escalation status
