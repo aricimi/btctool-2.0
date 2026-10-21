@@ -306,7 +306,7 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
      - **Continuous FeatureVector Representation (Spec Section 2.2):** Formulates continuous `trend_strength` (multi-scale weighted EMA slope), `vol_norm` ($\text{composite\_atr} / P$), `entropy` (cross-timeframe signal dispersion in $[0, 1]$), `vol_regime` ($\text{ATR}_{5\text{m}} / \text{ATR}_{1\text{h}}$), and `liquidity` ratio.
      - **Balloon Geometry Analyzer (`compute_balloon_and_regimes`):** Evaluates whether Bollinger bands are actively blowing open outward (`EXPANDING_BALLOON`) or horizontal and slow (`SLOW_MARKET`).
      - **Micro Turn (`compute_micro_turn`):** Sub-minute kinetic deceleration and velocity slowing.
-3. **`conviction_engine.py` (Continuous Edge, Explicit Belief System & Adaptive EV Mind — Spec Section 2.3 & 11.2):**
+3. **`conviction_engine.py` (Continuous Edge, Explicit Belief System & Adaptive EV Mind — Spec Section 2.3 & 11.2 / v3.0):**
    - Pure cognitive modeling: Evaluates continuous mathematical **Edge**:
      $$\text{Edge} = 0.35 \tanh(400 \cdot \text{trend\_strength}) + 0.25 \tanh_{\text{imb}} + 0.20 \min(A_i / 20, 1) + 0.20 \text{flow} - 0.15 \text{entropy}$$
    - **Component 5: Explicit Belief System (`BeliefState` & `BeliefSystem`):**
@@ -315,17 +315,37 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
        $$\text{entropy\_ema}_t = \lambda \cdot \text{entropy\_ema}_{t-1} + (1 - \lambda) \cdot \text{entropy}_t$$
      - Polarity persistence: Tracks consecutive ticks of consistent sign, applying an anti-flicker conviction multiplier ($\min(1.0, 0.70 + 0.15 \cdot \text{persistence})$) to prevent 1-tick flash spikes from triggering full size.
      - Regime belief classification: `BULL_ACCELERATION`, `BEAR_PRESSURE`, `CHOP_COMPRESSION`, `NEUTRAL_WAIT`.
-   - **Component 2: Bounded Adaptive Confidence & Runway Thresholds:**
-     - Dynamic Runway Hurdle ($\theta_{\text{runway}}$): Hard clamped in $[0.40\%, 0.70\%]$. Drops to $0.40\%$ during expanding volatility balloons (`is_balloon_expanding`) to ride surges early; scales up to $0.70\%$ during high-entropy chop to defend capital against fee-drag.
-     - Dynamic Confidence Hurdle ($\theta_{\text{conf}}$): Hard clamped in $[0.45, 0.75]$. Discounts hurdle when resting bid absorption $A_i$ is high; raises hurdle when cross-timeframe entropy increases.
-   - **Net Expected Value Hurdle (Spec Section 11.2):**
+   - **Component 3: Adaptive Confidence Thresholds based on Regime:**
+     - TREND: $\theta_{\text{conf}} = 0.50$ (clean flow, enter early into waves).
+     - BALANCED / RANGE: $\theta_{\text{conf}} = 0.65$.
+     - CHOP / HIGH ENTROPY: $\theta_{\text{conf}} = 0.80$ (demands overwhelming institutional conviction before risking capital).
+   - **Component 7: Intuition Tripwires (Modifiers Only):**
+     - Fast-path tape acceleration ($>8.0$ trades/sec with positive CVD) or strong absorption ($A_i > 20$) adds $+0.05$ to confidence.
+     - Spread inflation ($>0.15\%$) or aggressive taker dumps subtracts $-0.05$ from confidence. Never triggers trades directly.
+   - **Component 4: Mandatory Net Expectancy Gate:**
      $$\mathbb{E}[\text{PnL}_{\text{net}}] = \frac{\max(\text{distance to structural resistance}, 1.2 \cdot \text{ATR})}{P} \times 100 - \text{OKX Fee (0.20%)} - \text{Slippage (0.02%)}$$
-     Rejects trades where $\mathbb{E}[\text{PnL}_{\text{net}}] \le 0.05\%$, mathematically eliminating fee-drag churn during dead compression.
-   - **Momentum Ignition Trigger:** When market fires up (`urgency >= 0.20` or `is_balloon_expanding`), targets macro ceiling ($+1.5\%$ to $+5.5\%$) and enters immediately without being blocked by sub-minute noise lines.
+     Unconditionally rejects trades where $\mathbb{E}[\text{PnL}_{\text{net}}] \le 0.05\%$. Zero bypass loopholes permitted!
+   - **Momentum Ignition Gating:** Breakouts strictly require: $\text{effective\_edge} \ge 0.15$, $\text{effective\_urgency} \ge 0.15$, tuned confidence $\ge \theta_{\text{conf}}$, and Belief State $\neq$ `CHOP_COMPRESSION`.
    - **Dip Turn Reversal Trigger:** When testing structural support with resting bid absorption ($A_i > 12.0$, $\tanh_{\text{imb}} \ge 0.0$) and clearing adaptive runway hurdle.
-4. **`risk_engine.py` (Independent Deterministic Risk Gate — Conscience & Nervous System):**
+   - **Overhauled Trailing Stop & Breakeven Calibration (Hands & Lifecycle):**
+     - Breakeven trigger requires gain $\ge +0.60\%$ (giving breakout trades oxygen to establish).
+     - Breakeven stop clamped to $\text{entry} \times 1.0025$ ($+0.25\%$ gross), guaranteeing $\mathbf{+0.05\% \text{ net clean profit}}$ after OKX 0.20% fees upon any stop touch.
+     - Structural trailing ratchet ($\ge +1.20\%$ gain) trails behind rising support with a minimum $0.8 \times \text{ATR}$ breathing room ($250–$350), eliminating sub-minute noise asphyxiation.
+4. **`risk_engine.py` (Independent Deterministic Risk Gate — Conscience & Governor Organs — v3.0):**
    - **Core Invariant:** *"Models Propose, Risk Disposes."*
-   - **Continuous Sizing (Spec Section 2.3):** Scales baseline size factor dynamically: $\text{size\_factor} = \text{clamp}(\text{confidence} / \max(\text{vol\_regime}, 0.5), 0.25, 1.0)$.
+   - **Component 1: Setup Performance Governor (`SetupPerformanceGovernor` & `SetupHealth`):**
+     - Monitors rolling 20 closed trades for each setup name (`MACRO_BALLOON_BREAKOUT`, `DIP_ABSORPTION_TURN`).
+     - Computes rolling win rate, average net PnL, and health score in $[0, 100]$.
+     - Health $>80$: 100% sizing; Health $60-80$: 75% sizing; Health $40-60$: 50% sizing; Health $20-40$: 25% sizing; Health $<20$: VETO (`REJECT`).
+   - **Component 5: Thesis Failure Counter & Cooldown (`ThesisFailureCounter`):**
+     - Tracks consecutive losses per setup. Penalizes size factor ($0.85\times, 0.70\times$).
+     - 3 consecutive setup failures triggers an automatic 30-minute cooldown on that setup.
+   - **Component 8: Conscience Escalation Gate (`ConscienceEscalation`):**
+     - Tracks portfolio-wide consecutive losses.
+     - If $\ge 3$ consecutive losses occur across the account, temporarily raises required entry confidence by $+10\%$ until recovery.
+   - **Component 6: Lightweight Analytical Stress Engine (`LightweightStressEngine`):**
+     - Evaluates adverse drop to stop, spread inflation shock ($>0.20\%$), and liquidity vacuum ($<30\%$ baseline depth) without Monte Carlo overhead.
+   - **Continuous Sizing (Spec Section 2.3):** Composite sizing factor: $\text{composite\_size} = \text{base\_size} \times \text{gov\_mult} \times \text{fail\_pen}$.
    - **Priority-0 Subconscious Fallback Reflexes (`bot.txt` Nervous System):**
      1. *Blind Reflex:* If WebSocket feed latency $> 5,000\text{ms}$, or bid/ask spread $> 0.25\%$, or book depth collapses $\rightarrow$ VETO with `REFLEX_BLIND_MODE` (freeze all entries, cancel pending limit orders, hold existing position).
      2. *Motor Reflex:* If consecutive exchange API execution errors $\ge 2$ $\rightarrow$ VETO with `REFLEX_MOTOR_LOCKDOWN` until connectivity clears.

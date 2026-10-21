@@ -200,13 +200,13 @@ class FreeConvictionEngine:
 
             # 1.1 IN-SITU MEMORY SOFT STOP EVALUATION
             if price <= trailing_stop:
-                if gain_pct >= 0.0020:
+                if gain_pct >= 0.0025:
                     return TradeIntent(
                         action="BANK_PROFIT",
                         scenario=scenario,
                         gain_pct=gain_pct,
                         entry_price=price,
-                        reason=f"TRAILING STOP HIT (+{gain_pct*100:.2f}% net). Locking in banked profit at ${price:,.2f}.",
+                        reason=f"TRAILING STOP HIT (+{gain_pct*100:.2f}% gross, +{(gain_pct-0.0020)*100:.2f}% net). Locking in banked profit at ${price:,.2f}.",
                         telemetry={"scenario": scenario, "gain_pct": gain_pct},
                     )
                 else:
@@ -220,16 +220,17 @@ class FreeConvictionEngine:
                         telemetry={"scenario": scenario, "gain_pct": gain_pct},
                     )
 
-            # 1.2 DYNAMIC TRAILING RATCHET (PROTECTING PROFITS & RIDING)
+            # 1.2 DYNAMIC NOISE-IMMUNE TRAILING RATCHET (GIVING WINNERS ROOM TO RUN)
             updated_trailing_stop = trailing_stop
-            # Once price gains +0.35%, move stop to Breakeven + fee protection (+0.15%)
-            if gain_pct >= 0.0035 and trailing_stop < (entry * 1.0015):
-                updated_trailing_stop = entry * 1.0015
-                logger.info(f"[Brain] Trade risk-free: trailing stop moved to Breakeven+Fee: ${updated_trailing_stop:,.2f}")
+            # Step 1: Once price gains +0.60% (confirmed macro trend impulse), move stop to Breakeven + Guaranteed Fee Protection (+0.25%)
+            if gain_pct >= 0.0060 and trailing_stop < (entry * 1.0025):
+                updated_trailing_stop = round(entry * 1.0025, 2)
+                logger.info(f"[Brain] Trade confirmed into macro trend: trailing stop moved to Breakeven+Fee: ${updated_trailing_stop:,.2f} (+0.25% gross)")
 
-            # As price surges higher, ratchet stop behind the rising nearest support
-            if gain_pct >= 0.0070 and nearest_support > entry:
-                ratchet_level = nearest_support - (0.3 * atr)
+            # Step 2: As price surges higher (gain >= +1.20%), ratchet stop behind the rising nearest support
+            # with minimum 0.8 * ATR breathing buffer, preventing sub-minute noise asphyxiation
+            if gain_pct >= 0.0120 and nearest_support > entry:
+                ratchet_level = round(nearest_support - (0.8 * atr), 2)
                 if ratchet_level > updated_trailing_stop:
                     updated_trailing_stop = ratchet_level
                     logger.info(f"[Brain] Ratchet trailing stop higher behind rising support: ${updated_trailing_stop:,.2f}")
@@ -343,13 +344,15 @@ class FreeConvictionEngine:
             "macro_ceiling": macro_ceiling,
         }
 
-        # 2.4 FEE & ADAPTIVE HURDLE DEFENSE: Reject entries when room cannot clear dynamic hurdle
-        if immediate_runway < adaptive_runway and not (is_balloon_expanding and macro_runway >= 0.80):
+        # 2.4 MANDATORY NET EXPECTANCY GATE (v3.0 Invariant 4)
+        # Rejects entries if Net EV <= 0.05% or if immediate runway is compressed without macro space.
+        # Zero bypass loopholes permitted!
+        if net_ev_pct <= 0.05 or (immediate_runway < adaptive_runway and macro_runway < 1.50):
             return TradeIntent(
                 action="WAIT_IN_CASH",
                 expected_runway_pct=immediate_runway,
                 confidence=effective_conf,
-                reason=f"NO REAL GAIN ON TABLE: Immediate runway is only +{immediate_runway:.2f}% (requires >= {adaptive_runway:.2f}% adaptive hurdle under entropy {belief.entropy_ema:.2f}). Net EV={net_ev_pct:+.2f}%. Sitting in cash.",
+                reason=f"NO REAL GAIN ON TABLE: Net EV={net_ev_pct:+.2f}%, Immediate runway is only +{immediate_runway:.2f}% (requires >= {adaptive_runway:.2f}% adaptive hurdle under entropy {belief.entropy_ema:.2f}). Sitting in cash.",
                 telemetry=intent_telemetry,
             )
 
@@ -362,6 +365,32 @@ class FreeConvictionEngine:
                 reason=f"SLOW MARKET: Bollinger lines horizontal and volume compressed (runway +{immediate_runway:.2f}%). Sitting 100% in cash.",
                 telemetry=intent_telemetry,
             )
+
+        # 2.5B ADAPTIVE CONFIDENCE THRESHOLD BASED ON REGIME (v3.0 Priority 3)
+        # TREND: 0.50 | BALANCED / RANGE: 0.65 | CHOP / HIGH ENTROPY: 0.80
+        if is_balloon_expanding and vol_regime >= 1.0 and entropy < 0.40:
+            regime_conf_hurdle = 0.50
+        elif is_slow_market or entropy >= 0.65 or vol_regime < 0.70:
+            regime_conf_hurdle = 0.80
+        else:
+            regime_conf_hurdle = 0.65
+
+        # 2.5C INTUITION TRIPWIRES (v3.0 Priority 7 - Modifiers only +-0.05, never opens trade directly)
+        intuition_mod = 0.0
+        if trade_vel > 8.0 and cvd > 0:
+            intuition_mod += 0.05  # Tape acceleration burst
+        if absorption_idx > 20.0:
+            intuition_mod += 0.05  # Institutional limit absorption wall
+        spread_pct = float(matrix.get("spread_pct", 0.0))
+        if spread_pct > 0.15:
+            intuition_mod -= 0.05  # Spread inflation friction
+        if tanh_imb < -0.20 and cvd < 0:
+            intuition_mod -= 0.05  # Aggressive taker selling pressure
+
+        tuned_confidence = float(np.clip(effective_conf + intuition_mod, 0.0, 1.0))
+        intent_telemetry["regime_conf_hurdle"] = regime_conf_hurdle
+        intent_telemetry["intuition_mod"] = round(intuition_mod, 3)
+        intent_telemetry["tuned_confidence"] = round(tuned_confidence, 3)
 
         # 2.6 SETUP A: BOTTOM / DIP TURN PREDICTION (BUYING LOW AT SUPPORT)
         dist_to_support = abs(price - nearest_support)
@@ -381,20 +410,23 @@ class FreeConvictionEngine:
                 target_price=target,
                 proposed_stop=dynamic_invalidation,
                 expected_runway_pct=immediate_runway,
-                confidence=max(effective_conf, 0.75),
+                confidence=max(tuned_confidence, 0.75),
                 reason=f"DIP TURN PREDICTED: Tested support (${nearest_support:,.2f}) with bid absorption (Ai={absorption_idx:.1f}, tanh_imb={tanh_imb:+.2f}). Belief={belief.regime_belief} (pers={belief.persistence_ticks}). Net EV={net_ev_pct:+.2f}%. Target: ${target:,.2f} (+{immediate_runway:.2f}%).",
                 telemetry=intent_telemetry,
             )
 
-        # 2.7 SETUP B: MOMENTUM IGNITION / BREAKOUT SURGE (THE MARKET FIRES UP)
+        # 2.7 SETUP B: MOMENTUM IGNITION / BREAKOUT SURGE (v3.0 Gated Momentum Flow)
+        # STRICT GATES:
+        # 1. Price at swing high or clean balloon expanding
+        # 2. Positive Edge (>= +0.15)
+        # 3. Positive Urgency (>= 0.15)
+        # 4. Confidence clearing regime threshold
+        # 5. Belief is NOT in CHOP_COMPRESSION
         is_clearing_high = price >= (pooled_swing_high - 1.0)
-        breakout_urgency_hurdle = 0.20 if is_balloon_expanding else 0.25
-        is_breakout_surge = (
-            (is_balloon_expanding and macro_runway >= 0.80)
-            or (effective_urgency >= breakout_urgency_hurdle and (edge > 0.18 or effective_edge > 0.18) and macro_runway >= 0.85)
-        )
+        has_real_momentum = (effective_edge >= 0.15) and (effective_urgency >= 0.15) and (tuned_confidence >= regime_conf_hurdle)
+        is_belief_aligned = belief.regime_belief in ("BULL_ACCELERATION", "NEUTRAL_WAIT")
 
-        if (is_clearing_high or is_breakout_surge) and (tanh_imb >= 0.0 or trade_vel > 6.0):
+        if (is_clearing_high or is_balloon_expanding) and has_real_momentum and is_belief_aligned and (tanh_imb >= 0.0 or trade_vel > 6.0):
             target = macro_ceiling
             effective_runway = max(macro_runway, projected_gross_pct)
             return TradeIntent(
@@ -404,8 +436,8 @@ class FreeConvictionEngine:
                 target_price=target,
                 proposed_stop=dynamic_invalidation,
                 expected_runway_pct=effective_runway,
-                confidence=max(effective_conf, 0.80),
-                reason=f"MOMENTUM IGNITION: Market surge detected (Edge={effective_edge:+.2f}, Urgency={effective_urgency:.2f}). Belief={belief.regime_belief} (pers={belief.persistence_ticks}). Flowing into macro space (${macro_ceiling:,.2f}, +{effective_runway:.2f}%) with Net EV=+{net_ev_pct:.2f}%.",
+                confidence=max(tuned_confidence, 0.80),
+                reason=f"MOMENTUM IGNITION: Validated surge (Edge={effective_edge:+.2f}, Urgency={effective_urgency:.2f}, Conf={tuned_confidence:.2f}). Belief={belief.regime_belief} (pers={belief.persistence_ticks}). Flowing into macro space (${macro_ceiling:,.2f}, +{effective_runway:.2f}%) with Net EV=+{net_ev_pct:.2f}%.",
                 telemetry=intent_telemetry,
             )
 
@@ -413,7 +445,7 @@ class FreeConvictionEngine:
         return TradeIntent(
             action="WAIT_IN_CASH",
             expected_runway_pct=immediate_runway,
-            confidence=effective_conf,
-            reason=f"PATIENT SCANNING: Belief={belief.regime_belief} (Bias={effective_edge:+.2f}, Conf={effective_conf:.2f}, Pers={belief.persistence_ticks}). Hurdle={adaptive_runway:.2f}%. Nearest Support ${nearest_support:,.2f}, Structural Ceiling ${nearest_resistance:,.2f} (+{immediate_runway:.2f}%).",
+            confidence=tuned_confidence,
+            reason=f"PATIENT SCANNING: Belief={belief.regime_belief} (Bias={effective_edge:+.2f}, Conf={tuned_confidence:.2f}, Pers={belief.persistence_ticks}). Hurdle={adaptive_runway:.2f}%. Nearest Support ${nearest_support:,.2f}, Structural Ceiling ${nearest_resistance:,.2f} (+{immediate_runway:.2f}%).",
             telemetry=intent_telemetry,
         )

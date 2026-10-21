@@ -490,6 +490,88 @@ class TestZebraBot(unittest.TestCase):
         self.assertIn("belief_regime", intent.telemetry)
         self.assertIn("belief_persistence", intent.telemetry)
 
+    def test_09_v3_governor_escalation_and_noise_immune_trailing(self):
+        """Verify BTCTOOL v3.0 Master Package: Governor, Failure Counter, Escalation, Stress, & Noise-Immune Stops."""
+        from risk_engine import RiskEngine, TradeIntent, SetupPerformanceGovernor, ThesisFailureCounter, ConscienceEscalation, LightweightStressEngine
+        from conviction_engine import FreeConvictionEngine
+
+        # 1. Setup Performance Governor
+        gov = SetupPerformanceGovernor(window_size=20)
+        setup = "TEST_BREAKOUT"
+        # 4 consecutive bad trades (-0.40% each)
+        for _ in range(4):
+            gov.record_trade_result(setup, -0.40)
+        health = gov.get_health(setup)
+        self.assertEqual(health.win_rate, 0.0)
+        self.assertLess(health.health_score, 20.0, "Repeated bad losses must crash health score below 20")
+        self.assertTrue(health.is_disabled, "Health < 20 must disable the setup")
+        self.assertEqual(health.size_multiplier, 0.0)
+
+        # 2. Thesis Failure Counter & Cooldown
+        fc = ThesisFailureCounter(max_consecutive_failures=3, cooldown_seconds=600.0)
+        t_now = 10000.0
+        fc.record_outcome("TEST_THESIS", -0.20, timestamp=t_now)
+        fc.record_outcome("TEST_THESIS", -0.20, timestamp=t_now + 10)
+        self.assertEqual(fc.get_failure_penalty("TEST_THESIS"), 0.70)
+        is_cd, rem = fc.is_in_cooldown("TEST_THESIS", current_time=t_now + 15)
+        self.assertFalse(is_cd)
+        # 3rd failure triggers cooldown
+        fc.record_outcome("TEST_THESIS", -0.20, timestamp=t_now + 20)
+        is_cd, rem = fc.is_in_cooldown("TEST_THESIS", current_time=t_now + 25)
+        self.assertTrue(is_cd, "3rd consecutive failure must enforce cooldown")
+        self.assertGreater(rem, 0.0)
+
+        # 3. Conscience Escalation Gate
+        esc = ConscienceEscalation(escalation_threshold=3)
+        esc.record_trade(-0.10)
+        esc.record_trade(-0.15)
+        self.assertFalse(esc.is_escalated)
+        self.assertEqual(esc.confidence_hike, 0.0)
+        # 3rd loss triggers escalation
+        esc.record_trade(-0.25)
+        self.assertTrue(esc.is_escalated)
+        self.assertEqual(esc.confidence_hike, 0.10)
+
+        # 4. Lightweight Stress Engine
+        passed, msg, drop = LightweightStressEngine.evaluate_stress(
+            price=84000.0,
+            stop_price=83500.0,
+            spread_pct=0.25,  # Shock spread > 0.20%
+            bid_depth=15.0,
+        )
+        self.assertFalse(passed, "Spread shock > 0.20% must fail stress gate")
+        self.assertIn("Spread inflated", msg)
+
+        # 5. Noise-Immune Breakeven & Trailing Stop Math
+        brain = FreeConvictionEngine()
+        active = {
+            "entry": 80000.0,
+            "target_price": 84000.0,
+            "invalidation_floor": 79500.0,
+            "trailing_stop": 79500.0,
+            "scenario": "TEST",
+        }
+        # Price moved up +0.40% (should NOT move stop to breakeven yet; requires +0.60%)
+        m_40 = {
+            "latest_price": 80320.0,  # +0.40%
+            "multi_screen_bounds": {"nearest_support": 80100.0, "nearest_resistance": 83000.0, "macro_ceiling": 85000.0, "immediate_runway_pct": 3.3, "macro_runway_pct": 5.8},
+            "balloon_geometry": {"regime": "TREND", "is_balloon_expanding": True, "is_slow_market": False},
+            "micro_turn": {},
+            "composite_atr": 250.0,
+        }
+        intent_40 = brain.evaluate(m_40, active_trade=active)
+        self.assertEqual(intent_40.proposed_stop, 79500.0, "Must not ratchet to breakeven prematurely at +0.40%")
+
+        # Price moved up +0.70% (exceeds +0.60% requirement)
+        m_70 = dict(m_40)
+        m_70["latest_price"] = 80560.0  # +0.70%
+        intent_70 = brain.evaluate(m_70, active_trade=active)
+        # Stop must move to entry * 1.0025 (+0.25% gross = 80,200.0)
+        self.assertEqual(intent_70.proposed_stop, 80200.0, "Must move stop to entry * 1.0025 (+0.25%)")
+        # Net profit after OKX 0.20% fee is guaranteed positive (+0.05%)
+        net_at_be = ((80200.0 - 80000.0) / 80000.0) - 0.0020
+        self.assertGreater(net_at_be, 0.0, "Breakeven exit must guarantee net positive cash")
+
 
 if __name__ == "__main__":
     unittest.main()

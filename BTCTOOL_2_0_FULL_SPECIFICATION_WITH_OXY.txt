@@ -5,8 +5,9 @@ Document Type: Master Engineering Specification & Implementation Blueprint
 Symbol Target: BTC/USDT (Spot & Derivatives Overlay)
 Architecture: Decoupled 8-Organ Autonomous Agent + Priority-0 Subconscious Nervous System
 Cognitive Modules: Component 5 (Explicit Belief System) & Component 2 (Bounded Adaptive Hurdles)
+Governance Organs: Setup Governor, Thesis Failure Counter, Conscience Escalation & Stress Gate
 Exchange Integration: OKX (Oxy) V5 Unified API (Public WebSocket + Private Execution REST)
-Version: 2.0.5 Production
+Version: 3.0.0 Production
 
 --------------------------------------------------------------------------------
 TABLE OF CONTENTS
@@ -279,54 +280,74 @@ a persistent internal `BeliefState` across ticks:
    - `CHOP_COMPRESSION`: is_slow_market or entropy_ema_t >= 0.65
    - `NEUTRAL_WAIT`: Balanced transitional condition
 
-4.5 Component 2: Bounded Adaptive Confidence & Runway Thresholds:
+4.5 Component 3: Adaptive Confidence Thresholds based on Regime:
 Replaces fixed hurdle rules with dynamic hurdles responsive to market conditions:
-1. Dynamic Runway Hurdle (theta_runway):
-   - Hard Clamped Range: [0.40%, 0.70%]
-   - Clean Volatility Expansion: When is_balloon_expanding and vol_regime >= 1.0:
-     theta_runway = 0.40% (allows entering early breakouts without friction)
-   - High-Entropy Chop Defense:
-     theta_runway = clamp(0.45% + 0.20 * entropy_ema + 0.10 * max(0.0, 1.0 - vol_regime), 0.40%, 0.70%)
-     Demands up to +0.70% profit runway before risking capital during choppy compression.
-2. Dynamic Confidence Hurdle (theta_conf):
-   - Hard Clamped Range: [0.45, 0.75]
-   - theta_conf = clamp(0.55 + 0.20 * entropy_ema - 0.15 * min(Ai / 20.0, 1.0), 0.45, 0.75)
-   - High institutional absorption discounts entry threshold; cross-timeframe conflict raises it.
+- TREND Regime: theta_conf = 0.50 (clean momentum flow, enter early into waves)
+- BALANCED / RANGE Regime: theta_conf = 0.65
+- CHOP / HIGH ENTROPY Regime: theta_conf = 0.80 (demands overwhelming institutional conviction before risking capital)
 
-4.6 Net Expected Value Formulation (Fee Defense):
+4.6 Component 7: Intuition Tripwires:
+Non-linear microstructure modifiers (modifiers only: +-0.05, never opens trades directly):
+- Tape acceleration burst (>8.0 trades/sec with positive CVD): +0.05 confidence
+- Institutional resting absorption wall (Ai > 20.0): +0.05 confidence
+- Spread inflation (>0.15%): -0.05 confidence
+- Aggressive taker dumping: -0.05 confidence
+
+4.7 Component 4: Mandatory Net Expected Value Gate:
   Projected_Move = max(Nearest_Structural_Resistance - Price, 1.2 * Composite_ATR)
   Projected_Gross_Pct = (Projected_Move / Price) * 100
   Net_EV_Pct = Projected_Gross_Pct - OKX_Roundtrip_Fee (0.20%) - Estimated_Slippage (0.02%)
 
-  - Fee Hurdle Defense: If immediate_runway < theta_runway and not (expanding and macro_runway >= 0.80):
-    Mind issues `WAIT_IN_CASH` with diagnostic reason detailing adaptive hurdle.
-  - Momentum Ignition Trigger: If (is_clearing_high or is_breakout_surge) and Net_EV_Pct > 0:
-    Mind immediately proposes `ENTER_CORE_LOT_1` into macro ceiling (+1.5% to +5.5%).
+  - Mandatory Gate: If Net_EV_Pct <= 0.05% or (immediate_runway < adaptive_runway and macro_runway < 1.50):
+    Mind unconditionally issues `WAIT_IN_CASH`. Zero bypass loopholes permitted!
+  - Momentum Ignition Trigger: Requires effective_edge >= 0.15, effective_urgency >= 0.15,
+    tuned_confidence >= regime_conf_hurdle, and Belief State != "CHOP_COMPRESSION".
   - Dip Absorption Turn Trigger: If price testing support with Ai > 12.0, tanh_imb >= 0.0, and runway >= theta_runway:
     Mind proposes `ENTER_CORE_LOT_1` targeting structural resistance.
 
 ================================================================================
-5. THE CONSCIENCE: DETERMINISTIC RISK INVARIANTS & SHADOW SELF (ORGAN 4)
+5. THE CONSCIENCE: DETERMINISTIC RISK INVARIANTS & GOVERNOR ORGANS (ORGAN 4)
 ================================================================================
 
-The Conscience executes 5 deterministic invariant checks on every proposed TradeIntent:
+The Conscience executes deterministic invariant checks and governance rules on every proposed TradeIntent:
 
-5.1 Invariant 1: Expectancy & Adaptive Hurdle Gate:
-Rejects any entry proposal where projected gross runway < max(0.40%, theta_runway) or
-reward:risk < 1.5:1. Enforces absolute fee coverage under all market regimes.
+5.1 Component 1: Setup Performance Governor (SetupHealth):
+Monitors rolling 20 closed trades for each setup name (MACRO_BALLOON_BREAKOUT, DIP_ABSORPTION_TURN):
+- Calculates rolling win rate, average net PnL, and health score in [0.0, 100.0].
+- Health > 80: 100% normal sizing
+- Health 60-80: 75% sizing
+- Health 40-60: 50% sizing
+- Health 20-40: 25% sizing
+- Health < 20: Auto-disabled (unconditional REJECT)
 
-5.2 Invariant 2: Noise-Immune Floor Calculation:
+5.2 Component 5: Thesis Failure Counter & Cooldown:
+Tracks consecutive losses per setup:
+- 1st failure: 85% size multiplier
+- 2nd failure: 70% size multiplier
+- 3rd consecutive failure: Enforces automatic 30-minute cooldown on that setup (REJECT).
+
+5.3 Component 8: Conscience Escalation Gate:
+Tracks portfolio-wide consecutive losses across the account:
+- When 3 or more consecutive losses occur, temporarily raises required entry confidence by +10% to +15% until recovery.
+
+5.4 Component 6: Lightweight Analytical Stress Engine:
+Evaluates instantaneous market shock tolerance without Monte Carlo overhead:
+- Spread inflation shock: If spread_pct > 0.20% -> REJECT.
+- Liquidity vacuum: If bid_depth < 30% of normal baseline -> REJECT.
+- Adverse price drop to stop loss calculated analytically.
+
+5.5 Invariant 5: Noise-Immune Floor Calculation:
 Stop loss is mathematically anchored outside sub-minute ATR noise:
   Raw_Risk = max(Price - Nearest_Support, 0.0) + (0.5 * Composite_ATR)
   Clamped_Risk = min(max(Raw_Risk, 0.8 * Composite_ATR), 2.0 * Composite_ATR)
   Approved_Stop = Price - Clamped_Risk
 Stop loss is guaranteed to sit strictly below actual entry fill price.
 
-5.3 Invariant 3: Anti-Churn / Post-Stop Clearance:
+5.6 Invariant 6: Anti-Churn / Post-Stop Clearance:
 If a previous trade was stopped out at price P_cut, the Risk Gate unconditionally vetoes
 any breakout re-entry proposed at or below P_cut. Eliminates false-breakout churn.
 
-5.4 Invariant 4: In-Situ Memory Soft Stop (Wick-Sweep Defense):
+5.7 Invariant 7: In-Situ Memory Soft Stop (Wick-Sweep Defense):
 When market price touches the invalidation floor:
 - Conscience audits real-time L2 book depth:
   If tanh_imbalance > 0.15 or Absorption_Index > 15.0:
@@ -337,16 +358,9 @@ When market price touches the invalidation floor:
 - Hard Backstop: If price pierces floor by > 0.8 * Composite_ATR, emergency cut triggers
   unconditionally to preserve capital.
 
-5.5 Invariant 5: Continuous Sizing & Shadow Self Stress Simulation:
-1. Baseline Continuous Target Size:
-   Target_Size_Factor = clamp(Confidence / max(Vol_Regime, 0.5), 0.25, 1.0)
-2. Shadow Self Simulation:
-   Simulates adverse wick down to approved stop:
-   Stress_Loss_Pct = ((Price - Approved_Stop) / Price) * 100
-   If Stress_Loss_Pct > Max_Risk_Budget (0.75%):
-     Stress_Clamp = Max_Risk_Budget / Stress_Loss_Pct
-     Approved_Size_Factor = min(Target_Size_Factor, Stress_Clamp)
-   Guarantees dollar loss in worst-case wick never exceeds risk tolerance.
+5.8 Invariant 8: Composite Dynamic Sizing & Shadow Self:
+Composite size factor combines volatility regime, stress clamp, governor health, and failure penalty:
+  Composite_Size = Size_Factor * Governor_Size_Mult * Failure_Penalty (clamped in [0.10, 1.0])
 
 ================================================================================
 6. THE HANDS & MOTOR ADAPTERS (ORGAN 5 & 6)
@@ -362,16 +376,18 @@ Converts cleared RiskDecision into concrete exchange instructions:
   - IOC (Immediate-Or-Cancel) for high-urgency momentum ignition.
   - Post-Only Limit for resting support scale-ins (reaps maker rebate).
 
-6.2 Active Position Lifecycle State Machine:
+6.2 Overhauled Position Lifecycle & Noise-Immune Trailing Ratchet:
 - `OPEN_CORE_LOT_1`: Deploys core capital, records pre-state FeatureVector snapshot.
 - `SCALE_IN_LOT_2`: Adds discount lot on verified dip absorption above trailing stop.
   Blended entry recalculated: New_Entry = (Entry_1 + Entry_2) / 2.
-- `RATCHET_TRAILING_STOP`:
-  - When gain >= +0.35%: stop ratchets to Breakeven + Fee (+0.15%).
-  - As price expands: stop trails dynamic structural support (Support - 0.3 * ATR).
+- `NOISE_IMMUNE_TRAILING_RATCHET`:
+  - Breakeven trigger: When gain >= +0.60%, stop ratchets to Breakeven + Guaranteed Fee Protection (+0.25%).
+    Any stop hit guarantees net positive clean cash (+0.05% net) after OKX 0.20% fee.
+  - Structural ratchet: When gain >= +1.20%, stop trails dynamic structural support with
+    minimum 0.8 * ATR breathing room ($250-$350), eliminating sub-minute noise asphyxiation.
 - `RIDE_UNCAPPED`: When macro ceiling opens up and balloon expands, target is stepped
   higher (+2% to +5%+), allowing winners to run without artificial profit caps.
-- `BANK_PROFIT`: Locks in bagged profit when trailing stop is hit.
+- `BANK_PROFIT`: Locks in bagged profit when trailing stop is hit (requires gain >= +0.25%).
 - `CUT_THESIS_INVALIDATED`: Exits at market on confirmed structural support failure.
 
 ================================================================================
@@ -523,7 +539,7 @@ btctool-2.0/
 ├── okx_trader.py           # OKX V5 REST API execution client
 ├── trade_logger.py         # Multi-format ledger (Markdown, CSV, JSON, JSONL)
 ├── dream_engine.py         # Offline replay & parameter recalibration organ
-├── test_zebra.py           # Complete unit & integration test suite (8 tests)
+├── test_zebra.py           # Complete unit & integration test suite (9 tests)
 ├── PROJECT_BLUEPRINT.md    # Master single source of truth
 ├── requirements.txt        # Python dependency manifest
 ├── telegram_config.json    # Telegram bot token and chat ID
@@ -557,7 +573,7 @@ streamlit>=1.31.0
 12.4 Verification Before Live Launch:
 Run the unit test suite:
   `python -m unittest test_zebra.py`
-All 8 tests must pass in <0.10s:
+All 9 tests must pass in <0.10s:
 1. Synthetic stream & candle aggregation
 2. Anti-spoofing orderbook & tanh imbalance
 3. Vectorized 100-Screen State Matrix speed (<15ms)
@@ -566,6 +582,7 @@ All 8 tests must pass in <0.10s:
 6. Subconscious reflexes (Blind, Motor, Safety) & Shadow Self
 7. Episodic memory logging & Dream Engine replay
 8. Explicit belief system (hysteresis anti-flicker) & adaptive hurdles
+9. v3.0 Governor, Failure Counter, Escalation, Stress Engine & Noise-Immune Stops
 
 12.5 Launching the 24/7 Autonomous Daemon:
 To launch with a clean slate starting from Trade #1:

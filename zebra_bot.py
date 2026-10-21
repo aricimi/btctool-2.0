@@ -149,7 +149,7 @@ class ZebraBotEngine:
         self.stream = MarketStream(inst_id="BTC-USDT", swap_id="BTC-USDT-SWAP")
         self.state_calculator = MarketState()
         self.brain = FreeConvictionEngine()
-        self.risk_gate = RiskEngine()
+        self.risk_gate = RiskEngine(history_file=os.path.join(os.path.dirname(os.path.abspath(__file__)), "trade_history.json"))
         self.execution = ExecutionManager()
         self.notifier = TelegramNotifier()
         self.consecutive_api_errors = 0
@@ -305,7 +305,9 @@ class ZebraBotEngine:
                     reason = decision["reason"]
                     gain_pct = float(decision.get("gain_pct", 0.0))
                     net_gain_pct = gain_pct - 0.0020
+                    scenario = active_trade.get("scenario", "TRADE") if active_trade else "TRADE"
 
+                    self.risk_gate.record_trade_outcome(scenario, net_gain_pct, timestamp=matrix.get("timestamp", 0.0))
                     self.execution.close_position(exit_price=exit_p, exit_reason=reason)
                     self.notifier.send_message(
                         f"🏁 <b>ZEBRA BOT: PROFIT BANKED (+{net_gain_pct*100:.2f}% NET)</b>\n\n"
@@ -321,8 +323,10 @@ class ZebraBotEngine:
                     reason = decision["reason"]
                     gain_pct = float(decision.get("gain_pct", 0.0))
                     net_pnl_pct = gain_pct - 0.0020
+                    scenario = active_trade.get("scenario", "TRADE") if active_trade else "TRADE"
 
                     self.risk_gate.record_invalidation_exit(exit_p, matrix.get("timestamp", 0.0))
+                    self.risk_gate.record_trade_outcome(scenario, net_pnl_pct, timestamp=matrix.get("timestamp", 0.0))
                     self.execution.close_position(exit_price=exit_p, exit_reason=reason)
                     self.notifier.send_message(
                         f"🛑 <b>ZEBRA BOT: THESIS CUT (PRESERVE CAPITAL)</b>\n\n"
@@ -392,7 +396,18 @@ class ZebraBotEngine:
                 b_state = belief.state
                 status_msg += (
                     f"<b>Explicit Belief:</b> <code>{b_state.regime_belief}</code> (Bias: {b_state.directional_bias:+.2f}, Pers: {b_state.persistence_ticks})\n"
-                    f"<b>Adaptive Hurdles:</b> Runway $\ge$ {b_state.adaptive_runway_hurdle:.2f}% | Conf $\ge$ {b_state.adaptive_conf_hurdle:.2f}\n\n"
+                    f"<b>Adaptive Hurdles:</b> Runway $\ge$ {b_state.adaptive_runway_hurdle:.2f}% | Conf $\ge$ {b_state.adaptive_conf_hurdle:.2f}\n"
+                )
+
+            # Governor & Escalation status
+            gov = getattr(self.risk_gate, "governor", None)
+            esc = getattr(self.risk_gate, "escalation", None)
+            if gov and esc:
+                breakout_health = gov.get_health("MACRO_BALLOON_BREAKOUT")
+                dip_health = gov.get_health("DIP_ABSORPTION_TURN")
+                status_msg += (
+                    f"<b>Governor Health:</b> Breakout {breakout_health.health_score:.0f}/100 (Size: {breakout_health.size_multiplier*100:.0f}%) | Dip {dip_health.health_score:.0f}/100\n"
+                    f"<b>Escalation:</b> {esc.consecutive_losses} Losses (Hike: +{esc.confidence_hike*100:.0f}%)\n\n"
                 )
 
             if active:

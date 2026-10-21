@@ -1,26 +1,228 @@
 """
-risk_engine.py — The Independent Risk Gate (Conscience) for Zebra Bot (btctool 2.0)
+risk_engine.py — The Independent Risk Gate (Conscience) for Zebra Bot (btctool 2.0 / v3.0)
 Architecture:
-- "Models Propose, Risk Disposes" (bot.txt / PROJECT_BLUEPRINT.md Section 10).
+- "Models Propose, Risk Disposes" (PROJECT_BLUEPRINT.md Section 10).
 - Pure, cold, deterministic safety layer sitting between the Mind (Conviction Engine)
   and the Hands (Execution Manager).
-- Evaluates TradeIntent against 5 non-negotiable mathematical invariants:
-  1. Expectancy & Asymmetry Gate (Reward:Risk >= 2.0:1, Net runway >= 0.45%).
-  2. Noise-Immune Floor Gate (Stop anchored outside 0.8 * ATR noise band).
-  3. Anti-Churn / Post-Stop Clearance (Breakout intent rejected below failed exit level).
-  4. Scale-In / Stop Harmonization (Stop must sit strictly below dip discount zone).
-  5. In-Situ Memory Soft Stop (Wick-sweep absorption defense; overrides panic cuts).
+- Components Integrated (v3.0 Master Package):
+  1. Priority-0 Subconscious Fallback Reflexes (Blind, Motor, Safety).
+  2. Setup Performance Governor (SetupHealth rolling win rate, net PnL, health score & auto-disable).
+  3. Thesis Failure Counter & Setup Cooldown (tracks consecutive setup failures; imposes 30m cooldown).
+  4. Conscience Escalation (+10% entry hurdle escalation after 3 consecutive portfolio losses).
+  5. Lightweight Analytical Stress Engine (spread shock, liquidity vacuum, and adverse drop).
+  6. In-Situ Memory Soft Stop (wick-sweep absorption defense overrides panic cuts).
+  7. Noise-Immune Floor Calculation (ATR-anchored stop guaranteed below fill).
 """
 
+import json
 import logging
+import os
+import time
 from dataclasses import dataclass, field
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple, List
 import numpy as np
 
 logger = logging.getLogger("risk_engine")
 
 OKX_ROUNDTRIP_FEE_PCT = 0.0020     # 0.20% OKX Spot round-trip fee
 MIN_PROJECTED_RUNWAY_PCT = 0.45    # 0.45% minimum required room to target
+
+
+@dataclass
+class SetupHealth:
+    """Component 1 Data Contract: Setup Performance Health."""
+    setup_name: str
+    total_trades: int = 0
+    wins: int = 0
+    losses: int = 0
+    win_rate: float = 0.0
+    avg_net_pnl: float = 0.0
+    health_score: float = 100.0   # 0.0 to 100.0
+    size_multiplier: float = 1.0  # 0.0 to 1.0
+    is_disabled: bool = False
+
+
+class SetupPerformanceGovernor:
+    """
+    Component 1: Setup Performance Governor.
+    Monitors rolling 20 trades for each setup name.
+    Dynamically scales position sizing and disables setups with poor health (<20).
+    """
+
+    def __init__(self, window_size: int = 20):
+        self.window_size = window_size
+        self.history: Dict[str, List[float]] = {}
+
+    def record_trade_result(self, setup_name: str, net_pnl_pct: float):
+        clean_name = setup_name.replace("ZEBRA WHALE: ", "")
+        if clean_name not in self.history:
+            self.history[clean_name] = []
+        self.history[clean_name].append(float(net_pnl_pct))
+        if len(self.history[clean_name]) > self.window_size:
+            self.history[clean_name] = self.history[clean_name][-self.window_size:]
+
+    def get_health(self, setup_name: str) -> SetupHealth:
+        clean_name = setup_name.replace("ZEBRA WHALE: ", "")
+        trades = self.history.get(clean_name, [])
+        if not trades:
+            return SetupHealth(setup_name=clean_name, health_score=100.0, size_multiplier=1.0, is_disabled=False)
+
+        wins = sum(1 for p in trades if p > 0.0)
+        losses = sum(1 for p in trades if p <= 0.0)
+        win_rate = (wins / len(trades)) * 100.0
+        avg_net_pnl = float(np.mean(trades))
+
+        # Health score: 50.0 base + 0.5 * win_rate + 200 * avg_net_pnl
+        raw_score = 50.0 + (0.5 * win_rate) + (200.0 * avg_net_pnl)
+        health_score = float(np.clip(raw_score, 0.0, 100.0))
+
+        # Sizing rules:
+        # Health > 80: 100% size
+        # Health 60-80: 75% size
+        # Health 40-60: 50% size
+        # Health 20-40: 25% size
+        # Health < 20: Disabled
+        if health_score >= 80.0:
+            size_mult = 1.0
+            disabled = False
+        elif health_score >= 60.0:
+            size_mult = 0.75
+            disabled = False
+        elif health_score >= 40.0:
+            size_mult = 0.50
+            disabled = False
+        elif health_score >= 20.0:
+            size_mult = 0.25
+            disabled = False
+        else:
+            size_mult = 0.0
+            disabled = True
+
+        return SetupHealth(
+            setup_name=clean_name,
+            total_trades=len(trades),
+            wins=wins,
+            losses=losses,
+            win_rate=round(win_rate, 1),
+            avg_net_pnl=round(avg_net_pnl, 3),
+            health_score=round(health_score, 1),
+            size_multiplier=size_mult,
+            is_disabled=disabled,
+        )
+
+
+class ThesisFailureCounter:
+    """
+    Component 5: Thesis Failure Counter & Cooldown Manager.
+    Tracks consecutive failures for a specific setup.
+    Penalizes confidence and sizing after consecutive losses, and enforces 30m cooldown after 3 failures.
+    """
+
+    def __init__(self, max_consecutive_failures: int = 3, cooldown_seconds: float = 1800.0):
+        self.max_failures = max_consecutive_failures
+        self.cooldown_seconds = cooldown_seconds
+        self.consecutive_failures: Dict[str, int] = {}
+        self.disabled_until: Dict[str, float] = {}
+
+    def record_outcome(self, setup_name: str, net_pnl_pct: float, timestamp: float = 0.0):
+        clean_name = setup_name.replace("ZEBRA WHALE: ", "")
+        ts = timestamp or time.time()
+        if net_pnl_pct <= 0.0:
+            cnt = self.consecutive_failures.get(clean_name, 0) + 1
+            self.consecutive_failures[clean_name] = cnt
+            logger.info(f"[ThesisTracker] Setup '{clean_name}' consecutive failure count: {cnt}")
+            if cnt >= self.max_failures:
+                self.disabled_until[clean_name] = ts + self.cooldown_seconds
+                logger.warning(
+                    f"[ThesisTracker] Setup '{clean_name}' reached {cnt} failures. Cooldown enforced for {self.cooldown_seconds/60:.0f}m."
+                )
+        else:
+            self.consecutive_failures[clean_name] = 0
+            if clean_name in self.disabled_until:
+                del self.disabled_until[clean_name]
+
+    def is_in_cooldown(self, setup_name: str, current_time: float = 0.0) -> Tuple[bool, float]:
+        clean_name = setup_name.replace("ZEBRA WHALE: ", "")
+        ts = current_time or time.time()
+        until = self.disabled_until.get(clean_name, 0.0)
+        if ts < until:
+            return True, round(until - ts, 0)
+        return False, 0.0
+
+    def get_failure_penalty(self, setup_name: str) -> float:
+        clean_name = setup_name.replace("ZEBRA WHALE: ", "")
+        cnt = self.consecutive_failures.get(clean_name, 0)
+        if cnt == 1:
+            return 0.85
+        elif cnt == 2:
+            return 0.70
+        elif cnt >= 3:
+            return 0.50
+        return 1.0
+
+
+class ConscienceEscalation:
+    """
+    Component 8: Conscience Escalation Gate.
+    Tracks portfolio-wide consecutive losses.
+    When 3 or more losses occur, temporarily raises the minimum required confidence hurdle by +10% to +15%.
+    """
+
+    def __init__(self, escalation_threshold: int = 3):
+        self.escalation_threshold = escalation_threshold
+        self.consecutive_losses: int = 0
+
+    def record_trade(self, net_pnl_pct: float):
+        if net_pnl_pct <= 0.0:
+            self.consecutive_losses += 1
+        else:
+            self.consecutive_losses = 0
+
+    @property
+    def is_escalated(self) -> bool:
+        return self.consecutive_losses >= self.escalation_threshold
+
+    @property
+    def confidence_hike(self) -> float:
+        if self.consecutive_losses >= 4:
+            return 0.15
+        elif self.consecutive_losses >= 3:
+            return 0.10
+        return 0.0
+
+
+class LightweightStressEngine:
+    """
+    Component 6: Lightweight Analytical Stress Engine.
+    Evaluates instantaneous market shock tolerance without Monte Carlo overhead:
+    - Adverse price drop (to stop loss)
+    - Spread shock (spread > 0.20%)
+    - Liquidity vacuum (bid depth < 30% of normal baseline)
+    """
+
+    @staticmethod
+    def evaluate_stress(
+        price: float,
+        stop_price: float,
+        spread_pct: float,
+        bid_depth: float,
+        avg_bid_depth: float = 10.0,
+    ) -> Tuple[bool, str, float]:
+        if price <= 0:
+            return False, "Invalid price data", 0.0
+
+        # 1. Adverse drop to stop loss
+        drop_pct = round(((price - stop_price) / price) * 100.0, 3) if stop_price > 0 else 0.0
+
+        # 2. Spread inflation shock
+        if spread_pct > 0.20:
+            return False, f"STRESS_FAIL: Spread inflated ({spread_pct:.3f}% > 0.20% shock threshold)", drop_pct
+
+        # 3. Liquidity vacuum check (depth collapsed below 30% baseline)
+        if avg_bid_depth > 0 and bid_depth > 0 and bid_depth < (0.30 * avg_bid_depth):
+            return False, f"STRESS_FAIL: Liquidity vacuum (bid depth {bid_depth:.1f} < 30% of normal baseline)", drop_pct
+
+        return True, "PASSED", drop_pct
 
 
 @dataclass
@@ -83,18 +285,49 @@ class RiskDecision:
 class RiskEngine:
     """
     Independent Deterministic Risk Gate (Conscience).
-    Enforces capital preservation and mathematical expectancy.
+    Enforces capital preservation, mathematical expectancy, and v3.0 Governor rules.
     """
 
-    def __init__(self):
+    def __init__(self, history_file: Optional[str] = None):
         self.last_invalidation_exit_price: float = 0.0
         self.last_invalidation_timestamp: float = 0.0
+        self.governor = SetupPerformanceGovernor()
+        self.failure_counter = ThesisFailureCounter()
+        self.escalation = ConscienceEscalation()
+        self.stress_engine = LightweightStressEngine()
+
+        # Seed initial state from historical ledger if requested
+        if history_file:
+            self._seed_from_history(history_file)
+
+    def _seed_from_history(self, history_file: str):
+        if os.path.exists(history_file):
+            try:
+                with open(history_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                trades = data.get("trades", [])
+                for t in trades:
+                    if t.get("status") in ("CLOSED_PROFIT", "CLOSED_LOSS"):
+                        sc = t.get("setup", "WHALE_TRADE")
+                        net = float(t.get("net_pnl_pct", 0.0) or 0.0)
+                        self.governor.record_trade_result(sc, net)
+                        self.failure_counter.record_outcome(sc, net)
+                        self.escalation.record_trade(net)
+                logger.info(f"[RiskGate] Seeded Governor with {len(trades)} trades from {history_file}")
+            except Exception as e:
+                logger.warning(f"[RiskGate] Could not seed governor from {history_file}: {e}")
 
     def record_invalidation_exit(self, exit_price: float, timestamp: float = 0.0):
         """Records price level where a thesis broke down to prevent re-entering a false breakout at the same level."""
         self.last_invalidation_exit_price = float(exit_price)
         self.last_invalidation_timestamp = float(timestamp)
         logger.info(f"[RiskGate] Recorded invalidation level: ${self.last_invalidation_exit_price:,.2f}")
+
+    def record_trade_outcome(self, setup_name: str, net_pnl_pct: float, timestamp: float = 0.0):
+        """Records finalized trade outcome into Governor, Failure Counter, and Escalation organs."""
+        self.governor.record_trade_result(setup_name, net_pnl_pct)
+        self.failure_counter.record_outcome(setup_name, net_pnl_pct, timestamp)
+        self.escalation.record_trade(net_pnl_pct)
 
     def evaluate(
         self,
@@ -274,7 +507,49 @@ class RiskEngine:
         # ==================================================================
         if intent.action == "ENTER_CORE_LOT_1":
             # --------------------------------------------------------------
-            # INVARIANT 4: EXPECTANCY & ADAPTIVE HURDLE GATE (Component 2)
+            # INVARIANT 4A: THESIS FAILURE COOLDOWN (Component 5)
+            # --------------------------------------------------------------
+            ts_now = float(matrix.get("timestamp", 0.0) or time.time())
+            is_cooldown, rem_sec = self.failure_counter.is_in_cooldown(intent.scenario, ts_now)
+            if is_cooldown:
+                logger.info(f"[RiskGate] VETO: Setup '{intent.scenario}' in cooldown ({rem_sec:.0f}s remaining).")
+                return RiskDecision(
+                    status="REJECT",
+                    action="WAIT_IN_CASH",
+                    reason=f"REJECTED BY RISK GATE: Setup '{intent.scenario}' in cooldown ({rem_sec:.0f}s left after repeated failures).",
+                    telemetry={"cooldown_remaining_sec": rem_sec},
+                )
+
+            # --------------------------------------------------------------
+            # INVARIANT 4B: SETUP PERFORMANCE GOVERNOR (Component 1)
+            # --------------------------------------------------------------
+            setup_health = self.governor.get_health(intent.scenario)
+            if setup_health.is_disabled:
+                logger.info(f"[RiskGate] VETO: Setup '{intent.scenario}' disabled by Performance Governor (Health {setup_health.health_score:.1f}).")
+                return RiskDecision(
+                    status="REJECT",
+                    action="WAIT_IN_CASH",
+                    reason=f"REJECTED BY GOVERNOR: Setup '{intent.scenario}' disabled due to poor health ({setup_health.health_score:.1f} < 20).",
+                    telemetry={"setup_health": setup_health.__dict__},
+                )
+
+            # --------------------------------------------------------------
+            # INVARIANT 4C: CONSCIENCE ESCALATION GATE (Component 8)
+            # --------------------------------------------------------------
+            if self.escalation.is_escalated:
+                conf_hike = self.escalation.confidence_hike
+                req_conf = float(intent.telemetry.get("adaptive_conf_hurdle", 0.55)) + conf_hike
+                if float(intent.confidence or 0.0) < req_conf:
+                    logger.info(f"[RiskGate] VETO: Confidence ({intent.confidence:.2f}) < Escalated hurdle ({req_conf:.2f}).")
+                    return RiskDecision(
+                        status="REJECT",
+                        action="WAIT_IN_CASH",
+                        reason=f"REJECTED BY ESCALATION GATE: {self.escalation.consecutive_losses} consecutive losses. Demands confidence >= {req_conf:.2f} (current {intent.confidence:.2f}).",
+                        telemetry={"consecutive_losses": self.escalation.consecutive_losses, "required_conf": req_conf},
+                    )
+
+            # --------------------------------------------------------------
+            # INVARIANT 4D: EXPECTANCY & ADAPTIVE HURDLE GATE (Component 2 & 4)
             # --------------------------------------------------------------
             adaptive_hurdle = float(intent.telemetry.get("adaptive_runway_hurdle", MIN_PROJECTED_RUNWAY_PCT))
             required_runway = max(0.40, adaptive_hurdle)
@@ -307,6 +582,25 @@ class RiskEngine:
             raw_risk = max(price - nearest_support, 0.0) + (0.5 * atr)
             clamped_risk = min(max(raw_risk, 0.8 * atr), 2.0 * atr)
             approved_stop = round(price - clamped_risk, 2)
+
+            # --------------------------------------------------------------
+            # INVARIANT 6B: LIGHTWEIGHT ANALYTICAL STRESS ENGINE (Component 6)
+            # --------------------------------------------------------------
+            bid_depth = float(matrix.get("bid_depth_05", 10.0))
+            passed_stress, stress_msg, adverse_drop = self.stress_engine.evaluate_stress(
+                price=price,
+                stop_price=approved_stop,
+                spread_pct=spread_pct,
+                bid_depth=bid_depth,
+            )
+            if not passed_stress:
+                logger.info(f"[RiskGate] VETO STRESS: {stress_msg}")
+                return RiskDecision(
+                    status="REJECT",
+                    action="WAIT_IN_CASH",
+                    reason=f"REJECTED BY STRESS GATE: {stress_msg}",
+                    telemetry={"stress_msg": stress_msg},
+                )
 
             # Reward-to-Risk check: target distance must exceed 1.5x risk distance
             reward_dist = max(intent.target_price - price, 0.0)
@@ -345,12 +639,21 @@ class RiskEngine:
                     f"[ShadowSelf] Stress drop ({stress_loss_pct:.2f}%) exceeds budget ({max_stress_risk_pct:.2f}%). Clamping Lot 1 size factor to {size_factor:.2f}"
                 )
 
-            final_status = "ALLOW" if (approved_stop == round(intent.proposed_stop, 2) and size_factor == 1.0) else "MODIFY"
+            # Apply Governor and Failure Counter multipliers
+            gov_mult = setup_health.size_multiplier
+            fail_pen = self.failure_counter.get_failure_penalty(intent.scenario)
+            composite_size_factor = round(float(np.clip(size_factor * gov_mult * fail_pen, 0.10, 1.0)), 2)
+
+            final_status = "ALLOW" if (approved_stop == round(intent.proposed_stop, 2) and composite_size_factor == 1.0) else "MODIFY"
 
             combined_telemetry = dict(intent.telemetry)
             combined_telemetry.update({
                 "shadow_stress_loss_pct": stress_loss_pct,
-                "approved_size_factor": size_factor,
+                "approved_size_factor": composite_size_factor,
+                "governor_health_score": setup_health.health_score,
+                "governor_size_mult": gov_mult,
+                "failure_penalty": fail_pen,
+                "consecutive_portfolio_losses": self.escalation.consecutive_losses,
             })
 
             return RiskDecision(
@@ -361,7 +664,7 @@ class RiskEngine:
                 target_price=approved_target,
                 trailing_stop=approved_stop,
                 expected_runway_pct=intent.expected_runway_pct,
-                approved_size_factor=size_factor,
+                approved_size_factor=composite_size_factor,
                 stress_loss_pct=stress_loss_pct,
                 reason=intent.reason,
                 telemetry=combined_telemetry,
