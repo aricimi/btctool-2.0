@@ -148,11 +148,32 @@ class FreeConvictionEngine:
     def __init__(self, decay_rate: float = 0.85):
         self.belief_system = BeliefSystem(decay_rate=decay_rate)
 
+    @staticmethod
+    def calculate_classical_expectancy(
+        win_rate: float,
+        target_pct: float,
+        stop_pct: float,
+        fee_pct: float = 0.20,
+        slippage_pct: float = 0.02,
+    ) -> Tuple[float, float]:
+        """
+        Computes classical mathematical expected value and reward-to-risk ratio:
+        EV = (p_w * W_bar) - ((1 - p_w) * L_bar) - Costs
+        RR = W_bar / L_bar
+        """
+        w_bar = max(float(target_pct), 0.0)
+        l_bar = max(float(stop_pct), 0.01)
+        rr = round(w_bar / l_bar, 2) if l_bar > 0 else 0.0
+        costs = float(fee_pct + slippage_pct)
+        p_w = float(np.clip(win_rate, 0.05, 0.95))
+        ev = round((p_w * w_bar) - ((1.0 - p_w) * l_bar) - costs, 3)
+        return ev, rr
+
     def reset_belief(self):
         """Resets persistent belief state to neutral baseline."""
         self.belief_system.reset()
 
-    def evaluate(self, matrix: dict, active_trade: Optional[dict] = None) -> TradeIntent:
+    def evaluate(self, matrix: dict, active_trade: Optional[dict] = None, governor: Optional[Any] = None) -> TradeIntent:
         """
         Evaluates the multi-screen sensory matrix and outputs autonomous trading decisions.
         """
@@ -403,6 +424,29 @@ class FreeConvictionEngine:
 
         if is_at_support_floor and is_absorption_confirmed:
             target = nearest_resistance
+            target_pct = ((target - price) / price) * 100.0 if price > 0 else 0.0
+            stop_pct = ((price - dynamic_invalidation) / price) * 100.0 if price > 0 else 0.0
+
+            if governor:
+                h = governor.get_health("DIP_ABSORPTION_TURN")
+                pw = float(np.clip(h.win_rate, 0.25, 0.80)) if h.trades_last_20 >= 3 else float(np.clip(0.55 + 0.10 * (absorption_idx / 20.0), 0.40, 0.70))
+            else:
+                pw = float(np.clip(0.55 + 0.10 * min(absorption_idx / 20.0, 1.0), 0.40, 0.70))
+
+            ev_dip, rr_dip = self.calculate_classical_expectancy(pw, target_pct, stop_pct)
+            if rr_dip < 1.50:
+                return TradeIntent(
+                    action="WAIT_IN_CASH",
+                    reason=f"REJECTED BY RR GATE: Dip turn R:R ({rr_dip:.2f}:1) < 1.50:1 minimum threshold (Target +{target_pct:.2f}%, Risk -{stop_pct:.2f}%).",
+                    telemetry={**intent_telemetry, "rr_ratio": rr_dip, "true_net_ev": ev_dip},
+                )
+            if ev_dip <= 0.05:
+                return TradeIntent(
+                    action="WAIT_IN_CASH",
+                    reason=f"REJECTED BY EXPECTANCY GATE: Dip turn Net EV={ev_dip:+.2f}% <= +0.05% (pw={pw*100:.1f}%, Target +{target_pct:.2f}%, Risk -{stop_pct:.2f}%).",
+                    telemetry={**intent_telemetry, "rr_ratio": rr_dip, "true_net_ev": ev_dip},
+                )
+
             return TradeIntent(
                 action="ENTER_CORE_LOT_1",
                 scenario="DIP_ABSORPTION_TURN",
@@ -411,8 +455,8 @@ class FreeConvictionEngine:
                 proposed_stop=dynamic_invalidation,
                 expected_runway_pct=immediate_runway,
                 confidence=max(tuned_confidence, 0.75),
-                reason=f"DIP TURN PREDICTED: Tested support (${nearest_support:,.2f}) with bid absorption (Ai={absorption_idx:.1f}, tanh_imb={tanh_imb:+.2f}). Belief={belief.regime_belief} (pers={belief.persistence_ticks}). Net EV={net_ev_pct:+.2f}%. Target: ${target:,.2f} (+{immediate_runway:.2f}%).",
-                telemetry=intent_telemetry,
+                reason=f"DIP TURN PREDICTED: Tested support (${nearest_support:,.2f}) with bid absorption (Ai={absorption_idx:.1f}, tanh_imb={tanh_imb:+.2f}). Belief={belief.regime_belief} (pers={belief.persistence_ticks}). True Net EV={ev_dip:+.2f}% (R:R {rr_dip:.2f}:1, pw={pw*100:.0f}%). Target: ${target:,.2f} (+{immediate_runway:.2f}%).",
+                telemetry={**intent_telemetry, "true_net_ev": ev_dip, "rr_ratio": rr_dip, "win_rate_prob": pw},
             )
 
         # 2.7 SETUP B: MOMENTUM IGNITION / BREAKOUT SURGE (v3.0 Gated Momentum Flow)
@@ -429,6 +473,29 @@ class FreeConvictionEngine:
         if (is_clearing_high or is_balloon_expanding) and has_real_momentum and is_belief_aligned and (tanh_imb >= 0.0 or trade_vel > 6.0):
             target = macro_ceiling
             effective_runway = max(macro_runway, projected_gross_pct)
+            target_pct = ((target - price) / price) * 100.0 if price > 0 else 0.0
+            stop_pct = ((price - dynamic_invalidation) / price) * 100.0 if price > 0 else 0.0
+
+            if governor:
+                h = governor.get_health("MACRO_BALLOON_BREAKOUT")
+                pw = float(np.clip(h.win_rate, 0.20, 0.80)) if h.trades_last_20 >= 3 else float(np.clip(0.40 + 0.15 * tuned_confidence, 0.35, 0.65))
+            else:
+                pw = float(np.clip(0.40 + 0.15 * tuned_confidence, 0.35, 0.65))
+
+            ev_breakout, rr_breakout = self.calculate_classical_expectancy(pw, target_pct, stop_pct)
+            if rr_breakout < 1.50:
+                return TradeIntent(
+                    action="WAIT_IN_CASH",
+                    reason=f"REJECTED BY RR GATE: Breakout R:R ({rr_breakout:.2f}:1) < 1.50:1 minimum threshold (Target +{target_pct:.2f}%, Risk -{stop_pct:.2f}%).",
+                    telemetry={**intent_telemetry, "rr_ratio": rr_breakout, "true_net_ev": ev_breakout},
+                )
+            if ev_breakout <= 0.05:
+                return TradeIntent(
+                    action="WAIT_IN_CASH",
+                    reason=f"REJECTED BY EXPECTANCY GATE: Breakout Net EV={ev_breakout:+.2f}% <= +0.05% (pw={pw*100:.1f}%, Target +{target_pct:.2f}%, Risk -{stop_pct:.2f}%).",
+                    telemetry={**intent_telemetry, "rr_ratio": rr_breakout, "true_net_ev": ev_breakout},
+                )
+
             return TradeIntent(
                 action="ENTER_CORE_LOT_1",
                 scenario="MACRO_BALLOON_BREAKOUT",
@@ -437,8 +504,8 @@ class FreeConvictionEngine:
                 proposed_stop=dynamic_invalidation,
                 expected_runway_pct=effective_runway,
                 confidence=max(tuned_confidence, 0.80),
-                reason=f"MOMENTUM IGNITION: Validated surge (Edge={effective_edge:+.2f}, Urgency={effective_urgency:.2f}, Conf={tuned_confidence:.2f}). Belief={belief.regime_belief} (pers={belief.persistence_ticks}). Flowing into macro space (${macro_ceiling:,.2f}, +{effective_runway:.2f}%) with Net EV=+{net_ev_pct:.2f}%.",
-                telemetry=intent_telemetry,
+                reason=f"MOMENTUM IGNITION: Validated surge (Edge={effective_edge:+.2f}, Urgency={effective_urgency:.2f}, Conf={tuned_confidence:.2f}). Belief={belief.regime_belief} (pers={belief.persistence_ticks}). Flowing into macro space (${macro_ceiling:,.2f}, +{effective_runway:.2f}%) with True Net EV=+{ev_breakout:.2f}% (R:R {rr_breakout:.2f}:1, pw={pw*100:.0f}%).",
+                telemetry={**intent_telemetry, "true_net_ev": ev_breakout, "rr_ratio": rr_breakout, "win_rate_prob": pw},
             )
 
         # Default fallback: Patiently scanning in cash

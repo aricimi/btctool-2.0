@@ -573,7 +573,7 @@ streamlit>=1.31.0
 12.4 Verification Before Live Launch:
 Run the unit test suite:
   `python -m unittest test_zebra.py`
-All 9 tests must pass in <0.10s:
+All 10 tests must pass in <0.10s:
 1. Synthetic stream & candle aggregation
 2. Anti-spoofing orderbook & tanh imbalance
 3. Vectorized 100-Screen State Matrix speed (<15ms)
@@ -583,6 +583,7 @@ All 9 tests must pass in <0.10s:
 7. Episodic memory logging & Dream Engine replay
 8. Explicit belief system (hysteresis anti-flicker) & adaptive hurdles
 9. v3.0 Governor, Failure Counter, Escalation, Stress Engine & Noise-Immune Stops
+10. v3.1 Classical Expectancy Gate, R:R >= 1.5 Gate, & Absolute Hard Stop Primacy
 
 12.5 Launching the 24/7 Autonomous Daemon:
 To launch with a clean slate starting from Trade #1:

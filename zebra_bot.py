@@ -193,7 +193,7 @@ class ZebraBotEngine:
 
                 # 2. COGNITION (Mind): Models Propose TradeIntent
                 active_trade = self.execution.active_trade
-                intent = self.brain.evaluate(matrix, active_trade=active_trade)
+                intent = self.brain.evaluate(matrix, active_trade=active_trade, governor=self.risk_gate.governor)
 
                 # 3. RISK GATE (Conscience): Risk Disposes (Priority-0 Reflexes & Invariant Rules)
                 decision = self.risk_gate.evaluate(

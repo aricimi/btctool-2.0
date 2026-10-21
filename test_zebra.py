@@ -572,6 +572,47 @@ class TestZebraBot(unittest.TestCase):
         net_at_be = ((80200.0 - 80000.0) / 80000.0) - 0.0020
         self.assertGreater(net_at_be, 0.0, "Breakeven exit must guarantee net positive cash")
 
+    def test_10_v31_classical_expectancy_and_hard_stop_primacy(self):
+        """Verify BTCTOOL v3.1: Classical Expectancy Formula, R:R >= 1.5 Gate, & Absolute Hard Stop Primacy."""
+        # 1. Classical Expectancy Math
+        # Case A: Good R:R (2:1) but poor win-rate (30%) -> Net EV is negative!
+        ev_neg, rr_a = FreeConvictionEngine.calculate_classical_expectancy(win_rate=0.30, target_pct=0.80, stop_pct=0.40)
+        self.assertEqual(rr_a, 2.0)
+        self.assertLess(ev_neg, 0.0, "30% win-rate with 2:1 R:R must yield negative EV after costs")
+
+        # Case B: Strong setup (55% win rate, 3:1 R:R) -> Positive Net EV
+        ev_pos, rr_b = FreeConvictionEngine.calculate_classical_expectancy(win_rate=0.55, target_pct=1.50, stop_pct=0.50)
+        self.assertEqual(rr_b, 3.0)
+        self.assertGreater(ev_pos, 0.30, "55% win rate with 3:1 R:R must clear expectancy hurdle")
+
+        # Case C: Poor R:R (< 1.5:1)
+        _, rr_poor = FreeConvictionEngine.calculate_classical_expectancy(win_rate=0.60, target_pct=0.30, stop_pct=0.30)
+        self.assertEqual(rr_poor, 1.0)
+        self.assertLess(rr_poor, 1.50)
+
+        # 2. Absolute Hard Stop Primacy: Absorption CANNOT override exit past hard floor
+        active_trade = {
+            "entry": 80000.0,
+            "target_price": 83000.0,
+            "trailing_stop": 79600.0,  # Stop is at 79,600
+            "invalidation_floor": 79600.0,
+            "scenario": "DIP_ABSORPTION_TURN",
+        }
+        # Price drops to 79,500 (breaches soft wick zone: 79600 - 0.20*250 = 79,550)
+        hard_breach_matrix = {
+            "latest_price": 79500.0,
+            "tanh_imbalance": 0.85,     # Huge resting bid wall
+            "absorption_index": 45.0,   # Massive whale absorption
+            "composite_atr": 250.0,
+            "multi_screen_bounds": {"nearest_support": 79400.0, "nearest_resistance": 81000.0},
+        }
+        cut_intent = TradeIntent(action="CUT_THESIS_INVALIDATED", scenario="DIP_ABSORPTION_TURN", entry_price=79500.0, proposed_stop=79600.0)
+        decision = self.risk_gate.evaluate(cut_intent, hard_breach_matrix, active_trade=active_trade)
+
+        self.assertEqual(decision.status, "ALLOW", "Hard stop breach MUST NOT be overridden to MODIFY/HOLD")
+        self.assertEqual(decision.action, "CUT_THESIS_INVALIDATED", "Must cut unconditionally past hard stop")
+        self.assertIn("HARD RISK STOP BREACHED", decision.reason)
+
 
 if __name__ == "__main__":
     unittest.main()

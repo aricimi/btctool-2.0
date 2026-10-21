@@ -1,26 +1,19 @@
 # 📜 BTCTOOL 2.0 · Autonomous Spot Trading Journal
-*Last Updated: 2026-10-21 17:03:22 (Local) | Symbol: BTC/USDT (Spot) | Fee Standard: OKX 0.20% Round-Trip*
+*Last Updated: 2026-10-21 18:08:14 (Local) | Symbol: BTC/USDT (Spot) | Fee Standard: OKX 0.20% Round-Trip*
 
 ---
 ## 📊 Executive Performance Summary
 | Metric | Performance Value | Note |
 | :--- | :--- | :--- |
-| **Total Closed Trades** | **8** | All trades since bot activation |
-| **Win Rate** | **25.0%** (2 Wins / 6 Losses) | Factoring all exchange fees |
-| **Gross Realized Gain** | **+0.61%** | Raw market price movement |
-| **OKX Fees Deducted** | **-1.60%** | 0.10% buy taker + 0.10% sell taker |
-| **Net Realized Profit** | **-0.99% NET** ⚠️ | Clean profit in your wallet |
+| **Total Closed Trades** | **9** | All trades since bot activation |
+| **Win Rate** | **33.3%** (3 Wins / 6 Losses) | Factoring all exchange fees |
+| **Gross Realized Gain** | **+1.05%** | Raw market price movement |
+| **OKX Fees Deducted** | **-1.80%** | 0.10% buy taker + 0.10% sell taker |
+| **Net Realized Profit** | **-0.75% NET** ⚠️ | Clean profit in your wallet |
 
 ---
-## 🟢 Current Live Position (Open)
-- **Trade ID:** #9
-- **Setup:** `ZEBRA WHALE: MACRO_BALLOON_BREAKOUT`
-- **Entry Time:** `2026-10-21 16:33:10`
-- **Entry Price:** **$84,037.00**
-- **Target 1:** **$87,238.30** (Breakeven Trigger)
-- **Runner Target 2:** **$0.00**
-- **Memory Stop Loss:** **$83,772.59**
-- **Status:** **🟢 ACTIVE SPOT HOLD · MANAGING CONTINUOUSLY**
+## 🟡 Position Status: IN DEFENSIVE CASH
+- Scanning order book and multi-scale momentum for next confluence entry trigger.
 
 ---
 ## 📋 Historical Trade Ledger
@@ -34,7 +27,7 @@
 | **6** | 2026-10-21 15:04:38 | 2026-10-21 15:30:10 | 25m | `ZEBRA WHALE: DIP_ABSORPTION_TURN` | $83,842.40 | $83,616.60 | -0.27% | -0.20% | **-0.47%** | LOSS 🛑 | ZEBRA EXIT: STRUCTURAL BREAKDOWN: Support broken without bid absorption. Controlled cut (-0.26%). |
 | **7** | 2026-10-21 15:39:20 | 2026-10-21 16:00:42 | 21m | `ZEBRA WHALE: MACRO_BALLOON_BREAKOUT` | $83,632.30 | $83,756.70 | +0.15% | -0.20% | **-0.05%** | LOSS 🛑 | ZEBRA EXIT: STRUCTURAL BREAKDOWN: Support broken without bid absorption. Controlled cut (+0.15%). |
 | **8** | 2026-10-21 16:02:39 | 2026-10-21 16:29:18 | 26m | `ZEBRA WHALE: MACRO_BALLOON_BREAKOUT` | $83,816.60 | $83,883.10 | +0.08% | -0.20% | **-0.12%** | LOSS 🛑 | ZEBRA EXIT: STRUCTURAL BREAKDOWN: Support broken without bid absorption. Controlled cut (+0.14%). |
-| **9** | 2026-10-21 16:33:10 | *OPEN* | *Holding* | `ZEBRA WHALE: MACRO_BALLOON_BREAKOUT` | $84,037.00 | — | — | -0.20% | — | 🟢 **ACTIVE** | Open Position |
+| **9** | 2026-10-21 16:33:10 | 2026-10-21 17:18:48 | 45m | `ZEBRA WHALE: MACRO_BALLOON_BREAKOUT` | $84,037.00 | $84,406.10 | +0.44% | -0.20% | **+0.24%** | WIN 🏆 | ZEBRA EXIT: TRAILING STOP HIT (+0.44% gross, +0.24% net). Locking in banked profit at $84,406.10. |
 
 ---
 *BTCTOOL 2.0 Autonomous Spot Execution Engine · Pure Event-Driven Architecture*

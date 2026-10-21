@@ -377,16 +377,20 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
    - Dispatches rich instant Telegram alerts on every action (Entry, Scale-in, Bank Profit, Trailing Stop Ratchet, Thesis Cut, Shadow Self Clamp).
    - Synchronizes `bot_state.json`, `trade_journal.csv` (UTF-8-BOM Excel lock-proof), `trade_journal.md`, `trade_history.json`, and `episodes.jsonl`.
 
-8. **Master Technical Specification & Version 3.0.0 Production Architecture:**
-   - **Version 3.0.0 Production Release:** Integrated the Complete BTCTOOL v3.0 Master Package:
-     1. `SetupPerformanceGovernor`: Setup health score $[0, 100]$ based on rolling 20-trade net expectancy and win rate; dynamically scales sizing ($100\% \rightarrow 75\% \rightarrow 50\% \rightarrow 25\%$) and auto-disables chronic losing setups ($<20$).
-     2. `ThesisFailureCounter`: Tracks consecutive failure loops; penalizes size ($0.85\times, 0.70\times$) and enforces 30-minute cooldown on 3 consecutive failures.
-     3. `ConscienceEscalation`: Automatically raises entry confidence hurdles by $+10\%$ to $+15\%$ following 3 consecutive portfolio losses until edge recovers.
-     4. `LightweightStressEngine`: Fast pre-trade check evaluating spread inflation ($>0.20\%$) and order book liquidity collapse ($<30\%$ baseline).
-     5. `ExplicitBeliefEngine`: Smooth exponential decay and reinforcement updating continuous macro conviction without binary signal flicker.
-     6. `IntuitionTripwires`: Fast order flow modifiers ($\pm 0.05$ confidence modifier on tape burst or aggressive absorption; never enters trades directly).
-     7. `NetExpectancyGate`: Hard mathematical gate requiring $\mathbb{E}[\text{PnL}_{\text{net}}] > +0.05\%$ after OKX taker fees ($0.20\%$), slippage, and variance before any trade can fire. Closed historical balloon bypass.
-     8. `Noise-Immune Trailing Ratchet`: Breakeven moved from $+0.35\%$ gain to $+0.60\%$ gain; stop ratchets to entry $\times 1.0025$ (+0.25% gross), guaranteeing $+0.05\%$ net profit; trailing ratchet buffered to $\ge 0.8 \times \text{ATR}$ to prevent micro-wick asphyxiation.
+8. **Master Technical Specification & Version 3.1.0 Institutional Architecture:**
+   - **Version 3.1.0 Institutional Release:** Applied Quantitative Audit Upgrades:
+     1. `ClassicalExpectancyGate`: Replaced heuristic runway EV with the true probabilistic expectancy formula:
+        $$\mathbb{E}[\text{PnL}_{\text{net}}] = (p_w \cdot \bar{W}) - ((1 - p_w) \cdot \bar{L}) - \text{Costs}$$
+        where $p_w$ is the empirical rolling win rate from `SetupPerformanceGovernor`, $\bar{W}$ is the target payoff distance, $\bar{L}$ is the dynamic invalidation risk distance, and $\text{Costs} = 0.22\%$ (OKX $0.20\%$ fee $+ 0.02\%$ slippage). Any setup with $\mathbb{E}[\text{PnL}_{\text{net}}] \le +0.05\%$ is unconditionally rejected.
+     2. `RewardToRiskReconciliation`: Enforced mandatory minimum Reward-to-Risk ratio $\ge 1.50:1$ ($\bar{W} / \bar{L} \ge 1.50$) across all setups prior to intent dispatch.
+     3. `AbsoluteHardStopPrimacy`: Hard risk limits are non-overridable. The in-situ memory absorption index ($A_i$) is strictly confined to micro-wick pullbacks ($\le 0.20 \times \text{ATR}$ below stop) and is disabled once price breaches the hard floor ($\min(\text{trailing\_stop}, \text{entry} \times (1 - \text{max\_risk}))$.
+     4. `SetupPerformanceGovernor`: Setup health score $[0, 100]$ based on rolling 20-trade net expectancy and win rate; dynamically scales sizing ($100\% \rightarrow 75\% \rightarrow 50\% \rightarrow 25\%$) and auto-disables chronic losing setups ($<20$).
+     5. `ThesisFailureCounter`: Tracks consecutive failure loops; penalizes size ($0.85\times, 0.70\times$) and enforces 30-minute cooldown on 3 consecutive failures.
+     6. `ConscienceEscalation`: Automatically raises entry confidence hurdles by $+10\%$ to $+15\%$ following 3 consecutive portfolio losses until edge recovers.
+     7. `LightweightStressEngine`: Fast pre-trade check evaluating spread inflation ($>0.20\%$) and order book liquidity collapse ($<30\%$ baseline).
+     8. `ExplicitBeliefEngine`: Smooth exponential decay and reinforcement updating continuous macro conviction without binary signal flicker.
+     9. `IntuitionTripwires`: Fast order flow modifiers ($\pm 0.05$ confidence modifier on tape burst or aggressive absorption; never enters trades directly).
+     10. `Noise-Immune Trailing Ratchet`: Breakeven moved from $+0.35\%$ gain to $+0.60\%$ gain; stop ratchets to entry $\times 1.0025$ (+0.25% gross), guaranteeing $+0.05\%$ net profit; trailing ratchet buffered to $\ge 0.8 \times \text{ATR}$ to prevent micro-wick asphyxiation.
    - **Strict Workspace Isolation Rule (AGENTS.md Rule 4):** The agent environment is strictly locked to `c:\gemini proyect\btctool 2.0`. Under no circumstances may any file be created, read, written, modified, or exported outside the project root.
-   - **Master Technical Specification Document (`BTCTOOL_2_0_FULL_SPECIFICATION_WITH_OXY.txt`):** Synchronized to Version 3.0.0 Production with all mathematical formulas, OKX V5 REST and WebSocket specifications, fee model, anti-hanging state machine, and production daemon setup. Stored strictly in the project root.
+   - **Master Technical Specification Document (`BTCTOOL_2_0_FULL_SPECIFICATION_WITH_OXY.txt`):** Synchronized to Version 3.1.0 Production with all mathematical formulas, OKX V5 REST and WebSocket specifications, fee model, anti-hanging state machine, and production daemon setup. Stored strictly in the project root.
 

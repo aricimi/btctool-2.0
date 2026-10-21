@@ -406,11 +406,19 @@ class RiskEngine:
             target_price = float(active_trade.get("target_price", nearest_resistance))
 
             # --------------------------------------------------------------
-            # INVARIANT 1: IN-SITU MEMORY SOFT STOP EVALUATION
+            # INVARIANT 1: ABSOLUTE HARD STOP PRIMACY & SOFT WICK DEFENSE
             # --------------------------------------------------------------
             if intent.action == "CUT_THESIS_INVALIDATED":
-                # Hard Emergency Floor: if price broke past floor by > 0.8 * ATR, cut unconditionally
-                if price <= (trailing_stop - (0.8 * atr)):
+                # Hard Risk Limit: absolute non-overridable boundary
+                max_risk_price = round(entry * (1.0 - (max_stress_risk_pct / 100.0)), 2)
+                hard_risk_floor = min(trailing_stop, max_risk_price)
+
+                # Soft Wick Zone: absorption is ONLY evaluated if price is within a micro-wick buffer
+                # (<= 0.20 * ATR below trailing_stop) AND strictly above max account risk price
+                is_within_soft_wick = (price >= (trailing_stop - (0.20 * atr))) and (price > max_risk_price)
+
+                if not is_within_soft_wick or (price <= max_risk_price):
+                    # Hard Stop Breached: Absorption override is strictly disabled. Emergency cut unconditionally.
                     self.record_invalidation_exit(price, matrix.get("timestamp", 0.0))
                     return RiskDecision(
                         status="ALLOW",
@@ -420,13 +428,13 @@ class RiskEngine:
                         target_price=target_price,
                         trailing_stop=trailing_stop,
                         gain_pct=gain_pct,
-                        reason=f"HARD FLOOR BREACH: Price broke past buffer (${price:,.2f}). Emergency cut to preserve capital.",
+                        reason=f"HARD RISK STOP BREACHED: Price (${price:,.2f}) breached hard floor (${hard_risk_floor:,.2f}). Absorption override disabled to protect capital.",
                         telemetry=intent.telemetry,
                     )
 
-                # Soft Stop Wick-Sweep Defense: Are resting bids absorbing the sweep?
+                # Inside soft wick test zone: Are resting bids absorbing the sweep?
                 if tanh_imb > 0.15 or absorption_idx > 15.0:
-                    logger.info(f"[RiskGate] VETO CUT: Price touching stop (${price:,.2f}), but bids absorbing sweep (Ai={absorption_idx:.1f}). Overriding to HOLD.")
+                    logger.info(f"[RiskGate] VETO CUT: Price touching soft stop (${price:,.2f}), but bids absorbing sweep (Ai={absorption_idx:.1f}). Overriding to HOLD within buffer.")
                     return RiskDecision(
                         status="MODIFY",
                         action="HOLD_POSITION",
@@ -435,7 +443,7 @@ class RiskEngine:
                         target_price=target_price,
                         trailing_stop=trailing_stop,
                         gain_pct=gain_pct,
-                        reason=f"RISK GATE OVERRIDE: Floor touched but bids absorbing sweep (tanh_imb={tanh_imb:+.2f}, Ai={absorption_idx:.1f}). Holding with noise immunity.",
+                        reason=f"RISK GATE OVERRIDE: Soft stop touched but bids absorbing sweep (tanh_imb={tanh_imb:+.2f}, Ai={absorption_idx:.1f}). Holding strictly above hard floor (${hard_risk_floor:,.2f}).",
                         telemetry=intent.telemetry,
                     )
                 else:
