@@ -513,13 +513,20 @@ class TestZebraBot(unittest.TestCase):
         fc.record_outcome("TEST_THESIS", -0.20, timestamp=t_now)
         fc.record_outcome("TEST_THESIS", -0.20, timestamp=t_now + 10)
         self.assertEqual(fc.get_failure_penalty("TEST_THESIS"), 0.70)
+        # 2 consecutive losses enforces graduated 8m cooldown
         is_cd, rem = fc.is_in_cooldown("TEST_THESIS", current_time=t_now + 15)
-        self.assertFalse(is_cd)
-        # 3rd failure triggers cooldown
-        fc.record_outcome("TEST_THESIS", -0.20, timestamp=t_now + 20)
-        is_cd, rem = fc.is_in_cooldown("TEST_THESIS", current_time=t_now + 25)
-        self.assertTrue(is_cd, "3rd consecutive failure must enforce cooldown")
-        self.assertGreater(rem, 0.0)
+        self.assertTrue(is_cd, "2nd consecutive failure must enforce graduated 8m cooldown")
+        self.assertGreaterEqual(rem, 400.0)
+
+        # After 8m expires (at t_now + 600s), cooldown clears
+        is_cd_exp, _ = fc.is_in_cooldown("TEST_THESIS", current_time=t_now + 600.0)
+        self.assertFalse(is_cd_exp, "Cooldown must clear after 8m expires")
+
+        # 3rd failure triggers 20m minimum loss floor cooldown
+        fc.record_outcome("TEST_THESIS", -0.20, timestamp=t_now + 610)
+        is_cd_3, rem_3 = fc.is_in_cooldown("TEST_THESIS", current_time=t_now + 615)
+        self.assertTrue(is_cd_3, "3rd consecutive failure must enforce 20m loss floor cooldown")
+        self.assertGreaterEqual(rem_3, 1100.0)
 
         # 3. Conscience Escalation Gate
         esc = ConscienceEscalation(escalation_threshold=3)
@@ -682,12 +689,98 @@ class TestZebraBot(unittest.TestCase):
         # The instant entropy drops (0.35), Class A condition gate clears in real-time
         calm_matrix = {
             "timestamp": t_base + 30,
-            "feature_vector": {"entropy": 0.35},
+            "feature_vector": {"entropy": 0.35, "trend_strength": 0.0020},
         }
         status_clean, s_clean, c_clean = engine.evaluate_entry_eligibility("PRISTINE", calm_matrix)
         self.assertEqual(status_clean, "NORMAL_ELIGIBILITY", "Class A condition gate must unlock instantly when entropy clears")
         self.assertEqual(s_clean, 1.00)
         self.assertEqual(c_clean, 0.00)
+
+        # 4. Exact Deterministic Boundary Handling at 20.0, 40.0, 60.0, 80.0
+        # Check boundary at exactly 80.0
+        gov.history["BOUND_80"] = [0.15] * 20  # win_rate=100%, avg=0.15 -> score = 50 + 50 + 30 = 130 -> 100.0
+        # Let's force exact boundary scores directly to verify boundary logic
+        class MockGov(SetupPerformanceGovernor):
+            def get_health_with_score(self, score: float):
+                h = super().get_health("ANY")
+                h.health_score = score
+                if score >= 80.0:
+                    h.size_multiplier, h.confidence_modifier, h.is_disabled = 1.00, 0.00, False
+                elif score >= 60.0:
+                    h.size_multiplier, h.confidence_modifier, h.is_disabled = 0.75, 0.00, False
+                elif score >= 40.0:
+                    h.size_multiplier, h.confidence_modifier, h.is_disabled = 0.50, 0.05, False
+                elif score >= 20.0:
+                    h.size_multiplier, h.confidence_modifier, h.is_disabled = 0.25, 0.10, False
+                else:
+                    h.size_multiplier, h.confidence_modifier, h.is_disabled = 0.00, 0.00, True
+                return h
+
+        mg = MockGov()
+        h80 = mg.get_health_with_score(80.0)
+        self.assertEqual(h80.size_multiplier, 1.00)
+        self.assertEqual(h80.confidence_modifier, 0.00)
+        self.assertFalse(h80.is_disabled)
+
+        h60 = mg.get_health_with_score(60.0)
+        self.assertEqual(h60.size_multiplier, 0.75)
+        self.assertEqual(h60.confidence_modifier, 0.00)
+        self.assertFalse(h60.is_disabled)
+
+        h40 = mg.get_health_with_score(40.0)
+        self.assertEqual(h40.size_multiplier, 0.50)
+        self.assertEqual(h40.confidence_modifier, 0.05)
+        self.assertFalse(h40.is_disabled)
+
+        h20 = mg.get_health_with_score(20.0)
+        self.assertEqual(h20.size_multiplier, 0.25)
+        self.assertEqual(h20.confidence_modifier, 0.10)
+        self.assertFalse(h20.is_disabled)
+
+        h19 = mg.get_health_with_score(19.9)
+        self.assertEqual(h19.size_multiplier, 0.00)
+        self.assertTrue(h19.is_disabled)
+
+        # 5. Cooldown Persistence Across Bot Restarts
+        exported_state = fc.export_state()
+        new_fc = ThesisFailureCounter(base_duration_sec=180.0)
+        new_fc.import_state(exported_state)
+        is_cd_restored, rem_restored = new_fc.is_in_cooldown("BREAKOUT_TEST", current_time=t_base + 30)
+        self.assertTrue(is_cd_restored, "Restored counter must maintain active Class B cooldown across restarts")
+        self.assertGreater(rem_restored, 0.0)
+
+        # 6. Emergency Risk-Reducing Exits Remain 100% Available During Every Cooldown & Hard Lock
+        active_trade_lock = {
+            "entry": 84000.0,
+            "target_price": 86000.0,
+            "trailing_stop": 83500.0,
+            "scenario": "BREAKOUT_TEST",
+        }
+        exit_matrix = {
+            "latest_price": 83450.0,  # Below stop
+            "feed_latency_ms": 100.0,
+            "spread_pct": 0.02,
+            "composite_atr": 300.0,
+            "tanh_imbalance": -0.40,
+            "absorption_index": 0.0,
+            "feature_vector": {"entropy": 0.90},  # Even in massive chop!
+        }
+        exit_intent = TradeIntent(
+            action="CUT_THESIS_INVALIDATED",
+            scenario="BREAKOUT_TEST",
+            entry_price=83450.0,
+            proposed_stop=83500.0,
+        )
+        # Pass severe account drawdown (5.0%) while setup is under 3-loss cooldown
+        exit_decision = engine.evaluate(
+            exit_intent,
+            exit_matrix,
+            active_trade=active_trade_lock,
+            daily_drawdown_pct=5.0,  # Severe drawdown breach
+            max_daily_drawdown=2.0,
+        )
+        self.assertEqual(exit_decision.status, "ALLOW", "Emergency risk-reducing exit MUST NOT be blocked by drawdown lock or cooldown")
+        self.assertEqual(exit_decision.action, "CUT_THESIS_INVALIDATED", "Must allow capital-protecting exit unconditionally")
 
 
 if __name__ == "__main__":

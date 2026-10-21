@@ -151,6 +151,9 @@ class ZebraBotEngine:
         self.brain = FreeConvictionEngine()
         self.risk_gate = RiskEngine(history_file=os.path.join(os.path.dirname(os.path.abspath(__file__)), "trade_history.json"))
         self.execution = ExecutionManager()
+        if hasattr(self.execution, "cooldown_state") and self.execution.cooldown_state:
+            self.risk_gate.failure_counter.import_state(self.execution.cooldown_state)
+            logger.info("[Zebra] Successfully restored active cooldown timers from persistent state.")
         self.notifier = TelegramNotifier()
         self.consecutive_api_errors = 0
 
@@ -308,7 +311,7 @@ class ZebraBotEngine:
                     scenario = active_trade.get("scenario", "TRADE") if active_trade else "TRADE"
 
                     self.risk_gate.record_trade_outcome(scenario, net_gain_pct, timestamp=matrix.get("timestamp", 0.0))
-                    self.execution.close_position(exit_price=exit_p, exit_reason=reason)
+                    self.execution.close_position(exit_price=exit_p, exit_reason=reason, cooldown_state=self.risk_gate.failure_counter.export_state())
                     self.notifier.send_message(
                         f"🏁 <b>ZEBRA BOT: PROFIT BANKED (+{net_gain_pct*100:.2f}% NET)</b>\n\n"
                         f"<b>Exit Price:</b> ${exit_p:,.2f}\n"
@@ -327,7 +330,7 @@ class ZebraBotEngine:
 
                     self.risk_gate.record_invalidation_exit(exit_p, matrix.get("timestamp", 0.0))
                     self.risk_gate.record_trade_outcome(scenario, net_pnl_pct, timestamp=matrix.get("timestamp", 0.0))
-                    self.execution.close_position(exit_price=exit_p, exit_reason=reason)
+                    self.execution.close_position(exit_price=exit_p, exit_reason=reason, cooldown_state=self.risk_gate.failure_counter.export_state())
                     self.notifier.send_message(
                         f"🛑 <b>ZEBRA BOT: THESIS CUT (PRESERVE CAPITAL)</b>\n\n"
                         f"<b>Exit Price:</b> ${exit_p:,.2f}\n"

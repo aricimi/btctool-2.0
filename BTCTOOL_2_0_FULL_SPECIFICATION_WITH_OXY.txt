@@ -314,17 +314,44 @@ The Conscience executes deterministic invariant checks and governance rules on e
 5.1 Component 1: Setup Performance Governor (SetupHealth):
 Monitors rolling 20 closed trades for each setup name (MACRO_BALLOON_BREAKOUT, DIP_ABSORPTION_TURN):
 - Calculates rolling win rate, average net PnL, and health score in [0.0, 100.0].
-- Health > 80: 100% normal sizing
-- Health 60-80: 75% sizing
-- Health 40-60: 50% sizing
-- Health 20-40: 25% sizing
-- Health < 20: Auto-disabled (unconditional REJECT)
+- 5 Contiguous Half-Open Health Tiers:
+  * [80.0, 100.0]: Pristine -> 100% sizing, +0.00 hurdle modifier, active
+  * [60.0, 80.0): Healthy  -> 75% sizing, +0.00 hurdle modifier, active
+  * [40.0, 60.0): Degraded -> 50% sizing, +0.05 hurdle modifier, active
+  * [20.0, 40.0): Stressed -> 25% sizing, +0.10 hurdle modifier, active
+  * [0.0, 20.0): Disabled -> 0% sizing, unconditional REJECT
 
-5.2 Component 5: Thesis Failure Counter & Cooldown:
-Tracks consecutive losses per setup:
-- 1st failure: 85% size multiplier
-- 2nd failure: 70% size multiplier
-- 3rd consecutive failure: Enforces automatic 30-minute cooldown on that setup (REJECT).
+5.2 Component 5: Dynamic Thesis Failure Counter & Dual-Class Cooldown:
+The Single Source of Truth for setup-level cooldown governance and thesis protection.
+A. Class B: Loss-Based Cooldown (Immutable Timer):
+   - Triggered upon consecutive trade losses on that setup.
+   - Dynamic duration formula:
+     Candidate = clamp(3.0m * M_loss * M_health * M_entropy, 3.0m, 45.0m)
+     Final_Duration = max(Candidate, LossFloor)
+   - Graduated Loss Multipliers & Hard Minimum Loss Floors:
+     * 1 loss:  M_loss = 1.0x, minimum floor = 3.0 minutes
+     * 2 losses: M_loss = 2.5x, minimum floor = 8.0 minutes
+     * 3+ losses: M_loss = 6.0x (+2.0x per additional loss), minimum floor = 20.0 minutes
+   - Setup Health Multiplier (M_health):
+     * [0.0, 20.0): 1.8x | [20.0, 40.0): 1.5x | [40.0, 60.0): 1.2x | >= 60.0: 1.0x
+     * Historical setup health CANNOT reduce cooldown duration below the loss floor.
+   - Market Entropy Multiplier (M_entropy):
+     * If entropy >= 0.70: 1.5x multiplier applied to candidate duration; else 1.0x.
+   - Invariant: Zero early release permitted on Class B loss locks. Timer must run in full.
+
+B. Class A: Market-Condition Gate (Condition-Based, Zero Timers):
+   - High entropy (entropy >= 0.70): Blocks entries with WAIT_HIGH_ENTROPY until structure forms.
+   - Moderate entropy (entropy >= 0.65) or degraded health (< 60.0): REDUCE_SIZE_AND_CONFIRM (50% size, +0.05 hurdle).
+   - Early release permitted ONLY when:
+     1. Entropy drops strictly below 0.40, AND
+     2. Validated trend transition occurs: normalized tanh(400.0 * trend_strength) >= 0.15, AND
+     3. Original setup entry conditions are reconfirmed.
+   - Early release NEVER overrides a Class B loss cooldown, setup disablement, or account drawdown lock.
+
+C. State Persistence & Auditability:
+   - Cooldown state (consecutive_failures, disabled_until) is serialized atomically via export_state() / import_state() into bot_state.json across restarts.
+   - Cooldown blocks new entries and scale-ins, but NEVER prevents risk-reducing exits (CUT_THESIS_INVALIDATED).
+   - Hard safety invariants (kill switch, execution lock, daily drawdown breach) always take priority.
 
 5.3 Component 8: Conscience Escalation Gate:
 Tracks portfolio-wide consecutive losses across the account:

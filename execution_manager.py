@@ -28,6 +28,7 @@ class ExecutionManager:
         self.state_file = state_file
         self.journal = journal or TradeJournal()
         self.active_trade: Optional[dict] = None
+        self.cooldown_state: Optional[dict] = None
         self.load_state()
 
     def reset_clean_slate(self):
@@ -84,23 +85,27 @@ class ExecutionManager:
         logger.info("[Execution] Clean slate initialized. Trade counter reset to #1.")
 
     def load_state(self) -> Optional[dict]:
-        """Loads active trade from disk."""
+        """Loads active trade and persisted cooldown state from disk."""
         if os.path.exists(self.state_file):
             try:
                 with open(self.state_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     self.active_trade = data.get("active_trade")
+                    self.cooldown_state = data.get("cooldown_state", {})
                 return self.active_trade
             except Exception as e:
                 logger.error(f"[Execution] Error loading state: {e}")
         return None
 
-    def save_state(self, market_state: str = "SCANNING", last_alert_time: float = 0.0):
-        """Atomically saves bot state to disk."""
+    def save_state(self, market_state: str = "SCANNING", last_alert_time: float = 0.0, cooldown_state: Optional[dict] = None):
+        """Atomically saves bot state and cooldown state to disk."""
         try:
+            if cooldown_state is not None:
+                self.cooldown_state = cooldown_state
             payload = {
                 "market_state": market_state,
                 "active_trade": self.active_trade,
+                "cooldown_state": self.cooldown_state,
                 "last_alert_time": last_alert_time or time.time(),
                 "saved_at": time.time(),
             }
@@ -196,6 +201,7 @@ class ExecutionManager:
         feature_vector: Optional[dict] = None,
         trade_intent: Optional[dict] = None,
         risk_decision: Optional[dict] = None,
+        cooldown_state: Optional[dict] = None,
     ):
         """Closes position immediately at market and updates ledger + episodic memory."""
         if not self.active_trade:
@@ -215,7 +221,7 @@ class ExecutionManager:
             risk_decision=r_decision,
         )
         self.active_trade = None
-        self.save_state(market_state="SCANNING")
+        self.save_state(market_state="SCANNING", cooldown_state=cooldown_state)
         self.journal.flush_pending_csv()
         logger.info(f"[Execution] Position closed at ${exit_price:,.2f}: {full_reason}")
 

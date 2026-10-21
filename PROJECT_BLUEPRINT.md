@@ -336,10 +336,27 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
    - **Component 1: Setup Performance Governor (`SetupPerformanceGovernor` & `SetupHealth`):**
      - Monitors rolling 20 closed trades for each setup name (`MACRO_BALLOON_BREAKOUT`, `DIP_ABSORPTION_TURN`).
      - Computes rolling win rate, average net PnL, and health score in $[0, 100]$.
-     - Health $>80$: 100% sizing; Health $60-80$: 75% sizing; Health $40-60$: 50% sizing; Health $20-40$: 25% sizing; Health $<20$: VETO (`REJECT`).
-   - **Component 5: Thesis Failure Counter & Cooldown (`ThesisFailureCounter`):**
-     - Tracks consecutive losses per setup. Penalizes size factor ($0.85\times, 0.70\times$).
-     - 3 consecutive setup failures triggers an automatic 30-minute cooldown on that setup.
+     - 5 Contiguous Half-Open Health Tiers:
+       - $[80.0, 100.0]$: 100% sizing, +0.00 hurdle modifier, active.
+       - $[60.0, 80.0)$: 75% sizing, +0.00 hurdle modifier, active.
+       - $[40.0, 60.0)$: 50% sizing, +0.05 hurdle modifier, active.
+       - $[20.0, 40.0)$: 25% sizing, +0.10 hurdle modifier, active.
+       - $[0.0, 20.0)$: 0% sizing, VETO (`REJECT`).
+   - **Component 5: Thesis Failure Counter & Dual-Class Cooldown (`ThesisFailureCounter` — Spec Section 5.2):**
+     - Single Source of Truth for setup-level cooldown governance.
+     - **Class A (Market Condition Gate):** Zero timer. Real-time condition evaluation. Elevated entropy ($\ge 0.70$) yields `WAIT_HIGH_ENTROPY`. Unlocks early ONLY when $\text{Entropy} < 0.40$ and normalized trend transition $\tanh(400.0 \times \text{trend\_strength}) \ge 0.15$ with setup criteria reconfirmed.
+     - **Class B (Graduated Loss-Based Cooldown):** Immutable timer calculated on consecutive losses:
+       $$\text{Duration} = \text{clamp}(3.0\text{m} \times M_{\text{loss}} \times M_{\text{health}} \times M_{\text{entropy}}, 3.0\text{m}, 45.0\text{m})$$
+       $$\text{Final Duration} = \max(\text{Duration}, \text{LossFloor})$$
+       - 1 consecutive failure: $M_{\text{loss}} = 1.0\times$, minimum loss floor $= 3.0\text{m}$.
+       - 2 consecutive failures: $M_{\text{loss}} = 2.5\times$, minimum loss floor $= 8.0\text{m}$.
+       - 3+ consecutive failures: $M_{\text{loss}} = 6.0\times$ ($+2.0\times$ per extra loss), minimum loss floor $= 20.0\text{m}$.
+       - $M_{\text{health}}$ modifier: $[0, 20) \rightarrow 1.8\times$, $[20, 40) \rightarrow 1.5\times$, $[40, 60) \rightarrow 1.2\times$, $\ge 60 \rightarrow 1.0\times$ (historical health cannot shorten cooldown below loss floor).
+       - $M_{\text{entropy}}$ modifier: $\text{Entropy} \ge 0.70 \rightarrow 1.5\times$, else $1.0\times$.
+       - Zero early release permitted on Class B loss locks.
+     - Cooldown state is persisted across restarts (`bot_state.json`) via `export_state()` / `import_state()`.
+     - Cooldown blocks new entries and scale-ins, but NEVER prevents risk-reducing exits (`CUT_THESIS_INVALIDATED`).
+     - Hard safety invariants (kill switch, execution lock, daily drawdown) retain 100% absolute priority.
    - **Component 8: Conscience Escalation Gate (`ConscienceEscalation`):**
      - Tracks portfolio-wide consecutive losses.
      - If $\ge 3$ consecutive losses occur across the account, temporarily raises required entry confidence by $+10\%$ until recovery.
@@ -380,14 +397,14 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
 8. **Master Technical Specification & Version 3.2.0 Institutional Architecture:**
    - **Version 3.2.0 Institutional Release:** Implemented the Dual-Class Cooldown Architecture & 5 Contiguous Health Tiers:
      1. `DualClassCooldownArchitecture`:
-        - **Class A (Market Condition Gate):** Zero timer. Condition-based evaluation of real-time market entropy. If $\text{Entropy} \ge 0.80$, the engine returns `WAIT_HIGH_ENTROPY`. The exact second entropy drops below $0.65$, this gate unlocks in real-time.
-        - **Class B (Thesis Failure Cooldown):** Immutable timer. Enforced on 3 consecutive failures with hard minimum loss floors: $\text{Duration} = \max(\text{Candidate}, 20\text{m})$ up to $45\text{m}$. Historical health score cannot shorten this cooldown below the $20\text{m}$ floor. **Zero early release permitted on Class B loss locks.**
+        - **Class A (Market Condition Gate):** Zero timer. Condition-based evaluation of real-time market entropy. Elevated entropy ($\ge 0.70$) yields `WAIT_HIGH_ENTROPY`. Unlocks early ONLY when $\text{Entropy} < 0.40$ and normalized trend transition $\tanh(400.0 \times \text{trend\_strength}) \ge 0.15$ with setup entry conditions reconfirmed.
+        - **Class B (Graduated Loss-Based Cooldown):** Immutable timer calculated on consecutive losses: $\text{Duration} = \text{clamp}(3.0\text{m} \times M_{\text{loss}} \times M_{\text{health}} \times M_{\text{entropy}}, 3.0\text{m}, 45.0\text{m})$ subject to hard loss floors: 1 loss $\ge 3\text{m}$, 2 losses $\ge 8\text{m}$, 3+ losses $\ge 20\text{m}$ up to $45\text{m}$. Historical health score cannot shorten this cooldown below the loss floor. **Zero early release permitted on Class B loss locks.**
      2. `FiveContiguousHealthTiers`: Standardized categorical setup performance governance:
-        - $[80, 100]$: **Pristine** $\rightarrow 100\%$ size, $+0.00$ hurdle modifier.
-        - $[60, 80)$: **Healthy** $\rightarrow 75\%$ size, $+0.00$ hurdle modifier.
-        - $[40, 60)$: **Degraded** $\rightarrow 50\%$ size, $+0.05$ hurdle modifier (confirmed edge required).
-        - $[20, 40)$: **Stressed** $\rightarrow 25\%$ size, $+0.10$ hurdle modifier (high conviction required).
-        - $[0, 20)$: **Disabled** $\rightarrow 0\%$ size, blocked.
+        - $[80.0, 100.0]$: **Pristine** $\rightarrow 100\%$ size, $+0.00$ hurdle modifier.
+        - $[60.0, 80.0)$: **Healthy** $\rightarrow 75\%$ size, $+0.00$ hurdle modifier.
+        - $[40.0, 60.0)$: **Degraded** $\rightarrow 50\%$ size, $+0.05$ hurdle modifier (confirmed edge required).
+        - $[20.0, 40.0)$: **Stressed** $\rightarrow 25\%$ size, $+0.10$ hurdle modifier (high conviction required).
+        - $[0.0, 20.0)$: **Disabled** $\rightarrow 0\%$ size, blocked.
      3. `UnifiedEligibilityGate`: Integrated 5-tier entry permission evaluator (`evaluate_entry_eligibility`) arbitrating between Account Safety, Setup Discipline, Market Entropy, Conscience Escalation, and Sizing Adaptation.
      4. `ClassicalExpectancyGate`: Replaced heuristic runway EV with the true probabilistic expectancy formula:
         $$\mathbb{E}[\text{PnL}_{\text{net}}] = (p_w \cdot \bar{W}) - ((1 - p_w) \cdot \bar{L}) - \text{Costs}$$

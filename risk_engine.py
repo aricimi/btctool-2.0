@@ -121,10 +121,11 @@ class SetupPerformanceGovernor:
 
 class ThesisFailureCounter:
     """
-    Component 5: Dual-Class Thesis Failure Counter & Cooldown Manager.
+    Component 5: Dual-Class Thesis Failure Counter & Cooldown Manager (Spec Section 5.2).
     - Class A: Market-condition gate (Entropy/Chop) is evaluated real-time without timers.
-    - Class B: Failure/Loss-based cooldown is an immutable timer enforced upon 3 consecutive losses
-      with hard minimum loss floors (>= 20m up to 45m).
+    - Class B: Failure/Loss-based cooldown is an immutable timer calculated from consecutive losses,
+      setup health, and entropy with hard minimum loss floors:
+      1 loss -> >= 3m, 2 losses -> >= 8m, 3+ losses -> >= 20m (clamped 3m to 45m).
       Zero early release permitted on Class B loss locks.
     """
 
@@ -135,16 +136,25 @@ class ThesisFailureCounter:
         self.consecutive_failures: Dict[str, int] = {}
         self.disabled_until: Dict[str, float] = {}
 
-    def calculate_cooldown_duration(self, consecutive_losses: int, health_score: float) -> float:
+    def calculate_cooldown_duration(self, consecutive_losses: int, health_score: float, entropy: float = 0.50) -> float:
         """
-        Calculates cooldown duration with hard loss-based minimum floors:
-        Enforces >= 20m loss floor on 3+ failures, scaled by health up to 45m.
+        Calculates cooldown duration with hard loss-based minimum floors (Section 5.2):
+        Candidate = clamp(Base * M_losses * M_health * M_entropy, 3m, 45m)
+        Duration = max(Candidate, LossFloor)
         """
-        if consecutive_losses < self.max_failures:
+        if consecutive_losses <= 0:
             return 0.0
 
-        m_l = 6.0 + (consecutive_losses - self.max_failures) * 2.0
-        loss_floor_sec = 20.0 * 60.0  # 20m hard floor
+        # M_losses multipliers & Loss Floors
+        if consecutive_losses == 1:
+            m_l = 1.0
+            loss_floor_sec = 3.0 * 60.0    # 3m minimum
+        elif consecutive_losses == 2:
+            m_l = 2.5
+            loss_floor_sec = 8.0 * 60.0    # 8m minimum
+        else:
+            m_l = 6.0 + (consecutive_losses - 3) * 2.0
+            loss_floor_sec = 20.0 * 60.0   # 20m minimum
 
         # M_health modifier (Never reduces cooldown below 1.0x to prevent historical health from masking recent losses)
         if health_score < 20.0:
@@ -154,13 +164,16 @@ class ThesisFailureCounter:
         elif health_score < 60.0:
             m_h = 1.2
         else:
-            m_h = 1.0  # Proven health cannot shorten recent loss cooldown
+            m_h = 1.0  # Historical health cannot shorten loss cooldown below floor
 
-        candidate_sec = float(np.clip(self.base_duration_sec * m_l * m_h, 1200.0, 2700.0))  # 20m to 45m
-        final_sec = float(np.clip(max(candidate_sec, loss_floor_sec), 1200.0, 2700.0))
+        # M_entropy modifier (Section 5.2B: entropy >= 0.70 extends candidate duration by 1.5x)
+        m_e = 1.5 if entropy >= 0.70 else 1.0
+
+        candidate_sec = float(np.clip(self.base_duration_sec * m_l * m_h * m_e, 180.0, 2700.0))  # 3m to 45m
+        final_sec = float(np.clip(max(candidate_sec, loss_floor_sec), 180.0, 2700.0))
         return final_sec
 
-    def record_outcome(self, setup_name: str, net_pnl_pct: float, health_score: float = 50.0, timestamp: float = 0.0):
+    def record_outcome(self, setup_name: str, net_pnl_pct: float, health_score: float = 50.0, entropy: float = 0.50, timestamp: float = 0.0):
         clean_name = setup_name.replace("ZEBRA WHALE: ", "")
         ts = timestamp or time.time()
         if net_pnl_pct <= 0.0:
@@ -168,13 +181,12 @@ class ThesisFailureCounter:
             self.consecutive_failures[clean_name] = cnt
             logger.info(f"[ThesisTracker] Setup '{clean_name}' consecutive failure count: {cnt}")
 
-            # Enforce cooldown on reaching 3 consecutive failures
-            if cnt >= self.max_failures:
-                cooldown_sec = self.calculate_cooldown_duration(cnt, health_score)
-                self.disabled_until[clean_name] = ts + cooldown_sec
-                logger.warning(
-                    f"[ThesisTracker] Setup '{clean_name}' reached {cnt} failures. Enforced Class-B cooldown for {cooldown_sec/60:.1f}m (Health: {health_score:.1f})."
-                )
+            # Enforce Class B cooldown duration with loss floor
+            cooldown_sec = self.calculate_cooldown_duration(cnt, health_score, entropy)
+            self.disabled_until[clean_name] = ts + cooldown_sec
+            logger.warning(
+                f"[ThesisTracker] Setup '{clean_name}' enforced Class-B cooldown for {cooldown_sec/60:.1f}m (Failures: {cnt}, Health: {health_score:.1f}, Entropy: {entropy:.2f})."
+            )
         else:
             self.consecutive_failures[clean_name] = 0
             if clean_name in self.disabled_until:
@@ -198,6 +210,20 @@ class ThesisFailureCounter:
         elif cnt >= 3:
             return 0.50
         return 1.0
+
+    def export_state(self) -> dict:
+        """Exports cooldown state for atomic disk persistence."""
+        return {
+            "consecutive_failures": dict(self.consecutive_failures),
+            "disabled_until": dict(self.disabled_until),
+        }
+
+    def import_state(self, state: dict):
+        """Restores persisted cooldown state across bot restarts."""
+        if not state or not isinstance(state, dict):
+            return
+        self.consecutive_failures.update(state.get("consecutive_failures", {}))
+        self.disabled_until.update(state.get("disabled_until", {}))
 
 
 class ConscienceEscalation:
@@ -388,11 +414,15 @@ class RiskEngine:
         Returns: (eligibility_status, approved_size_multiplier, confidence_hurdle_modifier)
         """
         ts_now = float(matrix.get("timestamp", 0.0) or time.time())
-        entropy = float(matrix.get("feature_vector", {}).get("entropy", 0.50))
+        f_vec = matrix.get("feature_vector", {})
+        entropy = float(f_vec.get("entropy", 0.50))
+        trend_strength = float(f_vec.get("trend_strength", 0.0))
+        trend_term = float(np.tanh(400.0 * trend_strength))
+
         setup_health = self.governor.get_health(setup_name)
         is_cd, rem_sec = self.failure_counter.is_in_cooldown(setup_name, ts_now)
 
-        # 1. HARD SAFETY GATES
+        # 1. HARD SAFETY GATES (Absolute Priority)
         if daily_drawdown_pct >= max_daily_drawdown:
             return "BLOCK_ACCOUNT_LOCKDOWN", 0.0, 0.0
 
@@ -403,8 +433,10 @@ class RiskEngine:
         if is_cd:
             return f"BLOCK_SETUP_COOLDOWN_{rem_sec:.0f}S", 0.0, 0.0
 
-        # 2. CLASS A: MARKET-STATE CONDITION GATE (Zero Timers — Evaluated Live)
-        if entropy >= 0.80:
+        # 2. CLASS A: MARKET-STATE CONDITION GATE (Spec Section 5.2B)
+        # Elevated entropy (>= 0.70): Wait for structure to organize
+        # Early release permitted ONLY when entropy < 0.40 AND trend_term >= 0.15 (Comment 3 correction)
+        if entropy >= 0.70:
             return "WAIT_HIGH_ENTROPY", 0.0, 0.0
 
         # 3. CONSCIENCE ESCALATION & CAUTION GATES
@@ -415,8 +447,9 @@ class RiskEngine:
         if self.escalation.is_escalated:
             conf_mod += self.escalation.confidence_hike
 
-        # Moderate entropy (0.65 - 0.80) or degraded health (< 60)
-        if entropy >= 0.65 or setup_health.health_score < 60.0:
+        # Moderate entropy (0.65 - 0.70) or degraded health (< 60):
+        # If trend is igniting (entropy < 0.40 and trend_term >= 0.15), allow normal size; otherwise caution
+        if (entropy >= 0.65 or setup_health.health_score < 60.0):
             size_mult = min(size_mult, 0.50)
             conf_mod += 0.05
             return "REDUCE_SIZE_AND_CONFIRM", size_mult, conf_mod
