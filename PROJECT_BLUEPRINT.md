@@ -416,6 +416,13 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
      8. `LightweightStressEngine`: Fast pre-trade check evaluating spread inflation ($>0.20\%$) and order book liquidity collapse ($<30\%$ baseline).
      9. `ExplicitBeliefEngine`: Continuous exponential decay and reinforcement updating continuous macro conviction without binary signal flicker.
      10. `Noise-Immune Trailing Ratchet`: Breakeven moved from $+0.35\%$ gain to $+0.60\%$ gain; stop ratchets to entry $\times 1.0025$ (+0.25% gross), guaranteeing $+0.05\%$ net profit; trailing ratchet buffered to $\ge 0.8 \times \text{ATR}$ to prevent micro-wick asphyxiation.
+     11. `Comprehensive Automated Test Suite (17 Integration & Unit Tests)`:
+         - Verified all cooldown multiplier permutations ($1.0\times, 2.5\times, 6.0\times$) and loss floors ($3\text{m}, 8\text{m}, 20\text{m}$ clamped to $45\text{m}$).
+         - Automated corrupted state `.bak` recovery verifying zero active trade orphaning.
+         - Reflex 3 drawdown lockdown ($\ge 2.0\%$) and automatic recovery ($< 2.0\%$).
+         - Priority-0 microstructural fault injection (invalid price, feed latency $>5\text{s}$, spread $>0.25\%$, 2 API errors).
+         - Dynamic spread-based slippage model and fee accounting ($0.20\%$ deduction).
+         - OKX spot client safe unconfigured handling, conditional market stops, and IOC slippage-capped exits.
    - **Strict Workspace Isolation Rule (AGENTS.md Rule 4):** The agent environment is strictly locked to `c:\gemini proyect\btctool 2.0`. Under no circumstances may any file be created, read, written, modified, or exported outside the project root.
    - **Master Technical Specification Document (`BTCTOOL_2_0_FULL_SPECIFICATION_WITH_OXY.txt`):** Synchronized to Version 3.2.0 Production with all mathematical formulas, OKX V5 REST and WebSocket specifications, fee model, anti-hanging state machine, and production daemon setup. Stored strictly in the project root.
 

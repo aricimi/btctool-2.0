@@ -11,14 +11,15 @@ import os
 import time
 import unittest
 import numpy as np
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from market_stream import MarketStream
 from market_state import MarketState
 from conviction_engine import FreeConvictionEngine
-from risk_engine import RiskEngine, TradeIntent, RiskDecision
+from risk_engine import RiskEngine, TradeIntent, RiskDecision, ThesisFailureCounter, SetupPerformanceGovernor
 from execution_manager import ExecutionManager
 from trade_logger import TradeJournal
 from dream_engine import DreamEngine
+from okx_trader import OKXSpotClient
 
 
 class TestZebraBot(unittest.TestCase):
@@ -33,7 +34,7 @@ class TestZebraBot(unittest.TestCase):
         self.execution = ExecutionManager(state_file="test_bot_state.json", journal=self.mock_journal)
 
     def tearDown(self):
-        for f in ["test_bot_state.json", "test_bot_state.json.tmp", "test_episodes.jsonl", "test_trade_history.json", "test_journal.md", "test_journal.csv"]:
+        for f in ["test_bot_state.json", "test_bot_state.json.tmp", "test_bot_state.json.bak", "test_episodes.jsonl", "test_trade_history.json", "test_journal.md", "test_journal.csv"]:
             if os.path.exists(f):
                 try:
                     os.remove(f)
@@ -781,6 +782,191 @@ class TestZebraBot(unittest.TestCase):
         )
         self.assertEqual(exit_decision.status, "ALLOW", "Emergency risk-reducing exit MUST NOT be blocked by drawdown lock or cooldown")
         self.assertEqual(exit_decision.action, "CUT_THESIS_INVALIDATED", "Must allow capital-protecting exit unconditionally")
+
+    def test_12_cooldown_multipliers_and_boundary_matrix(self):
+        """Verify all cooldown multipliers, loss floors, and failure penalties across health & entropy tiers."""
+        fc = ThesisFailureCounter(base_duration_sec=180.0)
+
+        # 1. Zero failures -> 0 duration, penalty 1.0
+        self.assertEqual(fc.calculate_cooldown_duration(0, 80.0), 0.0)
+        self.assertEqual(fc.get_failure_penalty("SETUP"), 1.0)
+
+        # 2. 1 failure: M_l = 1.0, Loss Floor = 180s (3m)
+        self.assertEqual(fc.calculate_cooldown_duration(1, 90.0, entropy=0.40), 180.0)
+        self.assertEqual(fc.calculate_cooldown_duration(1, 50.0, entropy=0.40), 216.0)  # 180 * 1.2
+        self.assertEqual(fc.calculate_cooldown_duration(1, 30.0, entropy=0.40), 270.0)  # 180 * 1.5
+        self.assertEqual(fc.calculate_cooldown_duration(1, 10.0, entropy=0.40), 324.0)  # 180 * 1.8
+        self.assertEqual(fc.calculate_cooldown_duration(1, 10.0, entropy=0.75), 486.0)  # 180 * 1.8 * 1.5
+
+        # 3. 2 failures: M_l = 2.5, Loss Floor = 480s (8m)
+        # Even with pristine health (90.0), candidate is 180 * 2.5 * 1.0 = 450s, but floor enforces 480s!
+        self.assertEqual(fc.calculate_cooldown_duration(2, 90.0, entropy=0.40), 480.0, "Historical health cannot reduce below 8m loss floor")
+        self.assertEqual(fc.calculate_cooldown_duration(2, 50.0, entropy=0.40), 540.0)  # 180 * 2.5 * 1.2
+        self.assertEqual(fc.calculate_cooldown_duration(2, 10.0, entropy=0.75), 1215.0) # 180 * 2.5 * 1.8 * 1.5
+
+        # 4. 3 failures: M_l = 6.0, Loss Floor = 1200s (20m)
+        # With pristine health (90.0), candidate is 180 * 6.0 * 1.0 = 1080s, but floor enforces 1200s!
+        self.assertEqual(fc.calculate_cooldown_duration(3, 90.0, entropy=0.40), 1200.0, "Historical health cannot reduce below 20m loss floor")
+        self.assertEqual(fc.calculate_cooldown_duration(3, 50.0, entropy=0.40), 1296.0)  # 180 * 6.0 * 1.2
+        # Max cap clamp: 5 losses, health 10, entropy 0.75: candidate = 180 * 10 * 1.8 * 1.5 = 4860s -> clamped to 2700s (45m)
+        self.assertEqual(fc.calculate_cooldown_duration(5, 10.0, entropy=0.75), 2700.0, "Duration must clamp to 2700s (45m)")
+
+        # 5. Sizing failure penalties
+        fc.consecutive_failures["TEST_PEN"] = 1
+        self.assertEqual(fc.get_failure_penalty("TEST_PEN"), 0.85)
+        fc.consecutive_failures["TEST_PEN"] = 2
+        self.assertEqual(fc.get_failure_penalty("TEST_PEN"), 0.70)
+        fc.consecutive_failures["TEST_PEN"] = 3
+        self.assertEqual(fc.get_failure_penalty("TEST_PEN"), 0.50)
+
+    def test_13_corrupted_state_and_backup_recovery(self):
+        """Verify automated state recovery from .bak file when primary state file is corrupted."""
+        state_path = "test_bot_state.json"
+        bak_path = "test_bot_state.json.bak"
+
+        # 1. Create a valid saved state
+        em1 = ExecutionManager(state_file=state_path, journal=self.mock_journal)
+        em1.active_trade = {"entry": 84000.0, "scenario": "TEST_RECOVER", "target_price": 86000.0}
+        em1.save_state(market_state="IN_POSITION")
+        em1.save_state(market_state="IN_POSITION")
+
+        self.assertTrue(os.path.exists(state_path))
+        self.assertTrue(os.path.exists(bak_path))
+
+        # 2. Corrupt the primary state file with invalid JSON
+        with open(state_path, "wb") as f:
+            f.write(b'{"active_trade": {"entry": 84000.0, "scenario": "CORRUPTED_TRUNCATED_JSON...')
+
+        # 3. Instantiate a new ExecutionManager; verify it recovers from .bak without crashing
+        em2 = ExecutionManager(state_file=state_path, journal=self.mock_journal)
+        self.assertIsNotNone(em2.active_trade, "Must recover active trade from .bak when primary file is corrupted")
+        self.assertEqual(em2.active_trade.get("scenario"), "TEST_RECOVER")
+
+        # 4. Remove both files and verify clean empty initialization
+        if os.path.exists(state_path):
+            os.remove(state_path)
+        if os.path.exists(bak_path):
+            os.remove(bak_path)
+
+        em3 = ExecutionManager(state_file=state_path, journal=self.mock_journal)
+        self.assertIsNone(em3.active_trade)
+        self.assertFalse(bool(em3.cooldown_state))
+
+    def test_14_drawdown_lock_and_recovery(self):
+        """Verify Reflex 3 (Safety Lockdown) blocks entries at >= 2.0% daily drawdown and recovers."""
+        engine = RiskEngine()
+        entry_intent = TradeIntent(action="ENTER_CORE_LOT_1", scenario="TEST_DD", entry_price=84000.0, proposed_stop=83500.0, expected_runway_pct=1.0)
+        exit_intent = TradeIntent(action="CUT_THESIS_INVALIDATED", scenario="TEST_DD", entry_price=83400.0, proposed_stop=83500.0)
+        active_trade = {"entry": 84000.0, "scenario": "TEST_DD", "trailing_stop": 83500.0}
+        matrix = {"latest_price": 84000.0, "feed_latency_ms": 10.0, "spread_pct": 0.02, "composite_atr": 300.0, "bid_depth_05": 10.0, "multi_screen_bounds": {"nearest_support": 83500.0, "nearest_resistance": 85000.0}, "feature_vector": {"entropy": 0.35, "trend_strength": 0.002, "vol_regime": 1.0}}
+
+        # Breach daily drawdown limit (2.1% >= 2.0%)
+        d_lock = engine.evaluate(entry_intent, matrix, daily_drawdown_pct=2.1, max_daily_drawdown=2.0)
+        self.assertEqual(d_lock.status, "REJECT")
+        self.assertIn("REFLEX_SAFETY_LOCKDOWN", d_lock.reason)
+
+        # Emergency exit MUST be allowed even during drawdown lock
+        exit_matrix = {**matrix, "latest_price": 83400.0}
+        d_exit = engine.evaluate(exit_intent, exit_matrix, active_trade=active_trade, daily_drawdown_pct=5.0, max_daily_drawdown=2.0)
+        self.assertEqual(d_exit.status, "ALLOW")
+        self.assertEqual(d_exit.action, "CUT_THESIS_INVALIDATED")
+
+        # Recovery when drawdown falls below limit (1.5% < 2.0%)
+        status, s_mult, c_mod = engine.evaluate_entry_eligibility("TEST_DD", matrix, daily_drawdown_pct=1.5, max_daily_drawdown=2.0)
+        self.assertNotEqual(status, "BLOCK_ACCOUNT_LOCKDOWN")
+
+    def test_15_stale_data_and_microstructure_fault_injection(self):
+        """Verify Priority-0 Subconscious Fallback Reflexes (Blind & Motor) trigger upon faults."""
+        engine = RiskEngine()
+        intent = TradeIntent(action="ENTER_CORE_LOT_1", scenario="TEST_FAULT", entry_price=84000.0, proposed_stop=83500.0)
+
+        # 1. Invalid price (0.0 or negative)
+        d_price = engine.evaluate(intent, {"latest_price": 0.0})
+        self.assertEqual(d_price.status, "REJECT")
+        self.assertIn("REFLEX_BLIND_MODE", d_price.reason)
+
+        # 2. WebSocket stream latency > 5000ms
+        d_lat = engine.evaluate(intent, {"latest_price": 84000.0, "feed_latency_ms": 5200.0, "spread_pct": 0.02})
+        self.assertEqual(d_lat.status, "REJECT")
+        self.assertIn("REFLEX_BLIND_MODE", d_lat.reason)
+
+        # 3. Anomalous spread > 0.25%
+        d_spread = engine.evaluate(intent, {"latest_price": 84000.0, "feed_latency_ms": 50.0, "spread_pct": 0.32})
+        self.assertEqual(d_spread.status, "REJECT")
+        self.assertIn("REFLEX_BLIND_MODE", d_spread.reason)
+
+        # 4. Exchange API errors >= 2 -> Motor Lockdown
+        d_motor = engine.evaluate(intent, {"latest_price": 84000.0, "feed_latency_ms": 50.0, "spread_pct": 0.02}, consecutive_api_errors=2)
+        self.assertEqual(d_motor.status, "REJECT")
+        self.assertIn("REFLEX_MOTOR_LOCKDOWN", d_motor.reason)
+
+    def test_16_dynamic_slippage_and_cost_accounting(self):
+        """Verify dynamic spread-based slippage model and fee accounting in TradeJournal."""
+        # 1. Dynamic slippage scaling
+        spread_tight = 0.01
+        slip_tight = round(max(0.02, (spread_tight / 2.0) * 1.25), 3)
+        self.assertEqual(slip_tight, 0.02)
+
+        spread_wide = 0.16
+        slip_wide = round(max(0.02, (spread_wide / 2.0) * 1.25), 3)
+        self.assertEqual(slip_wide, 0.10)
+
+        # In classical expectancy formula:
+        # Tight spread (0.02%): EV = (0.50 * 1.5) - (0.50 * 0.8) - 0.22% = +0.13%
+        ev_tight, rr = FreeConvictionEngine.calculate_classical_expectancy(0.50, 1.5, 0.8, fee_pct=0.20, slippage_pct=0.02)
+        self.assertGreater(ev_tight, 0.05)
+
+        # Wide spread (0.16% -> slippage 0.10%): EV = 0.75 - 0.40 - 0.30% = +0.05%
+        ev_wide, rr = FreeConvictionEngine.calculate_classical_expectancy(0.50, 1.5, 0.8, fee_pct=0.20, slippage_pct=0.10)
+        self.assertLessEqual(ev_wide, 0.05, "Wide spread slippage must drag marginal trade below hurdle")
+
+        # 2. Fee accounting in TradeJournal
+        tj = TradeJournal()
+        tj.history_file = "test_trade_history.json"
+        tj.journal_file = "test_journal.md"
+        tj.csv_file = "test_journal.csv"
+        tj.episodes_file = "test_episodes.jsonl"
+        tj.data = {"trades": [], "stats": {}}
+
+        tj.record_entry("TEST_FEE", entry_price=80000.0, stop_loss=79000.0, target_1=82000.0, target_2=0.0)
+        tj.record_exit(exit_price=80800.0, exit_reason="WIN")  # +1.00% gross
+        closed = tj.data["trades"][-1]
+        self.assertEqual(closed["gross_pnl_pct"], 1.00)
+        self.assertEqual(closed["net_pnl_pct"], 0.80, "Must deduct exactly 0.20% OKX fee")
+
+    def test_17_okx_spot_client_resilience_and_order_handling(self):
+        """Verify OKXSpotClient configuration, safe order formatting, and slippage-capped exits."""
+        # 1. Unconfigured client returns None safely without raising exceptions
+        client = OKXSpotClient(api_key=None, secret_key=None, passphrase=None)
+        client.api_key = None  # Ensure unconfigured
+        self.assertFalse(client.is_configured)
+        self.assertIsNone(client.place_spot_order("buy", "0.01"))
+        bals = client.get_spot_balance()
+        self.assertEqual(bals, {"USDT": 0.0, "BTC": 0.0})
+
+        # 2. Configured client order generation
+        client.api_key = "MOCK_KEY"
+        client.secret_key = "MOCK_SECRET"
+        client.passphrase = "MOCK_PASSPHRASE"
+        self.assertTrue(client.is_configured)
+
+        with patch.object(client, "_request") as mock_req:
+            mock_req.return_value = {"code": "0", "data": [{"ordId": "12345", "algoId": "ALGO_12345"}]}
+
+            # Test limit buy order
+            ord_id = client.place_spot_order("buy", "0.05", price=84000.0)
+            self.assertEqual(ord_id, "12345")
+            mock_req.assert_called_with("POST", "/api/v5/trade/order", data={"instId": "BTC-USDT", "tdMode": "cash", "side": "buy", "ordType": "limit", "sz": "0.05", "px": "84000.00"})
+
+            # Test slippage-capped emergency exit: best_bid = 84000.0 -> IOC limit at 84000 * 0.9995 = 83958.00
+            exit_id = client.execute_slippage_capped_exit(best_bid=84000.0, sz="0.10")
+            self.assertEqual(exit_id, "12345")
+            mock_req.assert_called_with("POST", "/api/v5/trade/order", data={"instId": "BTC-USDT", "tdMode": "cash", "side": "sell", "ordType": "ioc", "px": "83958.00", "sz": "0.10"})
+
+            # Test server-side stop loss: conditional market stop with slOrdPx = "-1"
+            algo_id = client.place_server_stop_loss(trigger_price=83000.0, sz="0.10")
+            self.assertEqual(algo_id, "ALGO_12345")
+            mock_req.assert_called_with("POST", "/api/v5/trade/order-algo", data={"instId": "BTC-USDT", "tdMode": "cash", "side": "sell", "ordType": "conditional", "sz": "0.10", "tpTriggerPxType": "last", "slTriggerPx": "83000.00", "slOrdPx": "-1"})
 
 
 if __name__ == "__main__":
