@@ -613,6 +613,82 @@ class TestZebraBot(unittest.TestCase):
         self.assertEqual(decision.action, "CUT_THESIS_INVALIDATED", "Must cut unconditionally past hard stop")
         self.assertIn("HARD RISK STOP BREACHED", decision.reason)
 
+    def test_11_v32_dual_class_cooldown_and_eligibility_state_machine(self):
+        """Verify BTCTOOL v3.2: Dual-Class Cooldowns, 5 Contiguous Health Tiers, & Zero Early-Release on Loss Locks."""
+        from risk_engine import SetupPerformanceGovernor, ThesisFailureCounter, RiskEngine
+
+        # 1. Five Contiguous Institutional Health Tiers
+        gov = SetupPerformanceGovernor()
+        # Pristine setup: 5 wins (+0.50% each)
+        for _ in range(5):
+            gov.record_trade_result("PRISTINE", 0.50)
+        h_pristine = gov.get_health("PRISTINE")
+        self.assertGreaterEqual(h_pristine.health_score, 80.0)
+        self.assertEqual(h_pristine.size_multiplier, 1.00)
+        self.assertEqual(h_pristine.confidence_modifier, 0.00)
+
+        # Stressed setup: 1 win (+0.10%), 4 small losses (-0.20%) -> health ~32.0 (in [20, 40) Stressed tier)
+        gov.record_trade_result("STRESSED", 0.10)
+        for _ in range(4):
+            gov.record_trade_result("STRESSED", -0.20)
+        h_stressed = gov.get_health("STRESSED")
+        self.assertLess(h_stressed.health_score, 40.0)
+        self.assertGreaterEqual(h_stressed.health_score, 20.0)
+        self.assertEqual(h_stressed.size_multiplier, 0.25)
+        self.assertEqual(h_stressed.confidence_modifier, 0.10)
+        self.assertFalse(h_stressed.is_disabled)
+
+        # 2. Dual-Class Cooldown Architecture & Loss Floor Protection
+        fc = ThesisFailureCounter(base_duration_sec=180.0)
+        t_base = 50000.0
+
+        # High historical health (95.0) must NOT reduce cooldown below 20m loss floor on 3 failures
+        cooldown_dur = fc.calculate_cooldown_duration(consecutive_losses=3, health_score=95.0)
+        self.assertGreaterEqual(cooldown_dur, 1200.0, "Historical health must never shorten cooldown below 20m loss floor")
+        self.assertLessEqual(cooldown_dur, 2700.0, "Cooldown must be clamped to 45m max")
+
+        # Record 3 failures to trigger Class B lock
+        fc.record_outcome("BREAKOUT_TEST", -0.20, health_score=95.0, timestamp=t_base)
+        fc.record_outcome("BREAKOUT_TEST", -0.20, health_score=95.0, timestamp=t_base + 10)
+        fc.record_outcome("BREAKOUT_TEST", -0.20, health_score=95.0, timestamp=t_base + 20)
+
+        is_cd, rem = fc.is_in_cooldown("BREAKOUT_TEST", current_time=t_base + 30)
+        self.assertTrue(is_cd)
+        self.assertGreaterEqual(rem, 1100.0)
+
+        # 3. Unified 5-Tier Eligibility Gate & Verification of Zero Early Release
+        engine = RiskEngine()
+        engine.failure_counter = fc
+        engine.governor = gov
+
+        # Class B lock test: Even with ultra-low entropy (0.15) and clean trend, Class B loss cooldown CANNOT be bypassed
+        clean_matrix = {
+            "timestamp": t_base + 30,
+            "feature_vector": {"entropy": 0.15},  # Low entropy
+        }
+        status, size_mult, conf_mod = engine.evaluate_entry_eligibility("BREAKOUT_TEST", clean_matrix)
+        self.assertTrue(status.startswith("BLOCK_SETUP_COOLDOWN"), "Class B loss cooldown must never clear early on low entropy")
+        self.assertEqual(size_mult, 0.0)
+
+        # Class A condition gate test: Separate healthy setup without loss cooldown
+        # When entropy is high (0.85), returns WAIT_HIGH_ENTROPY
+        noisy_matrix = {
+            "timestamp": t_base + 30,
+            "feature_vector": {"entropy": 0.85},
+        }
+        status_a, _, _ = engine.evaluate_entry_eligibility("PRISTINE", noisy_matrix)
+        self.assertEqual(status_a, "WAIT_HIGH_ENTROPY", "Class A gate must return WAIT on elevated entropy")
+
+        # The instant entropy drops (0.35), Class A condition gate clears in real-time
+        calm_matrix = {
+            "timestamp": t_base + 30,
+            "feature_vector": {"entropy": 0.35},
+        }
+        status_clean, s_clean, c_clean = engine.evaluate_entry_eligibility("PRISTINE", calm_matrix)
+        self.assertEqual(status_clean, "NORMAL_ELIGIBILITY", "Class A condition gate must unlock instantly when entropy clears")
+        self.assertEqual(s_clean, 1.00)
+        self.assertEqual(c_clean, 0.00)
+
 
 if __name__ == "__main__":
     unittest.main()

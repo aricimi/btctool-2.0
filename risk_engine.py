@@ -39,6 +39,7 @@ class SetupHealth:
     avg_net_pnl: float = 0.0
     health_score: float = 100.0   # 0.0 to 100.0
     size_multiplier: float = 1.0  # 0.0 to 1.0
+    confidence_modifier: float = 0.0  # +0.00, +0.05, +0.10
     is_disabled: bool = False
 
 
@@ -46,7 +47,8 @@ class SetupPerformanceGovernor:
     """
     Component 1: Setup Performance Governor.
     Monitors rolling 20 trades for each setup name.
-    Dynamically scales position sizing and disables setups with poor health (<20).
+    Dynamically scales position sizing and enforces confidence hurdle modifiers across
+    5 contiguous institutional health tiers.
     """
 
     def __init__(self, window_size: int = 20):
@@ -65,7 +67,7 @@ class SetupPerformanceGovernor:
         clean_name = setup_name.replace("ZEBRA WHALE: ", "")
         trades = self.history.get(clean_name, [])
         if not trades:
-            return SetupHealth(setup_name=clean_name, health_score=100.0, size_multiplier=1.0, is_disabled=False)
+            return SetupHealth(setup_name=clean_name, health_score=100.0, size_multiplier=1.0, confidence_modifier=0.0, is_disabled=False)
 
         wins = sum(1 for p in trades if p > 0.0)
         losses = sum(1 for p in trades if p <= 0.0)
@@ -76,26 +78,31 @@ class SetupPerformanceGovernor:
         raw_score = 50.0 + (0.5 * win_rate) + (200.0 * avg_net_pnl)
         health_score = float(np.clip(raw_score, 0.0, 100.0))
 
-        # Sizing rules:
-        # Health > 80: 100% size
-        # Health 60-80: 75% size
-        # Health 40-60: 50% size
-        # Health 20-40: 25% size
-        # Health < 20: Disabled
+        # Contiguous Institutional Health Tiers:
+        # [80, 100]: Pristine -> size 1.00, conf_mod +0.00
+        # [60, 80):  Healthy  -> size 0.75, conf_mod +0.00
+        # [40, 60):  Degraded -> size 0.50, conf_mod +0.05
+        # [20, 40):  Stressed -> size 0.25, conf_mod +0.10
+        # [0, 20):   Disabled -> size 0.00, disabled = True
         if health_score >= 80.0:
-            size_mult = 1.0
+            size_mult = 1.00
+            conf_mod = 0.00
             disabled = False
         elif health_score >= 60.0:
             size_mult = 0.75
+            conf_mod = 0.00
             disabled = False
         elif health_score >= 40.0:
             size_mult = 0.50
+            conf_mod = 0.05
             disabled = False
         elif health_score >= 20.0:
             size_mult = 0.25
+            conf_mod = 0.10
             disabled = False
         else:
-            size_mult = 0.0
+            size_mult = 0.00
+            conf_mod = 0.00
             disabled = True
 
         return SetupHealth(
@@ -107,34 +114,66 @@ class SetupPerformanceGovernor:
             avg_net_pnl=round(avg_net_pnl, 3),
             health_score=round(health_score, 1),
             size_multiplier=size_mult,
+            confidence_modifier=conf_mod,
             is_disabled=disabled,
         )
 
 
 class ThesisFailureCounter:
     """
-    Component 5: Thesis Failure Counter & Cooldown Manager.
-    Tracks consecutive failures for a specific setup.
-    Penalizes confidence and sizing after consecutive losses, and enforces 30m cooldown after 3 failures.
+    Component 5: Dual-Class Thesis Failure Counter & Cooldown Manager.
+    - Class A: Market-condition gate (Entropy/Chop) is evaluated real-time without timers.
+    - Class B: Failure/Loss-based cooldown is an immutable timer enforced upon 3 consecutive losses
+      with hard minimum loss floors (>= 20m up to 45m).
+      Zero early release permitted on Class B loss locks.
     """
 
-    def __init__(self, max_consecutive_failures: int = 3, cooldown_seconds: float = 1800.0):
+    def __init__(self, base_duration_sec: float = 180.0, max_consecutive_failures: int = 3, cooldown_seconds: float = 1800.0):
+        self.base_duration_sec = base_duration_sec  # Base 3 minutes
         self.max_failures = max_consecutive_failures
         self.cooldown_seconds = cooldown_seconds
         self.consecutive_failures: Dict[str, int] = {}
         self.disabled_until: Dict[str, float] = {}
 
-    def record_outcome(self, setup_name: str, net_pnl_pct: float, timestamp: float = 0.0):
+    def calculate_cooldown_duration(self, consecutive_losses: int, health_score: float) -> float:
+        """
+        Calculates cooldown duration with hard loss-based minimum floors:
+        Enforces >= 20m loss floor on 3+ failures, scaled by health up to 45m.
+        """
+        if consecutive_losses < self.max_failures:
+            return 0.0
+
+        m_l = 6.0 + (consecutive_losses - self.max_failures) * 2.0
+        loss_floor_sec = 20.0 * 60.0  # 20m hard floor
+
+        # M_health modifier (Never reduces cooldown below 1.0x to prevent historical health from masking recent losses)
+        if health_score < 20.0:
+            m_h = 2.0
+        elif health_score < 40.0:
+            m_h = 1.5
+        elif health_score < 60.0:
+            m_h = 1.2
+        else:
+            m_h = 1.0  # Proven health cannot shorten recent loss cooldown
+
+        candidate_sec = float(np.clip(self.base_duration_sec * m_l * m_h, 1200.0, 2700.0))  # 20m to 45m
+        final_sec = float(np.clip(max(candidate_sec, loss_floor_sec), 1200.0, 2700.0))
+        return final_sec
+
+    def record_outcome(self, setup_name: str, net_pnl_pct: float, health_score: float = 50.0, timestamp: float = 0.0):
         clean_name = setup_name.replace("ZEBRA WHALE: ", "")
         ts = timestamp or time.time()
         if net_pnl_pct <= 0.0:
             cnt = self.consecutive_failures.get(clean_name, 0) + 1
             self.consecutive_failures[clean_name] = cnt
             logger.info(f"[ThesisTracker] Setup '{clean_name}' consecutive failure count: {cnt}")
+
+            # Enforce cooldown on reaching 3 consecutive failures
             if cnt >= self.max_failures:
-                self.disabled_until[clean_name] = ts + self.cooldown_seconds
+                cooldown_sec = self.calculate_cooldown_duration(cnt, health_score)
+                self.disabled_until[clean_name] = ts + cooldown_sec
                 logger.warning(
-                    f"[ThesisTracker] Setup '{clean_name}' reached {cnt} failures. Cooldown enforced for {self.cooldown_seconds/60:.0f}m."
+                    f"[ThesisTracker] Setup '{clean_name}' reached {cnt} failures. Enforced Class-B cooldown for {cooldown_sec/60:.1f}m (Health: {health_score:.1f})."
                 )
         else:
             self.consecutive_failures[clean_name] = 0
@@ -311,7 +350,8 @@ class RiskEngine:
                         sc = t.get("setup", "WHALE_TRADE")
                         net = float(t.get("net_pnl_pct", 0.0) or 0.0)
                         self.governor.record_trade_result(sc, net)
-                        self.failure_counter.record_outcome(sc, net)
+                        h = self.governor.get_health(sc)
+                        self.failure_counter.record_outcome(sc, net, health_score=h.health_score)
                         self.escalation.record_trade(net)
                 logger.info(f"[RiskGate] Seeded Governor with {len(trades)} trades from {history_file}")
             except Exception as e:
@@ -326,8 +366,65 @@ class RiskEngine:
     def record_trade_outcome(self, setup_name: str, net_pnl_pct: float, timestamp: float = 0.0):
         """Records finalized trade outcome into Governor, Failure Counter, and Escalation organs."""
         self.governor.record_trade_result(setup_name, net_pnl_pct)
-        self.failure_counter.record_outcome(setup_name, net_pnl_pct, timestamp)
+        health = self.governor.get_health(setup_name)
+        self.failure_counter.record_outcome(setup_name, net_pnl_pct, health_score=health.health_score, timestamp=timestamp)
         self.escalation.record_trade(net_pnl_pct)
+
+    def evaluate_entry_eligibility(
+        self,
+        setup_name: str,
+        matrix: dict,
+        daily_drawdown_pct: float = 0.0,
+        max_daily_drawdown: float = 2.0,
+    ) -> Tuple[str, float, float]:
+        """
+        Unified 5-tier entry eligibility gate:
+        1. Hard account safety reflexes (Absolute Priority)
+        2. Setup-specific Class B loss cooldowns & Governor health
+        3. Class A Market Condition Gate (Real-time Entropy / Chop - Zero Timers)
+        4. Portfolio loss escalation (Conscience Escalation)
+        5. Moderate entropy / degraded health caution scaling
+
+        Returns: (eligibility_status, approved_size_multiplier, confidence_hurdle_modifier)
+        """
+        ts_now = float(matrix.get("timestamp", 0.0) or time.time())
+        entropy = float(matrix.get("feature_vector", {}).get("entropy", 0.50))
+        setup_health = self.governor.get_health(setup_name)
+        is_cd, rem_sec = self.failure_counter.is_in_cooldown(setup_name, ts_now)
+
+        # 1. HARD SAFETY GATES
+        if daily_drawdown_pct >= max_daily_drawdown:
+            return "BLOCK_ACCOUNT_LOCKDOWN", 0.0, 0.0
+
+        if setup_health.is_disabled or setup_health.health_score < 20.0:
+            return "BLOCK_SETUP_UNHEALTHY", 0.0, 0.0
+
+        # Class B Loss Cooldown: Immutable, zero early release permitted
+        if is_cd:
+            return f"BLOCK_SETUP_COOLDOWN_{rem_sec:.0f}S", 0.0, 0.0
+
+        # 2. CLASS A: MARKET-STATE CONDITION GATE (Zero Timers — Evaluated Live)
+        if entropy >= 0.80:
+            return "WAIT_HIGH_ENTROPY", 0.0, 0.0
+
+        # 3. CONSCIENCE ESCALATION & CAUTION GATES
+        size_mult = setup_health.size_multiplier
+        conf_mod = setup_health.confidence_modifier
+
+        # Portfolio-wide loss escalation
+        if self.escalation.is_escalated:
+            conf_mod += self.escalation.confidence_hike
+
+        # Moderate entropy (0.65 - 0.80) or degraded health (< 60)
+        if entropy >= 0.65 or setup_health.health_score < 60.0:
+            size_mult = min(size_mult, 0.50)
+            conf_mod += 0.05
+            return "REDUCE_SIZE_AND_CONFIRM", size_mult, conf_mod
+
+        if self.escalation.is_escalated:
+            return "REQUIRE_STRONGER_CONFIRMATION", size_mult, conf_mod
+
+        return "NORMAL_ELIGIBILITY", size_mult, conf_mod
 
     def evaluate(
         self,
@@ -515,45 +612,53 @@ class RiskEngine:
         # ==================================================================
         if intent.action == "ENTER_CORE_LOT_1":
             # --------------------------------------------------------------
-            # INVARIANT 4A: THESIS FAILURE COOLDOWN (Component 5)
+            # INVARIANT 4A: ANTI-CHURN / POST-STOP RE-ENTRY GUARD
             # --------------------------------------------------------------
-            ts_now = float(matrix.get("timestamp", 0.0) or time.time())
-            is_cooldown, rem_sec = self.failure_counter.is_in_cooldown(intent.scenario, ts_now)
-            if is_cooldown:
-                logger.info(f"[RiskGate] VETO: Setup '{intent.scenario}' in cooldown ({rem_sec:.0f}s remaining).")
-                return RiskDecision(
-                    status="REJECT",
-                    action="WAIT_IN_CASH",
-                    reason=f"REJECTED BY RISK GATE: Setup '{intent.scenario}' in cooldown ({rem_sec:.0f}s left after repeated failures).",
-                    telemetry={"cooldown_remaining_sec": rem_sec},
-                )
-
-            # --------------------------------------------------------------
-            # INVARIANT 4B: SETUP PERFORMANCE GOVERNOR (Component 1)
-            # --------------------------------------------------------------
-            setup_health = self.governor.get_health(intent.scenario)
-            if setup_health.is_disabled:
-                logger.info(f"[RiskGate] VETO: Setup '{intent.scenario}' disabled by Performance Governor (Health {setup_health.health_score:.1f}).")
-                return RiskDecision(
-                    status="REJECT",
-                    action="WAIT_IN_CASH",
-                    reason=f"REJECTED BY GOVERNOR: Setup '{intent.scenario}' disabled due to poor health ({setup_health.health_score:.1f} < 20).",
-                    telemetry={"setup_health": setup_health.__dict__},
-                )
-
-            # --------------------------------------------------------------
-            # INVARIANT 4C: CONSCIENCE ESCALATION GATE (Component 8)
-            # --------------------------------------------------------------
-            if self.escalation.is_escalated:
-                conf_hike = self.escalation.confidence_hike
-                req_conf = float(intent.telemetry.get("adaptive_conf_hurdle", 0.55)) + conf_hike
-                if float(intent.confidence or 0.0) < req_conf:
-                    logger.info(f"[RiskGate] VETO: Confidence ({intent.confidence:.2f}) < Escalated hurdle ({req_conf:.2f}).")
+            # A Breakout intent cannot be approved at or below the price level of a recent stop cut
+            if intent.scenario == "MACRO_BALLOON_BREAKOUT":
+                if self.last_invalidation_exit_price > 0.0 and price <= self.last_invalidation_exit_price:
+                    logger.info(f"[RiskGate] VETO BREAKOUT: Proposed entry ${price:,.2f} is at/below failed level ${self.last_invalidation_exit_price:,.2f}.")
                     return RiskDecision(
                         status="REJECT",
                         action="WAIT_IN_CASH",
-                        reason=f"REJECTED BY ESCALATION GATE: {self.escalation.consecutive_losses} consecutive losses. Demands confidence >= {req_conf:.2f} (current {intent.confidence:.2f}).",
-                        telemetry={"consecutive_losses": self.escalation.consecutive_losses, "required_conf": req_conf},
+                        reason=f"REJECTED BY RISK GATE: Breakout intent at ${price:,.2f} is below prior failed invalidation level (${self.last_invalidation_exit_price:,.2f}).",
+                        telemetry={"last_invalidation_exit_price": self.last_invalidation_exit_price},
+                    )
+
+            # --------------------------------------------------------------
+            # INVARIANT 4B: UNIFIED 5-TIER ENTRY ELIGIBILITY GATE
+            # --------------------------------------------------------------
+            eligibility, approved_size_mult, req_conf_mod = self.evaluate_entry_eligibility(
+                intent.scenario, matrix, daily_drawdown_pct, max_daily_drawdown
+            )
+            if eligibility.startswith("BLOCK"):
+                logger.info(f"[RiskGate] VETO: Setup '{intent.scenario}' blocked ({eligibility}).")
+                return RiskDecision(
+                    status="REJECT",
+                    action="WAIT_IN_CASH",
+                    reason=f"REJECTED BY RISK GATE: {eligibility}",
+                    telemetry={"eligibility": eligibility},
+                )
+            if eligibility == "WAIT_HIGH_ENTROPY":
+                logger.info(f"[RiskGate] VETO: Market entropy elevated (>= 0.80).")
+                return RiskDecision(
+                    status="REJECT",
+                    action="WAIT_IN_CASH",
+                    reason="REJECTED BY CONDITION GATE: Market entropy elevated (>= 0.80). Waiting for structure to organize.",
+                    telemetry={"eligibility": eligibility},
+                )
+
+            # Dynamic confidence check with Contiguous Health & Escalation Modifiers
+            if req_conf_mod > 0.0:
+                base_req_conf = float(intent.telemetry.get("adaptive_conf_hurdle", 0.50))
+                effective_req_conf = base_req_conf + req_conf_mod
+                if float(intent.confidence or 0.0) < effective_req_conf:
+                    logger.info(f"[RiskGate] VETO: Confidence ({intent.confidence:.2f}) < Required hurdle ({effective_req_conf:.2f}).")
+                    return RiskDecision(
+                        status="REJECT",
+                        action="WAIT_IN_CASH",
+                        reason=f"REJECTED BY CONFIDENCE GATE: Current {intent.confidence:.2f} < Required {effective_req_conf:.2f} (Base {base_req_conf:.2f} + Mod {req_conf_mod:+.2f}).",
+                        telemetry={"required_conf": effective_req_conf, "eligibility": eligibility},
                     )
 
             # --------------------------------------------------------------
@@ -568,20 +673,6 @@ class RiskEngine:
                     reason=f"REJECTED BY RISK GATE: Projected runway (+{intent.expected_runway_pct:.2f}%) < {required_runway:.2f}% adaptive hurdle.",
                     telemetry={"expected_runway_pct": intent.expected_runway_pct, "adaptive_hurdle": required_runway},
                 )
-
-            # --------------------------------------------------------------
-            # INVARIANT 5: ANTI-CHURN / POST-STOP RE-ENTRY GUARD
-            # --------------------------------------------------------------
-            # A Breakout intent cannot be approved at or below the price level of a recent stop cut
-            if intent.scenario == "MACRO_BALLOON_BREAKOUT":
-                if self.last_invalidation_exit_price > 0.0 and price <= self.last_invalidation_exit_price:
-                    logger.info(f"[RiskGate] VETO BREAKOUT: Proposed entry ${price:,.2f} is at/below failed level ${self.last_invalidation_exit_price:,.2f}.")
-                    return RiskDecision(
-                        status="REJECT",
-                        action="WAIT_IN_CASH",
-                        reason=f"REJECTED BY RISK GATE: Breakout intent at ${price:,.2f} is below prior failed invalidation level (${self.last_invalidation_exit_price:,.2f}).",
-                        telemetry={"last_invalidation_exit_price": self.last_invalidation_exit_price},
-                    )
 
             # --------------------------------------------------------------
             # INVARIANT 6: NOISE-IMMUNE STOP-LOSS CALCULATION
@@ -648,7 +739,8 @@ class RiskEngine:
                 )
 
             # Apply Governor and Failure Counter multipliers
-            gov_mult = setup_health.size_multiplier
+            setup_health = self.governor.get_health(intent.scenario)
+            gov_mult = approved_size_mult
             fail_pen = self.failure_counter.get_failure_penalty(intent.scenario)
             composite_size_factor = round(float(np.clip(size_factor * gov_mult * fail_pen, 0.10, 1.0)), 2)
 
@@ -662,6 +754,7 @@ class RiskEngine:
                 "governor_size_mult": gov_mult,
                 "failure_penalty": fail_pen,
                 "consecutive_portfolio_losses": self.escalation.consecutive_losses,
+                "eligibility": eligibility,
             })
 
             return RiskDecision(
