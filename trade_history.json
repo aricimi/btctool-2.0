@@ -1,12 +1,36 @@
 {
-  "trades": [],
+  "trades": [
+    {
+      "id": 1,
+      "type": "SPOT_BUY",
+      "setup": "ZEBRA WHALE: DIP_ABSORPTION_TURN",
+      "entry_time": "2026-10-20 20:28:20",
+      "entry_price": 82567.0,
+      "exit_time": "2026-10-21 00:20:01",
+      "exit_price": 83076.5,
+      "duration": "3h 51m",
+      "target_1": 82593.38,
+      "target_2": 0.0,
+      "stop_loss": 82194.35,
+      "predicted_runway_pct": 0.03,
+      "prediction_error_pct": 0.59,
+      "regret": 0.59,
+      "gross_pnl_pct": 0.62,
+      "okx_fee_pct": -0.2,
+      "net_pnl_pct": 0.42,
+      "exit_reason": "ZEBRA EXIT: TRAILING STOP HIT (+0.63% net). Locking in banked profit at $83,076.50.",
+      "rationale": "DIP TURN PREDICTED: Tested support ($82,565.86) with bid absorption. Target: $82,593.38.",
+      "risk_adjusted_reward": 0.42,
+      "status": "CLOSED_PROFIT"
+    }
+  ],
   "stats": {
-    "total_closed_trades": 0,
-    "wins": 0,
+    "total_closed_trades": 1,
+    "wins": 1,
     "losses": 0,
-    "win_rate_pct": 0.0,
-    "gross_cumulative_pct": 0,
-    "total_fees_pct": -0.0,
-    "net_cumulative_pct": 0
+    "win_rate_pct": 100.0,
+    "gross_cumulative_pct": 0.62,
+    "total_fees_pct": -0.2,
+    "net_cumulative_pct": 0.42
   }
 }

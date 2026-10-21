@@ -336,7 +336,7 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
    - Generates actionable statistical directives for dynamic runway hurdles and stop multipliers without risking live capital.
    - Exports human-readable audit report to `dream_report.md`.
 7. **`execution_manager.py` (Execution Adapters & Memory — Hands & Ledger):**
-   - Clean-slate archiving: Legacy logs safely archived to `archive_legacy_trades/`. Fresh autonomous ledger starting from Trade #1. All pre-upgrade trades archived with timestamp `20261021_064618`.
+   - Clean-slate archiving: Pre-upgrade trades #1–4 archived to `archive_legacy_trades/20261021_064618_*`. Post-upgrade Trade #1 (entered 20:28:20, exited 00:20:01 at $83,076.50 for +0.42% net profit) recorded as the inaugural trade of the upgraded architecture.
    - Manages active thesis parameters: `scenario`, `target_price`, `invalidation_floor`, `trailing_stop`, and `pre_state`.
    - Dynamic trailing stop updates (`update_trailing_stop`) and macro target stepping (`update_target_price`).
    - Dispatches rich instant Telegram alerts on every action (Entry, Scale-in, Bank Profit, Trailing Stop Ratchet, Thesis Cut, Shadow Self Clamp).
