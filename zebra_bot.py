@@ -387,6 +387,14 @@ class ZebraBotEngine:
                 f"<b>Absorption Index:</b> {absorption:.1f}\n\n"
             )
 
+            belief = getattr(self.brain, "belief_system", None)
+            if belief and hasattr(belief, "state"):
+                b_state = belief.state
+                status_msg += (
+                    f"<b>Explicit Belief:</b> <code>{b_state.regime_belief}</code> (Bias: {b_state.directional_bias:+.2f}, Pers: {b_state.persistence_ticks})\n"
+                    f"<b>Adaptive Hurdles:</b> Runway $\ge$ {b_state.adaptive_runway_hurdle:.2f}% | Conf $\ge$ {b_state.adaptive_conf_hurdle:.2f}\n\n"
+                )
+
             if active:
                 entry = active.get("entry", 0.0)
                 gain = ((price - entry) / entry) * 100.0 if entry > 0 else 0.0

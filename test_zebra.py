@@ -397,6 +397,99 @@ class TestZebraBot(unittest.TestCase):
         self.assertEqual(analysis["mean_prediction_error"], -0.37)
         self.assertEqual(analysis["mean_regret"], 0.37)
 
+    def test_08_explicit_belief_and_adaptive_hurdles(self):
+        """Verify Component 5 (Belief System hysteresis) and Component 2 (Adaptive Hurdles)."""
+        from conviction_engine import BeliefSystem, FreeConvictionEngine
+
+        # 1. Hysteresis Anti-Flicker Test
+        belief_sys = BeliefSystem(decay_rate=0.85)
+        # Tick 1: Initial bullish conviction
+        s1 = belief_sys.update(
+            raw_edge=0.50,
+            instant_urgency=0.30,
+            entropy=0.20,
+            vol_regime=1.0,
+            is_balloon_expanding=False,
+            is_slow_market=False,
+            absorption_idx=15.0,
+        )
+        self.assertEqual(s1.persistence_ticks, 1)
+        self.assertGreater(s1.directional_bias, 0.40)
+
+        # Tick 2: Sudden 1-tick negative noise shock (-0.40)
+        s2 = belief_sys.update(
+            raw_edge=-0.40,
+            instant_urgency=0.0,
+            entropy=0.20,
+            vol_regime=1.0,
+            is_balloon_expanding=False,
+            is_slow_market=False,
+            absorption_idx=15.0,
+        )
+        # Hysteresis dampening: bias must remain POSITIVE despite the 1-tick shock
+        self.assertGreater(s2.directional_bias, 0.20, "1-tick flash shock must not flip persistent belief")
+
+        # 2. Adaptive Hurdles Test: High Entropy Chop vs Clean Expansion
+        # High Entropy Chop: Hurdle must scale UP to defend against fee-drag
+        s_chop = belief_sys.update(
+            raw_edge=0.10,
+            instant_urgency=0.05,
+            entropy=0.90,
+            vol_regime=0.50,
+            is_balloon_expanding=False,
+            is_slow_market=True,
+            absorption_idx=4.0,
+        )
+        self.assertGreaterEqual(s_chop.adaptive_runway_hurdle, 0.55, "Chop must elevate runway hurdle")
+        self.assertEqual(s_chop.regime_belief, "CHOP_COMPRESSION")
+
+        # Clean Volatility Expansion: Hurdle must clamp DOWN to 0.40%
+        s_expand = belief_sys.update(
+            raw_edge=0.60,
+            instant_urgency=0.45,
+            entropy=0.15,
+            vol_regime=1.30,
+            is_balloon_expanding=True,
+            is_slow_market=False,
+            absorption_idx=18.0,
+        )
+        self.assertEqual(s_expand.adaptive_runway_hurdle, 0.40, "Expansion must clamp hurdle to 0.40%")
+        self.assertEqual(s_expand.regime_belief, "BULL_ACCELERATION")
+
+        # 3. Brain Integration Test
+        brain = FreeConvictionEngine()
+        brain.reset_belief()
+        test_matrix = {
+            "latest_price": 82500.0,
+            "tanh_imbalance": 0.25,
+            "absorption_index": 16.0,
+            "composite_atr": 250.0,
+            "multi_screen_bounds": {
+                "nearest_support": 82400.0,
+                "nearest_resistance": 83000.0,
+                "macro_ceiling": 84500.0,
+                "immediate_runway_pct": 0.61,
+                "macro_runway_pct": 2.42,
+            },
+            "balloon_geometry": {
+                "regime": "BULL_TREND",
+                "is_balloon_expanding": False,
+                "is_slow_market": False,
+            },
+            "micro_turn": {"is_green_building": True, "velocity_slowing": False},
+            "feature_vector": {
+                "trend_strength": 0.0008,
+                "entropy": 0.25,
+                "vol_regime": 1.1,
+                "liquidity": 12.0,
+            },
+        }
+        intent = brain.evaluate(test_matrix)
+        self.assertIn("adaptive_runway_hurdle", intent.telemetry)
+        self.assertIn("adaptive_conf_hurdle", intent.telemetry)
+        self.assertIn("belief_regime", intent.telemetry)
+        self.assertIn("belief_persistence", intent.telemetry)
+
 
 if __name__ == "__main__":
     unittest.main()

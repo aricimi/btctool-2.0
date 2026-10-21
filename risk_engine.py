@@ -274,14 +274,16 @@ class RiskEngine:
         # ==================================================================
         if intent.action == "ENTER_CORE_LOT_1":
             # --------------------------------------------------------------
-            # INVARIANT 4: EXPECTANCY & ASYMMETRY GATE
+            # INVARIANT 4: EXPECTANCY & ADAPTIVE HURDLE GATE (Component 2)
             # --------------------------------------------------------------
-            if intent.expected_runway_pct < MIN_PROJECTED_RUNWAY_PCT:
+            adaptive_hurdle = float(intent.telemetry.get("adaptive_runway_hurdle", MIN_PROJECTED_RUNWAY_PCT))
+            required_runway = max(0.40, adaptive_hurdle)
+            if intent.expected_runway_pct < required_runway:
                 return RiskDecision(
                     status="REJECT",
                     action="WAIT_IN_CASH",
-                    reason=f"REJECTED BY RISK GATE: Projected runway (+{intent.expected_runway_pct:.2f}%) < {MIN_PROJECTED_RUNWAY_PCT}% OKX fee hurdle.",
-                    telemetry={"expected_runway_pct": intent.expected_runway_pct},
+                    reason=f"REJECTED BY RISK GATE: Projected runway (+{intent.expected_runway_pct:.2f}%) < {required_runway:.2f}% adaptive hurdle.",
+                    telemetry={"expected_runway_pct": intent.expected_runway_pct, "adaptive_hurdle": required_runway},
                 )
 
             # --------------------------------------------------------------
