@@ -296,7 +296,8 @@ Non-linear microstructure modifiers (modifiers only: +-0.05, never opens trades 
 4.7 Component 4: Mandatory Net Expected Value Gate:
   Projected_Move = max(Nearest_Structural_Resistance - Price, 1.2 * Composite_ATR)
   Projected_Gross_Pct = (Projected_Move / Price) * 100
-  Net_EV_Pct = Projected_Gross_Pct - OKX_Roundtrip_Fee (0.20%) - Estimated_Slippage (0.02%)
+  Estimated_Slippage = max(0.02%, (Spread_Pct / 2.0) * 1.25)
+  Net_EV_Pct = Projected_Gross_Pct - OKX_Roundtrip_Fee (0.20%) - Estimated_Slippage
 
   - Mandatory Gate: If Net_EV_Pct <= 0.05% or (immediate_runway < adaptive_runway and macro_runway < 1.50):
     Mind unconditionally issues `WAIT_IN_CASH`. Zero bypass loopholes permitted!

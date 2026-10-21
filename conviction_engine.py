@@ -342,8 +342,10 @@ class FreeConvictionEngine:
         dist_to_struct_res = max(nearest_resistance - price, 0.0)
         projected_move = max(dist_to_struct_res, 1.2 * atr)
         projected_gross_pct = max((projected_move / price) * 100.0, immediate_runway) if price > 0 else 0.0
-        slippage_est_pct = 0.02
-        net_ev_pct = projected_gross_pct - (OKX_ROUNDTRIP_FEE_PCT * 100.0) - slippage_est_pct
+        spread_pct = float(matrix.get("spread_pct", 0.0))
+        # Dynamic slippage estimation: baseline 0.02%, scaled by half-spread + 25% execution impact
+        dynamic_slippage_pct = round(max(0.02, (spread_pct / 2.0) * 1.25), 3)
+        net_ev_pct = projected_gross_pct - (OKX_ROUNDTRIP_FEE_PCT * 100.0) - dynamic_slippage_pct
 
         intent_telemetry = {
             "edge": round(effective_edge, 3),
@@ -353,6 +355,7 @@ class FreeConvictionEngine:
             "entropy": round(entropy, 3),
             "entropy_ema": round(belief.entropy_ema, 3),
             "trend_strength": round(trend_strength, 5),
+            "dynamic_slippage_pct": dynamic_slippage_pct,
             "net_ev_pct": round(net_ev_pct, 3),
             "immediate_runway": immediate_runway,
             "macro_runway": macro_runway,
@@ -433,7 +436,7 @@ class FreeConvictionEngine:
             else:
                 pw = float(np.clip(0.55 + 0.10 * min(absorption_idx / 20.0, 1.0), 0.40, 0.70))
 
-            ev_dip, rr_dip = self.calculate_classical_expectancy(pw, target_pct, stop_pct)
+            ev_dip, rr_dip = self.calculate_classical_expectancy(pw, target_pct, stop_pct, slippage_pct=dynamic_slippage_pct)
             if rr_dip < 1.50:
                 return TradeIntent(
                     action="WAIT_IN_CASH",
@@ -482,7 +485,7 @@ class FreeConvictionEngine:
             else:
                 pw = float(np.clip(0.40 + 0.15 * tuned_confidence, 0.35, 0.65))
 
-            ev_breakout, rr_breakout = self.calculate_classical_expectancy(pw, target_pct, stop_pct)
+            ev_breakout, rr_breakout = self.calculate_classical_expectancy(pw, target_pct, stop_pct, slippage_pct=dynamic_slippage_pct)
             if rr_breakout < 1.50:
                 return TradeIntent(
                     action="WAIT_IN_CASH",

@@ -158,7 +158,7 @@ class ThesisFailureCounter:
 
         # M_health modifier (Never reduces cooldown below 1.0x to prevent historical health from masking recent losses)
         if health_score < 20.0:
-            m_h = 2.0
+            m_h = 1.8
         elif health_score < 40.0:
             m_h = 1.5
         elif health_score < 60.0:
@@ -673,11 +673,11 @@ class RiskEngine:
                     telemetry={"eligibility": eligibility},
                 )
             if eligibility == "WAIT_HIGH_ENTROPY":
-                logger.info(f"[RiskGate] VETO: Market entropy elevated (>= 0.80).")
+                logger.info(f"[RiskGate] VETO: Market entropy elevated (>= 0.70).")
                 return RiskDecision(
                     status="REJECT",
                     action="WAIT_IN_CASH",
-                    reason="REJECTED BY CONDITION GATE: Market entropy elevated (>= 0.80). Waiting for structure to organize.",
+                    reason="REJECTED BY CONDITION GATE: Market entropy elevated (>= 0.70). Waiting for structure to organize.",
                     telemetry={"eligibility": eligibility},
                 )
 

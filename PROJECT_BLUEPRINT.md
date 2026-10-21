@@ -323,7 +323,8 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
      - Fast-path tape acceleration ($>8.0$ trades/sec with positive CVD) or strong absorption ($A_i > 20$) adds $+0.05$ to confidence.
      - Spread inflation ($>0.15\%$) or aggressive taker dumps subtracts $-0.05$ from confidence. Never triggers trades directly.
    - **Component 4: Mandatory Net Expectancy Gate:**
-     $$\mathbb{E}[\text{PnL}_{\text{net}}] = \frac{\max(\text{distance to structural resistance}, 1.2 \cdot \text{ATR})}{P} \times 100 - \text{OKX Fee (0.20%)} - \text{Slippage (0.02%)}$$
+     $$\mathbb{E}[\text{PnL}_{\text{net}}] = \frac{\max(\text{distance to structural resistance}, 1.2 \cdot \text{ATR})}{P} \times 100 - \text{OKX Fee (0.20%)} - \text{Slippage}_{\text{dynamic}}$$
+     where $\text{Slippage}_{\text{dynamic}} = \max\left(0.02\%, \frac{\text{spread\_pct}}{2.0} \times 1.25\right)$, accurately penalizing friction during spread expansions.
      Unconditionally rejects trades where $\mathbb{E}[\text{PnL}_{\text{net}}] \le 0.05\%$. Zero bypass loopholes permitted!
    - **Momentum Ignition Gating:** Breakouts strictly require: $\text{effective\_edge} \ge 0.15$, $\text{effective\_urgency} \ge 0.15$, tuned confidence $\ge \theta_{\text{conf}}$, and Belief State $\neq$ `CHOP_COMPRESSION`.
    - **Dip Turn Reversal Trigger:** When testing structural support with resting bid absorption ($A_i > 12.0$, $\tanh_{\text{imb}} \ge 0.0$) and clearing adaptive runway hurdle.

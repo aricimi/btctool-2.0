@@ -85,20 +85,24 @@ class ExecutionManager:
         logger.info("[Execution] Clean slate initialized. Trade counter reset to #1.")
 
     def load_state(self) -> Optional[dict]:
-        """Loads active trade and persisted cooldown state from disk."""
-        if os.path.exists(self.state_file):
-            try:
-                with open(self.state_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    self.active_trade = data.get("active_trade")
-                    self.cooldown_state = data.get("cooldown_state", {})
-                return self.active_trade
-            except Exception as e:
-                logger.error(f"[Execution] Error loading state: {e}")
+        """Loads active trade and persisted cooldown state from disk with automated backup recovery."""
+        for path in (self.state_file, f"{self.state_file}.bak"):
+            if os.path.exists(path):
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    if isinstance(data, dict):
+                        self.active_trade = data.get("active_trade")
+                        self.cooldown_state = data.get("cooldown_state", {})
+                        if path.endswith(".bak"):
+                            logger.warning(f"[Execution] Recovered state from backup file: {path}")
+                        return self.active_trade
+                except Exception as e:
+                    logger.error(f"[Execution] Error loading state from {path}: {e}")
         return None
 
     def save_state(self, market_state: str = "SCANNING", last_alert_time: float = 0.0, cooldown_state: Optional[dict] = None):
-        """Atomically saves bot state and cooldown state to disk."""
+        """Atomically saves bot state and cooldown state to disk, maintaining a .bak file."""
         try:
             if cooldown_state is not None:
                 self.cooldown_state = cooldown_state
@@ -110,8 +114,15 @@ class ExecutionManager:
                 "saved_at": time.time(),
             }
             tmp_file = f"{self.state_file}.tmp"
+            bak_file = f"{self.state_file}.bak"
             with open(tmp_file, "w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=2)
+            # Create/update backup from existing valid state file if present
+            if os.path.exists(self.state_file):
+                try:
+                    shutil.copy2(self.state_file, bak_file)
+                except Exception:
+                    pass
             os.replace(tmp_file, self.state_file)
         except Exception as e:
             logger.error(f"[Execution] Error saving state: {e}")
