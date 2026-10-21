@@ -159,32 +159,69 @@ class FreeConvictionEngine:
             )
 
         # ==================================================================
-        # STATE 2: IN CASH (SEEKING REAL ASYMMETRIC GAIN OR SITTING PATIENTLY)
+        # STATE 2: IN CASH (CONTINUOUS EDGE & NET EXPECTED VALUE ENGINE)
         # ==================================================================
+        f_vec = matrix.get("feature_vector", {})
+        trend_strength = float(f_vec.get("trend_strength", 0.0))
+        entropy = float(f_vec.get("entropy", 0.5))
+        vol_regime = float(f_vec.get("vol_regime", 1.0))
+        liquidity = float(f_vec.get("liquidity", 10.0))
 
-        # 2.1 REAL GAIN HURDLE: If room to target is too small to make real money after fees -> PASS
-        if immediate_runway < MIN_PROJECTED_RUNWAY_PCT:
-            # If not a macro breakout candidate, sit strictly in cash
-            if not (is_balloon_expanding and macro_runway >= 0.90):
-                return TradeIntent(
-                    action="WAIT_IN_CASH",
-                    expected_runway_pct=immediate_runway,
-                    reason=f"NO REAL GAIN ON TABLE: Room to target is only +{immediate_runway:.2f}% (requires >= {MIN_PROJECTED_RUNWAY_PCT}% to clear fees). Sitting in cash.",
-                    telemetry={"immediate_runway": immediate_runway, "support": nearest_support, "resistance": nearest_resistance},
-                )
+        # 2.1 CONTINUOUS MATHEMATICAL EDGE & URGENCY (Spec Section 2.3)
+        trend_term = float(np.tanh(400.0 * trend_strength))
+        imb_term = float(tanh_imb)
+        abs_term = float(min(absorption_idx / 20.0, 1.0))
+        flow_term = 0.5 if (cvd > 0 and trade_vel > 5.0) else (-0.3 if cvd < 0 else 0.0)
 
-        # 2.2 SLOW MARKET: Lines are horizontal and slow -> Stay in cash
+        raw_edge = (0.35 * trend_term) + (0.25 * imb_term) + (0.20 * abs_term) + (0.20 * flow_term) - (0.15 * entropy)
+        edge = float(np.clip(raw_edge, -1.0, 1.0))
+        confidence = float(max(0.0, abs(edge) / (1.0 + entropy)))
+        urgency = float(confidence * max(trend_term, 0.0))
+
+        # 2.2 NET EXPECTED VALUE FORMULATION (Spec Section 11.2)
+        dist_to_struct_res = max(nearest_resistance - price, 0.0)
+        projected_move = max(dist_to_struct_res, 1.2 * atr)
+        projected_gross_pct = max((projected_move / price) * 100.0, immediate_runway) if price > 0 else 0.0
+        slippage_est_pct = 0.02
+        net_ev_pct = projected_gross_pct - (OKX_ROUNDTRIP_FEE_PCT * 100.0) - slippage_est_pct
+
+        intent_telemetry = {
+            "edge": round(edge, 3),
+            "confidence": round(confidence, 3),
+            "urgency": round(urgency, 3),
+            "entropy": round(entropy, 3),
+            "trend_strength": round(trend_strength, 5),
+            "net_ev_pct": round(net_ev_pct, 3),
+            "immediate_runway": immediate_runway,
+            "macro_runway": macro_runway,
+            "support": nearest_support,
+            "resistance": nearest_resistance,
+            "macro_ceiling": macro_ceiling,
+        }
+
+        # Fee Defense: If room to target cannot clear OKX 0.20% fees, sit strictly in cash
+        if immediate_runway < MIN_PROJECTED_RUNWAY_PCT and not (is_balloon_expanding and macro_runway >= 0.80):
+            return TradeIntent(
+                action="WAIT_IN_CASH",
+                expected_runway_pct=immediate_runway,
+                confidence=confidence,
+                reason=f"NO REAL GAIN ON TABLE: Immediate runway is only +{immediate_runway:.2f}% (requires >= {MIN_PROJECTED_RUNWAY_PCT}% to clear fees). Net EV={net_ev_pct:+.2f}%. Sitting in cash.",
+                telemetry=intent_telemetry,
+            )
+
+        # 2.3 SLOW MARKET: Lines are horizontal and volume compressed -> Stay in cash
         if is_slow_market and immediate_runway < 0.60:
             return TradeIntent(
                 action="WAIT_IN_CASH",
                 expected_runway_pct=immediate_runway,
+                confidence=confidence,
                 reason="SLOW MARKET: Bollinger lines horizontal and volume compressed. Sitting 100% in cash.",
-                telemetry={"immediate_runway": immediate_runway},
+                telemetry=intent_telemetry,
             )
 
-        # 2.3 SETUP A: BOTTOM / DIP TURN PREDICTION (BUYING LOW AT SUPPORT)
+        # 2.4 SETUP A: BOTTOM / DIP TURN PREDICTION (BUYING LOW AT SUPPORT)
         dist_to_support = abs(price - nearest_support)
-        is_at_support_floor = dist_to_support <= (0.75 * atr)
+        is_at_support_floor = dist_to_support <= (0.85 * atr)
         is_absorption_confirmed = (tanh_imb > 0.10 or absorption_idx > 12.0) and tanh_imb >= 0.0 and immediate_runway >= MIN_PROJECTED_RUNWAY_PCT
 
         if is_at_support_floor and is_absorption_confirmed:
@@ -196,34 +233,36 @@ class FreeConvictionEngine:
                 target_price=target,
                 proposed_stop=dynamic_invalidation,
                 expected_runway_pct=immediate_runway,
-                confidence=0.75,
-                reason=f"DIP TURN PREDICTED: Tested support (${nearest_support:,.2f}) with bid absorption (Ai={absorption_idx:.1f}, tanh_imb={tanh_imb:+.2f}). Target: ${target:,.2f} (+{immediate_runway:.2f}%).",
-                telemetry={"support": nearest_support, "target": target, "invalidation": dynamic_invalidation},
+                confidence=max(confidence, 0.75),
+                reason=f"DIP TURN PREDICTED: Tested support (${nearest_support:,.2f}) with bid absorption (Ai={absorption_idx:.1f}, tanh_imb={tanh_imb:+.2f}). Net EV={net_ev_pct:+.2f}%. Target: ${target:,.2f} (+{immediate_runway:.2f}%).",
+                telemetry=intent_telemetry,
             )
 
-        # 2.4 SETUP B: MACRO FUELED BREAKOUT (BUYING REAL EXPANSION)
-        # Physics Breakout: Price physically at or above the pooled swing high, with positive kinetic push
+        # 2.5 SETUP B: MOMENTUM IGNITION / BREAKOUT SURGE (THE MARKET FIRES UP)
+        # Continuous momentum flow: fires when urgency/expansion confirms real upward flow
         is_clearing_high = price >= (pooled_swing_high - 1.0)
-        is_kinetic_push_positive = (tanh_imb > 0.0) and (cvd >= 0.0 or trade_vel > 8.0)
+        is_breakout_surge = (is_balloon_expanding and macro_runway >= 0.80) or (urgency >= 0.25 and edge > 0.20 and macro_runway >= 0.90)
 
-        if is_clearing_high and is_balloon_expanding and is_kinetic_push_positive and macro_runway >= 0.90:
+        if (is_clearing_high or is_breakout_surge) and (tanh_imb >= 0.0 or trade_vel > 6.0):
             target = macro_ceiling
+            effective_runway = max(macro_runway, projected_gross_pct)
             return TradeIntent(
                 action="ENTER_CORE_LOT_1",
                 scenario="MACRO_BALLOON_BREAKOUT",
                 entry_price=price,
                 target_price=target,
                 proposed_stop=dynamic_invalidation,
-                expected_runway_pct=macro_runway,
-                confidence=0.80,
-                reason=f"BALLOON BREAKOUT: Price cleared swing high (${pooled_swing_high:,.2f}) into macro space (${macro_ceiling:,.2f}, +{macro_runway:.2f}%) with positive kinetic flow.",
-                telemetry={"target": target, "invalidation": dynamic_invalidation, "macro_runway": macro_runway},
+                expected_runway_pct=effective_runway,
+                confidence=max(confidence, 0.80),
+                reason=f"MOMENTUM IGNITION: Market surge detected (Edge={edge:+.2f}, Urgency={urgency:.2f}). Flowing into macro space (${macro_ceiling:,.2f}, +{effective_runway:.2f}%) with Net EV=+{net_ev_pct:.2f}%.",
+                telemetry=intent_telemetry,
             )
 
-        # Default: Patiently sitting 100% in cash
+        # Default fallback: Patiently scanning in cash
         return TradeIntent(
             action="WAIT_IN_CASH",
             expected_runway_pct=immediate_runway,
-            reason=f"PATIENT SCANNING: Nearest support ${nearest_support:,.2f}, Nearest ceiling ${nearest_resistance:,.2f} (+{immediate_runway:.2f}%). Waiting for setup.",
-            telemetry={"immediate_runway": immediate_runway, "support": nearest_support, "resistance": nearest_resistance},
+            confidence=confidence,
+            reason=f"PATIENT SCANNING: Edge={edge:+.2f}, Conf={confidence:.2f}, Urgency={urgency:.2f}. Nearest Support ${nearest_support:,.2f}, Structural Ceiling ${nearest_resistance:,.2f} (+{immediate_runway:.2f}%).",
+            telemetry=intent_telemetry,
         )

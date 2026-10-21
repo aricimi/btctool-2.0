@@ -155,8 +155,12 @@ class MarketState:
         support_pool = []
         resistance_pool = []
 
-        # 1. Pool all 33 Bollinger bands from all 11 timeframes
+        # 1. Pool Bollinger bands from structural horizons (>=5m)
+        # Excludes 1s, 1m, 3m sub-minute noise wicks from forming phantom ceilings
+        STRUCTURAL_TFS = {"5m", "15m", "30m", "1h", "2h", "4h", "6h", "1D"}
         for tf, data in tf_indicators.items():
+            if tf not in STRUCTURAL_TFS:
+                continue
             for band_key in ("bb_lower", "bb_mid", "bb_upper"):
                 lvl = data.get(band_key)
                 if lvl and lvl > 0:
@@ -164,6 +168,17 @@ class MarketState:
                         support_pool.append((lvl, f"{tf}_{band_key}"))
                     elif lvl > current_price:
                         resistance_pool.append((lvl, f"{tf}_{band_key}"))
+
+        # Fallback to any timeframe if structural horizons are not yet populated
+        if not resistance_pool or not support_pool:
+            for tf, data in tf_indicators.items():
+                for band_key in ("bb_lower", "bb_mid", "bb_upper"):
+                    lvl = data.get(band_key)
+                    if lvl and lvl > 0:
+                        if lvl < current_price and not support_pool:
+                            support_pool.append((lvl, f"{tf}_{band_key}"))
+                        elif lvl > current_price and not resistance_pool:
+                            resistance_pool.append((lvl, f"{tf}_{band_key}"))
 
         # 2. Pool swing highs and swing lows across macro timeframes (15m, 1h, 4h, 1D)
         all_recent_highs = []
@@ -384,6 +399,50 @@ class MarketState:
         candles_1m = stream.get_candles("1m") or []
         candles_3m = stream.get_candles("3m") or []
         matrix["micro_turn"] = MarketState.compute_micro_turn(candles_1m, candles_3m)
+
+        # 9. FeatureVector Belief Representation (Spec Section 2.2)
+        p = float(stream.latest_price)
+        ts_5m = (tf_indicators.get("5m", {}).get("ema_9", p) - tf_indicators.get("5m", {}).get("ema_21", p)) / p if p > 0 else 0.0
+        ts_15m = (tf_indicators.get("15m", {}).get("ema_9", p) - tf_indicators.get("15m", {}).get("ema_21", p)) / p if p > 0 else 0.0
+        ts_1h = (tf_indicators.get("1h", {}).get("ema_9", p) - tf_indicators.get("1h", {}).get("ema_21", p)) / p if p > 0 else 0.0
+        trend_strength = float(0.4 * ts_5m + 0.4 * ts_15m + 0.2 * ts_1h)
+        vol_norm = float(matrix["composite_atr"] / p) if p > 0 else 0.0
+
+        # Indicator directional entropy across active horizons (conflict measurement)
+        dirs = []
+        for tf, data in tf_indicators.items():
+            e9 = data.get("ema_9", p)
+            e21 = data.get("ema_21", p)
+            m_hist = data.get("macd_hist", 0.0)
+            if e9 > e21 and m_hist > 0:
+                dirs.append(1)
+            elif e9 < e21 and m_hist < 0:
+                dirs.append(-1)
+            else:
+                dirs.append(0)
+        n_up = dirs.count(1)
+        n_down = dirs.count(-1)
+        n_flat = dirs.count(0)
+        total_tf = len(dirs) or 1
+        probs = [n_up / total_tf, n_down / total_tf, n_flat / total_tf]
+        entropy = float(-sum(pr * np.log2(pr) for pr in probs if pr > 0.0) / 1.585) if probs else 0.5
+
+        atr_short = tf_indicators.get("5m", {}).get("atr") or tf_indicators.get("1m", {}).get("atr") or 200.0
+        atr_long = tf_indicators.get("1h", {}).get("atr") or tf_indicators.get("4h", {}).get("atr") or 200.0
+        vol_regime = float(atr_short / max(atr_long, 1.0))
+        liquidity = float((bid_vol + ask_vol) / max(spread, 1.0))
+
+        matrix["feature_vector"] = {
+            "trend_strength": trend_strength,
+            "vol_norm": vol_norm,
+            "entropy": entropy,
+            "vol_regime": vol_regime,
+            "liquidity": liquidity,
+            "composite_atr": matrix["composite_atr"],
+            "tanh_imbalance": tanh_imbalance,
+            "absorption_index": matrix["absorption_index"],
+            "regime": matrix["balloon_geometry"].get("regime", "UNKNOWN"),
+        }
 
         matrix["compute_time_ms"] = (time.time() - t0) * 1000.0
         return matrix

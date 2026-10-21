@@ -1,15 +1,11 @@
 ﻿Trade #,Status,Type,Setup,Entry Time,Exit Time,Hold Duration,Entry Price ($),Exit Price ($),Target 1 ($),Target 2 ($),Stop Loss ($),Gross PnL (%),OKX Fee (%),Net PnL (%),Result,Exit Reason
-1,CLOSED_LOSS,SPOT_BUY,ZEBRA WHALE: MACRO_BALLOON_BREAKOUT,2026-10-20 18:07:28,2026-10-20 18:12:12,4m,82635.10,82453.30,87238.30,,82453.30,-0.22%,-0.20%,-0.42%,LOSS,"ZEBRA EXIT: STOP HIT: Price crossed floor at $82,453.30. Controlled cut small (-0.15%)."
-2,CLOSED_LOSS,SPOT_BUY,ZEBRA WHALE: MACRO_BALLOON_BREAKOUT,2026-10-20 18:12:13,2026-10-20 20:25:35,2h 13m,82453.30,82534.40,87238.30,,82271.90,+0.10%,-0.20%,-0.10%,LOSS,ZEBRA EXIT: STRUCTURAL BREAKDOWN: Support broken without bid absorption. Controlled cut small (+0.15%).
-3,CLOSED_LOSS,SPOT_BUY,ZEBRA WHALE: DIP_ABSORPTION_TURN,2026-10-20 20:28:03,2026-10-20 20:28:04,0m,82535.60,82545.80,82536.16,,82162.95,+0.01%,-0.20%,-0.19%,LOSS,ZEBRA EXIT: TARGET HIT (+0.01%). Resistance capping momentum. Securing profit in wallet.
-4,CLOSED_LOSS,SPOT_BUY,ZEBRA WHALE: DIP_ABSORPTION_TURN,2026-10-20 20:28:08,2026-10-20 20:28:16,0m,82539.70,82564.50,82548.85,,82167.05,+0.03%,-0.20%,-0.17%,LOSS,ZEBRA EXIT: TARGET HIT (+0.03%). Resistance capping momentum. Securing profit in wallet.
-5,CLOSED_PROFIT,SPOT_BUY,ZEBRA WHALE: DIP_ABSORPTION_TURN,2026-10-20 20:28:20,2026-10-21 00:20:01,3h 51m,82567.00,83076.50,82593.38,,82194.35,+0.62%,-0.20%,+0.42%,WIN,"ZEBRA EXIT: TRAILING STOP HIT (+0.63% net). Locking in banked profit at $83,076.50."
+1,CLOSED_PROFIT,SPOT_BUY,ZEBRA WHALE: DIP_ABSORPTION_TURN,2026-10-20 20:28:20,2026-10-21 00:20:01,3h 51m,82567.00,83076.50,82593.38,,82194.35,+0.62%,-0.20%,+0.42%,WIN,"ZEBRA EXIT: TRAILING STOP HIT (+0.63% net). Locking in banked profit at $83,076.50."
 
 === SUMMARY PERFORMANCE ===
-Total Closed Trades,5
-Win Rate,20.0%
+Total Closed Trades,1
+Win Rate,100.0%
 Wins,1
-Losses,4
-Gross Cumulative Gain,+0.54%
-Total OKX Fees Deducted,-1.00%
-Net Realized Profit,-0.46%
+Losses,0
+Gross Cumulative Gain,+0.62%
+Total OKX Fees Deducted,-0.20%
+Net Realized Profit,+0.42%

@@ -15,6 +15,7 @@ Architecture:
 import logging
 from dataclasses import dataclass, field
 from typing import Dict, Any, Optional
+import numpy as np
 
 logger = logging.getLogger("risk_engine")
 
@@ -323,14 +324,21 @@ class RiskEngine:
                 approved_target = round(intent.target_price, 2)
 
             # --------------------------------------------------------------
-            # INVARIANT 7: SHADOW SELF WORST-CASE SIMULATION GATE (bot.txt)
+            # INVARIANT 7: CONTINUOUS VOLATILITY-LIQUIDITY SIZING & SHADOW SELF (Spec Section 2.3 & 3)
             # --------------------------------------------------------------
+            # Continuous target sizing: target_position = k * confidence * (liquidity / vol_regime)
+            conf = float(intent.confidence or 0.75)
+            f_vec = matrix.get("feature_vector", {})
+            vol_regime = float(f_vec.get("vol_regime", 1.0))
+            base_size_factor = round(float(np.clip(conf / max(vol_regime, 0.5), 0.25, 1.0)), 2)
+
             # Simulated adverse drop to approved noise-immune stop:
             stress_loss_pct = round(((price - approved_stop) / price) * 100.0, 3)
-            size_factor = 1.0
+            size_factor = base_size_factor
             if stress_loss_pct > max_stress_risk_pct and stress_loss_pct > 0:
                 # Dynamically clamp sizing so that dollar risk never breaches risk budget
-                size_factor = round(max(0.1, max_stress_risk_pct / stress_loss_pct), 2)
+                stress_clamp = round(max(0.1, max_stress_risk_pct / stress_loss_pct), 2)
+                size_factor = min(size_factor, stress_clamp)
                 logger.info(
                     f"[ShadowSelf] Stress drop ({stress_loss_pct:.2f}%) exceeds budget ({max_stress_risk_pct:.2f}%). Clamping Lot 1 size factor to {size_factor:.2f}"
                 )

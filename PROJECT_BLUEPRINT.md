@@ -302,15 +302,23 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
      - EMAs (9, 21, 50), RSI, MACD (DIF, DEA, Histogram), Bollinger Bands (%B, Bandwidth), dynamic ATR.
      - Anchored Session VWAP ($\pm 1\sigma, \pm 2\sigma$), Cumulative Volume Delta (CVD), Trade Velocity, $\Delta \text{OI}$ Z-score, Funding Rate.
      - 3-Snapshot Anti-Spoof Depth Ratios and Real-Time **Absorption Index** ($A_i$).
-     - **Dynamic Multi-Screen Boundaries (`extract_multi_screen_boundaries`):** Gathers all 33 Bollinger bands, pooled swing highs, and `composite_atr` (median across active horizons). Zero single-timeframe proxy lock.
+     - **Dynamic Structural Multi-Screen Boundaries (`extract_multi_screen_boundaries`):** Gathers structural Bollinger bands ($\ge 5\text{m}$, $15\text{m}$, $1\text{h}$, $4\text{h}$, $1\text{D}$) and pooled swing highs/lows. Filters out sub-minute noise bands (`1s`, `1m`, `3m`) from acting as phantom ceilings.
+     - **Continuous FeatureVector Representation (Spec Section 2.2):** Formulates continuous `trend_strength` (multi-scale weighted EMA slope), `vol_norm` ($\text{composite\_atr} / P$), `entropy` (cross-timeframe signal dispersion in $[0, 1]$), `vol_regime` ($\text{ATR}_{5\text{m}} / \text{ATR}_{1\text{h}}$), and `liquidity` ratio.
      - **Balloon Geometry Analyzer (`compute_balloon_and_regimes`):** Evaluates whether Bollinger bands are actively blowing open outward (`EXPANDING_BALLOON`) or horizontal and slow (`SLOW_MARKET`).
      - **Micro Turn (`compute_micro_turn`):** Sub-minute kinetic deceleration and velocity slowing.
-3. **`conviction_engine.py` (Policy Engine — Mind):**
-   - Pure cognitive modeling: Evaluates Kinetic Push vs Structural Barrier and emits structured `TradeIntent` objects (`ENTER_CORE_LOT_1`, `SCALE_IN_LOT_2`, `BANK_PROFIT`, `CUT_THESIS`, `RIDE_UNCAPPED`, `HOLD_POSITION`, `WAIT_IN_CASH`).
-   - Evaluates Expected Value ($\mathbb{E}[\text{Net PnL}] > \text{fee}$) and asymmetric runways without touching balance or order execution APIs.
-   - Strict Real Gain Runway Gate: Setup A (Dip Turn) strictly requires immediate runway $\ge 0.45\%$ to resistance and positive order book depth ($\tanh_{\text{imb}} \ge 0.0$), preventing micro-scalps into immediate ceilings.
+3. **`conviction_engine.py` (Continuous Edge & Net Expected Value Mind — Spec Section 2.3 & 11.2):**
+   - Pure cognitive modeling: Evaluates continuous mathematical **Edge**:
+     $$\text{Edge} = 0.35 \tanh(400 \cdot \text{trend\_strength}) + 0.25 \tanh_{\text{imb}} + 0.20 \min(A_i / 20, 1) + 0.20 \text{flow} - 0.15 \text{entropy}$$
+   - **Confidence:** $\text{confidence} = \frac{|\text{Edge}|}{1.0 + \text{entropy}}$.
+   - **Urgency:** $\text{urgency} = \text{confidence} \times \max(\tanh(400 \cdot \text{trend\_strength}), 0.0)$.
+   - **Net Expected Value Hurdle (Spec Section 11.2):**
+     $$\mathbb{E}[\text{PnL}_{\text{net}}] = \frac{\max(\text{distance to structural resistance}, 1.2 \cdot \text{ATR})}{P} \times 100 - \text{OKX Fee (0.20%)} - \text{Slippage (0.02%)}$$
+     Rejects trades where $\mathbb{E}[\text{PnL}_{\text{net}}] \le 0.05\%$, mathematically eliminating fee-drag churn during dead compression.
+   - **Momentum Ignition Trigger:** When market fires up (`urgency >= 0.25` or `is_balloon_expanding`), targets macro ceiling ($+1.5\%$ to $+5.5\%$) and enters immediately without being blocked by sub-minute noise lines.
+   - **Dip Turn Reversal Trigger:** When testing structural support with resting bid absorption ($A_i > 12.0$, $\tanh_{\text{imb}} \ge 0.0$) and positive Net EV.
 4. **`risk_engine.py` (Independent Deterministic Risk Gate — Conscience & Nervous System):**
    - **Core Invariant:** *"Models Propose, Risk Disposes."*
+   - **Continuous Sizing (Spec Section 2.3):** Scales baseline size factor dynamically: $\text{size\_factor} = \text{clamp}(\text{confidence} / \max(\text{vol\_regime}, 0.5), 0.25, 1.0)$.
    - **Priority-0 Subconscious Fallback Reflexes (`bot.txt` Nervous System):**
      1. *Blind Reflex:* If WebSocket feed latency $> 5,000\text{ms}$, or bid/ask spread $> 0.25\%$, or book depth collapses $\rightarrow$ VETO with `REFLEX_BLIND_MODE` (freeze all entries, cancel pending limit orders, hold existing position).
      2. *Motor Reflex:* If consecutive exchange API execution errors $\ge 2$ $\rightarrow$ VETO with `REFLEX_MOTOR_LOCKDOWN` until connectivity clears.
@@ -321,7 +329,7 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
      3. *Anti-Churn / Post-Stop Clearance:* Vetoes breakout intents proposed at or below previous invalidation exit price levels.
      4. *Scale-In / Invalidation Harmonization:* Verifies stop sits strictly below Lot 2 scale-in discount zone.
      5. *In-Situ Memory Soft Stop:* Queries live order book depth when floor is touched. Holds with noise immunity if resting bids absorb sweep ($A_i > 15.0$); approves cut only on bid collapse. Hard backstop ($0.8 \times \text{ATR}$) prevents bag-holding.
-     6. *Shadow Self Worst-Case Stress Simulation Gate (`bot.txt`):* Calculates simulated adverse drop to noise-immune stop ($\text{stress\_loss\_pct} = \frac{P_{\text{entry}} - P_{\text{stop}}}{P_{\text{entry}}} \times 100$). If stress drop exceeds max risk budget ($0.75\%$), dynamically clamps Lot 1 sizing multiplier: $\text{approved\_size\_factor} = \min(1.0, \frac{\text{max\_risk}}{\text{stress\_drop}})$.
+     6. *Shadow Self Worst-Case Stress Simulation Gate (`bot.txt`):* Calculates simulated adverse drop to noise-immune stop ($\text{stress\_loss\_pct} = \frac{P_{\text{entry}} - P_{\text{stop}}}{P_{\text{entry}}} \times 100$). If stress drop exceeds max risk budget ($0.75\%$), dynamically clamps sizing: $\text{approved\_size\_factor} = \min(\text{size\_factor}, \frac{\text{max\_risk}}{\text{stress\_drop}})$.
 5. **`trade_logger.py` & `episodes.jsonl` (Episodic Memory Layer — `bot.txt` Organ 6):**
    - Records full pre-trade cognitive beliefs (`FeatureVector`), `TradeIntent`, and `RiskDecision` at trade entry.
    - On trade exit, calculates:
