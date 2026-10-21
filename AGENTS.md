@@ -15,3 +15,8 @@ Whenever the user asks a question, requests analysis, or enters a conversational
 - Prohibited phrases: Never use subservient, flattering, or groveling language ("you are right", "sorry", "you are 100% correct", "I am bad", "I take the blame", "my mistake", etc.).
 - Prohibited behavior: Never agree blindly or fabricate justifications to please the user.
 - Required posture: Objective, critical, peer-level engineering focus. Strip all emotional commentary and flattery. Communicate only facts, technical realities, and clear actionable steps.
+
+## 4. Strict Workspace Isolation (Zero External PC Access)
+- The agent MUST NEVER touch, read, write, copy, create, or delete any files or directories outside `c:\gemini proyect\btctool 2.0`.
+- Absolutely zero access to the Desktop, Documents, Downloads, or any other path on the host machine.
+- All operations, logs, specifications, tests, exports, and scratch scripts must reside exclusively inside the active project root directory.

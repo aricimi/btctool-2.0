@@ -350,7 +350,7 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
    - Dispatches rich instant Telegram alerts on every action (Entry, Scale-in, Bank Profit, Trailing Stop Ratchet, Thesis Cut, Shadow Self Clamp).
    - Synchronizes `bot_state.json`, `trade_journal.csv` (UTF-8-BOM Excel lock-proof), `trade_journal.md`, `trade_history.json`, and `episodes.jsonl`.
 
-
-
-
+8. **Master Technical Specification & Environment Isolation Directives:**
+   - **Strict Workspace Isolation Rule (AGENTS.md Rule 4):** The agent environment is strictly locked to `c:\gemini proyect\btctool 2.0`. Under no circumstances may any file be created, read, written, modified, or exported to any location outside the project root (including Desktop, Documents, or user profile paths).
+   - **Master Technical Specification Document (`BTCTOOL_2_0_FULL_SPECIFICATION_WITH_OXY.txt`):** 539-line comprehensive engineering blueprint containing the complete decoupled 8-organ architecture, mathematical formulas, OKX V5 REST and WebSocket specifications, fee model, anti-hanging state machine, and production daemon setup. Stored strictly in the project root.
 

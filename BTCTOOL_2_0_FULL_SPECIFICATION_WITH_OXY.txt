@@ -1,0 +1,539 @@
+================================================================================
+🏛️ BTCTOOL 2.0 — FULL TECHNICAL ARCHITECTURE & OXY EXCHANGE IMPLEMENTATION SPEC
+================================================================================
+Document Type: Master Engineering Specification & Implementation Blueprint
+Symbol Target: BTC/USDT (Spot & Derivatives Overlay)
+Architecture: Decoupled 8-Organ Autonomous Agent + Priority-0 Subconscious Nervous System
+Exchange Integration: OKX (Oxy) V5 Unified API (Public WebSocket + Private Execution REST)
+Version: 2.0.4 Production
+
+--------------------------------------------------------------------------------
+TABLE OF CONTENTS
+--------------------------------------------------------------------------------
+0. PRIME DIRECTIVE & PHILOSOPHICAL CORE
+1. SYSTEM TOPOLOGY & DECOUPLED 8-ORGAN ARCHITECTURE
+2. DATA CONTRACTS & TYPE DEFINITIONS
+3. SENSORY INGESTION & VECTORIZED PERCEPTION (ORGAN 1 & 2)
+4. THE MIND: CONTINUOUS EDGE & URGENCY COGNITION (ORGAN 3)
+5. THE CONSCIENCE: DETERMINISTIC RISK INVARIANTS & SHADOW SELF (ORGAN 4)
+6. THE HANDS & MOTOR ADAPTERS (ORGAN 5 & 6)
+7. EPISODIC MEMORY & MATHEMATICAL REGRET (ORGAN 7)
+8. THE EVOLUTIONARY DREAM ENGINE (ORGAN 8)
+9. SUBCONSCIOUS FALLBACK REFLEXES & SURVIVAL INVARIANTS
+10. DEATH PROTOCOL & REBIRTH CYCLE
+11. COMPLETE OXY (OKX) V5 EXCHANGE IMPLEMENTATION SPECIFICATION
+12. STEP-BY-STEP BUILD, DEPLOYMENT & 24/7 DAEMON GUIDE
+
+================================================================================
+0. PRIME DIRECTIVE & PHILOSOPHICAL CORE
+================================================================================
+
+0.1 Prime Directive:
+"Preserve capital first. Pursue opportunity second."
+
+Global Non-Negotiable Invariants:
+1. The agent MUST NEVER violate hard risk limits under any market condition.
+2. The agent MUST prefer "sitting 100% in cash" over taking an "unknown or fee-dragged risk".
+3. All learning, parameter tuning, and weight adjustments MUST be strictly bounded.
+4. "Models Propose, Risk Disposes": Cognition (the Mind) suggests desired exposures;
+   Conscience (the Risk Gate) evaluates capital safety and holds absolute veto power;
+   Hands (Execution) obey the cleared decision with zero discretion.
+
+0.2 Philosophical Core:
+- The market is mostly random noise. True statistical edges are fragile and transient.
+- Discipline and positive mathematical expectancy trump prediction:
+  E[Trade] = (Win_Rate * Avg_Win) - (Loss_Rate * Avg_Loss) - Exchange_Fees - Slippage
+- Profit is a byproduct of hundreds of small, risk-bounded, positive-expectancy decisions.
+- Survival across flash crashes and liquidity vacuums is non-negotiable.
+
+================================================================================
+1. SYSTEM TOPOLOGY & DECOUPLED 8-ORGAN ARCHITECTURE
+================================================================================
+
+The agent operates as a continuous, sub-second event loop structured across 8 isolated organs:
+
+               ┌────────────────────────────────────────────────┐
+               │         ORGAN 1: SENSORY PERCEPTION            │
+               │  Sub-second OKX WebSockets + L2 Book + Tape    │
+               └───────────────────────┬────────────────────────┘
+                                       │ MarketSnapshot
+                                       ▼
+               ┌────────────────────────────────────────────────┐
+               │         ORGAN 2: INTERPRETATION                │
+               │  100-Screen Vectorized State Matrix (<5ms)     │
+               └───────────────────────┬────────────────────────┘
+                                       │ FeatureVector
+                                       ▼
+               ┌────────────────────────────────────────────────┐
+               │         ORGAN 3: COGNITION (THE MIND)          │
+               │  Continuous Edge, Confidence, Urgency, Net EV  │
+               └───────────────────────┬────────────────────────┘
+                                       │ TradeIntent
+                                       ▼
+               ┌────────────────────────────────────────────────┐
+               │       ORGAN 4: CONSCIENCE (THE RISK GATE)      │
+               │  5 Invariants + Shadow Self Worst-Case Stress  │
+               └───────────────────────┬────────────────────────┘
+                                       │ RiskDecision
+                                       ▼
+               ┌────────────────────────────────────────────────┐
+               │         ORGAN 5: HANDS (EXECUTION PLAN)        │
+               │  Dynamic Sizing, Price Bounds, Trailing Stops  │
+               └───────────────────────┬────────────────────────┘
+                                       │ ExecutionPlan
+                                       ▼
+               ┌────────────────────────────────────────────────┐
+               │       ORGAN 6: MOTOR SYSTEM (EXCHANGE I/O)     │
+               │  OKX V5 API REST/WS Orders, Fills, Anti-Hang   │
+               └───────────────────────┬────────────────────────┘
+                                       │ ExecutionReport
+                                       ▼
+               ┌────────────────────────────────────────────────┐
+               │         ORGAN 7: MEMORY (EPISODIC LOG)         │
+               │  Pre-State FeatureVector, Error (e), Regret    │
+               └───────────────────────┬────────────────────────┘
+                                       │ EpisodeLog
+                                       ▼
+               ┌────────────────────────────────────────────────┐
+               │       ORGAN 8: EVOLUTION (OFFLINE DREAM)       │
+               │  Replay Past Episodes, Calibrate Dynamic Gates │
+               └────────────────────────────────────────────────┘
+
+All organs communicate exclusively through strict typed contracts.
+
+================================================================================
+2. DATA CONTRACTS & TYPE DEFINITIONS
+================================================================================
+
+2.1 MarketSnapshot:
+- timestamp: float (epoch milliseconds)
+- latest_price: float
+- best_bid: float, best_ask: float
+- spread: float (best_ask - best_bid)
+- spread_pct: float ((spread / latest_price) * 100)
+- feed_latency_ms: float (processing timestamp - exchange tick timestamp)
+- orderbook_depth: dict of 50 bid levels and 50 ask levels (price -> size)
+- candle_buffers: map of 11 timeframes -> rolling OHLCV ring buffers
+- trade_velocity: float (trades per second)
+- cvd: float (Cumulative Volume Delta)
+- oi_zscore: float (Derivatives Open Interest rolling Z-score)
+- funding_rate: float (OKX perpetual funding rate)
+
+2.2 FeatureVector:
+- trend_strength: float in [-1.0, 1.0] (multi-scale weighted EMA slope across 5m, 15m, 1h)
+- vol_norm: float (composite_atr / latest_price)
+- entropy: float in [0.0, 1.0] (indicator conflict / directional dispersion across screens)
+- vol_regime: float (ATR_5m / max(ATR_1h, 1.0))
+- liquidity: float ((bid_depth + ask_depth) / max(spread, 1.0))
+- composite_atr: float (median ATR across active timeframes)
+- tanh_imbalance: float in [-1.0, 1.0] (anti-spoofing distance-weighted depth imbalance)
+- absorption_index: float (institutional limit absorption volume per dollar drop)
+- regime: string (STRONG_BULL, WEAK_BULL, CHOP, WEAK_BEAR, STRONG_BEAR, EXPANDING_BALLOON)
+
+2.3 TradeIntent:
+- action: string ("ENTER_CORE_LOT_1", "SCALE_IN_LOT_2", "BANK_PROFIT", "CUT_THESIS_INVALIDATED", "RIDE_UNCAPPED", "HOLD_POSITION", "WAIT_IN_CASH")
+- scenario: string ("MOMENTUM_IGNITION_EXPANSION", "DIP_ABSORPTION_TURN", "MACRO_BALLOON_BREAKOUT", "SCANNING")
+- entry_price: float
+- target_price: float
+- proposed_stop: float
+- expected_runway_pct: float
+- confidence: float in [0.0, 1.0]
+- urgency: float in [0.0, 1.0]
+- reason: string (structured diagnostic rationale)
+- telemetry: dict
+
+2.4 RiskDecision:
+- status: string ("ALLOW", "MODIFY", "REJECT")
+- action: string (final approved action dispatched to Hands)
+- scenario: string
+- entry_price: float
+- target_price: float
+- trailing_stop: float
+- invalidation_floor: float
+- approved_size_factor: float (continuous sizing multiplier, 0.25 to 1.0)
+- stress_loss_pct: float (Shadow Self worst-case simulated drop to stop)
+- reason: string
+- telemetry: dict
+
+2.5 ExecutionPlan:
+- symbol: string ("BTC-USDT")
+- side: string ("buy", "sell", "none")
+- size_usdt: float
+- order_type: string ("limit", "market", "post_only", "ioc")
+- price_limit: float
+- trailing_stop_price: float
+- time_in_force: string ("IOC", "GTC")
+
+2.6 EpisodeLog:
+- episode_id: int
+- entry_time: string, exit_time: string
+- setup: string
+- entry_price: float, exit_price: float
+- duration: string
+- gross_pnl_pct: float, net_pnl_pct: float
+- predicted_runway_pct: float (r_hat)
+- prediction_error_pct: float (e = r - r_hat)
+- regret: float (rg = |e| * approved_size_factor)
+- risk_adjusted_reward: float (net_pnl_pct / max(stress_loss_pct, 1.0))
+- feature_vector: dict (compact pre-trade snapshot)
+- trade_intent: dict, risk_decision: dict
+
+================================================================================
+3. SENSORY INGESTION & VECTORIZED PERCEPTION (ORGAN 1 & 2)
+================================================================================
+
+3.1 11-Timeframe Ring Buffers:
+The Sensory Organ maintains rolling deque buffers of maximum 300 bars across 11 horizons:
+Horizons = [1s, 1m, 3m, 5m, 15m, 30m, 1h, 2h, 4h, 6h, 1D]
+- Ticks aggregate continuously without thread sleep or polling lag.
+- Seeding: On cold start, the engine queries OKX REST `/api/v5/market/candles` to backfill
+  100 bars for all 11 timeframes, making indicators active instantly upon boot.
+
+3.2 3-Snapshot Anti-Spoofing Order Book Filter:
+To eliminate phantom orders placed by algorithmic spoofers, the L2 book updates maintain a
+3-snapshot FIFO queue:
+- A bid or ask order is only considered valid institutional depth if it persists across
+  all 3 consecutive snapshots. Transient winks (<50ms) are filtered to zero.
+- Distance-weighted volume:
+  w_i = exp(-40.0 * (|price_i - mid_price| / mid_price))
+- tanh-smoothed depth imbalance:
+  tanh_imbalance = tanh(3.0 * ((sum(bid_vol * w_bid) - sum(ask_vol * w_ask)) /
+                               (sum(bid_vol * w_bid) + sum(ask_vol * w_ask))))
+
+3.3 Real-Time Institutional Absorption Index (Ai):
+Measures aggressive market sells hitting passive limit bids at support:
+  Ai = (Taker_Sell_Volume / max(|Price_Drop|, 0.5)) * log(1 + Bid_Depth)
+  - Ai > 15.0: Whales are aggressively absorbing the dip with resting limit walls.
+  - Ai < 3.0: Thin order book, sellers are slicing through with zero absorption.
+
+3.4 Structural Multi-Screen Boundaries:
+To prevent sub-minute noise candles from acting as fake barriers:
+- Structural horizons = {"5m", "15m", "30m", "1h", "2h", "4h", "6h", "1D"}.
+- Upper and Lower Bollinger Bands (%B, Bandwidth 2.0 std) from structural horizons
+  are pooled with macro swing highs/lows.
+- Sub-minute bands (1s, 1m, 3m) are strictly excluded from structural resistance pools.
+
+================================================================================
+4. THE MIND: CONTINUOUS EDGE & URGENCY COGNITION (ORGAN 3)
+================================================================================
+
+The Mind does not use rigid if-else geometric boxes. It computes a continuous mathematical
+vector field representing directional flow, signal agreement, and urgency:
+
+4.1 Trend Strength:
+Evaluated across 5m, 15m, and 1h horizons:
+  ts_5m  = (EMA_9(5m)  - EMA_21(5m))  / Price
+  ts_15m = (EMA_9(15m) - EMA_21(15m)) / Price
+  ts_1h  = (EMA_9(1h)  - EMA_21(1h))  / Price
+  trend_strength = 0.40 * ts_5m + 0.40 * ts_15m + 0.20 * ts_1h
+
+4.2 Cross-Screen Indicator Directional Entropy:
+Quantifies indicator conflict across all timeframes. For each timeframe, indicators
+vote (+1 bull, -1 bear, 0 chop). From normalized probability distribution p_i:
+  Entropy = - sum(p_i * log2(p_i)) / log2(3)
+  - Entropy = 0.0: Total alignment across all 11 horizons.
+  - Entropy = 1.0: Total signal conflict (random chop).
+
+4.3 Continuous Edge Equation:
+Combines multi-scale trend, order book imbalance, whale absorption, and tape flow:
+  trend_term = tanh(400.0 * trend_strength)
+  imb_term   = tanh_imbalance
+  abs_term   = min(Ai / 20.0, 1.0)
+  flow_term  = +0.5 if (CVD > 0 and Trade_Velocity > 5.0) else (-0.3 if CVD < 0 else 0.0)
+  entropy_penalty = 0.15 * Entropy
+
+  Raw_Edge = (0.35 * trend_term) + (0.25 * imb_term) + (0.20 * abs_term) + (0.20 * flow_term) - entropy_penalty
+  Edge = clamp(Raw_Edge, -1.0, 1.0)
+
+4.4 Confidence & Urgency:
+  Confidence = |Edge| / (1.0 + Entropy)
+  Urgency = Confidence * max(trend_term, 0.0)
+
+4.5 Net Expected Value Formulation (Fee Defense):
+  Projected_Move = max(Nearest_Structural_Resistance - Price, 1.2 * Composite_ATR)
+  Projected_Gross_Pct = (Projected_Move / Price) * 100
+  Net_EV_Pct = Projected_Gross_Pct - OKX_Roundtrip_Fee (0.20%) - Estimated_Slippage (0.02%)
+
+  - If Net_EV_Pct <= 0.05%: Trade has non-positive expectation after exchange friction.
+    Mind issues `WAIT_IN_CASH`.
+  - Momentum Ignition Trigger: If (Urgency >= 0.25 or is_balloon_expanding) and Edge > 0.15 and Net_EV_Pct > 0:
+    Mind immediately proposes `ENTER_CORE_LOT_1` into macro ceiling (+1.5% to +5.5%).
+  - Dip Absorption Turn Trigger: If price testing structural support with Ai > 12.0 and tanh_imb >= 0.0:
+    Mind proposes `ENTER_CORE_LOT_1` with target set to structural resistance.
+
+================================================================================
+5. THE CONSCIENCE: DETERMINISTIC RISK INVARIANTS & SHADOW SELF (ORGAN 4)
+================================================================================
+
+The Conscience executes 5 deterministic invariant checks on every proposed TradeIntent:
+
+5.1 Invariant 1: Expectancy & Net EV Gate:
+Rejects any entry proposal where projected gross runway < 0.45% or reward:risk < 1.5:1.
+
+5.2 Invariant 2: Noise-Immune Floor Calculation:
+Stop loss is mathematically anchored outside sub-minute ATR noise:
+  Raw_Risk = max(Price - Nearest_Support, 0.0) + (0.5 * Composite_ATR)
+  Clamped_Risk = min(max(Raw_Risk, 0.8 * Composite_ATR), 2.0 * Composite_ATR)
+  Approved_Stop = Price - Clamped_Risk
+Stop loss is guaranteed to sit strictly below actual entry fill price.
+
+5.3 Invariant 3: Anti-Churn / Post-Stop Clearance:
+If a previous trade was stopped out at price P_cut, the Risk Gate unconditionally vetoes
+any breakout re-entry proposed at or below P_cut. Eliminates false-breakout churn.
+
+5.4 Invariant 4: In-Situ Memory Soft Stop (Wick-Sweep Defense):
+When market price touches the invalidation floor:
+- Conscience audits real-time L2 book depth:
+  If tanh_imbalance > 0.15 or Absorption_Index > 15.0:
+  The cut proposal is VETOED and overridden to `HOLD_POSITION`. Whale limit bids are
+  absorbing the sweep.
+- If bids collapse (tanh_imbalance <= 0.0 and Ai < 5.0): Structural breakdown confirmed.
+  `CUT_THESIS_INVALIDATED` is approved immediately.
+- Hard Backstop: If price pierces floor by > 0.8 * Composite_ATR, emergency cut triggers
+  unconditionally to preserve capital.
+
+5.5 Invariant 5: Continuous Sizing & Shadow Self Stress Simulation:
+1. Baseline Continuous Target Size:
+   Target_Size_Factor = clamp(Confidence / max(Vol_Regime, 0.5), 0.25, 1.0)
+2. Shadow Self Simulation:
+   Simulates adverse wick down to approved stop:
+   Stress_Loss_Pct = ((Price - Approved_Stop) / Price) * 100
+   If Stress_Loss_Pct > Max_Risk_Budget (0.75%):
+     Stress_Clamp = Max_Risk_Budget / Stress_Loss_Pct
+     Approved_Size_Factor = min(Target_Size_Factor, Stress_Clamp)
+   Guarantees dollar loss in worst-case wick never exceeds risk tolerance.
+
+================================================================================
+6. THE HANDS & MOTOR ADAPTERS (ORGAN 5 & 6)
+================================================================================
+
+6.1 ExecutionPlan Generation:
+Converts cleared RiskDecision into concrete exchange instructions:
+- Size: Base_Core_Lot_USDT * approved_size_factor
+- Slippage Bounds:
+  Buy Price Max = Best_Ask + (0.20 * Composite_ATR)
+  Sell Price Min = Best_Bid - (0.20 * Composite_ATR)
+- Order Types:
+  - IOC (Immediate-Or-Cancel) for high-urgency momentum ignition.
+  - Post-Only Limit for resting support scale-ins (reaps maker rebate).
+
+6.2 Active Position Lifecycle State Machine:
+- `OPEN_CORE_LOT_1`: Deploys core capital, records pre-state FeatureVector snapshot.
+- `SCALE_IN_LOT_2`: Adds discount lot on verified dip absorption above trailing stop.
+  Blended entry recalculated: New_Entry = (Entry_1 + Entry_2) / 2.
+- `RATCHET_TRAILING_STOP`:
+  - When gain >= +0.35%: stop ratchets to Breakeven + Fee (+0.15%).
+  - As price expands: stop trails dynamic structural support (Support - 0.3 * ATR).
+- `RIDE_UNCAPPED`: When macro ceiling opens up and balloon expands, target is stepped
+  higher (+2% to +5%+), allowing winners to run without artificial profit caps.
+- `BANK_PROFIT`: Locks in bagged profit when trailing stop is hit.
+- `CUT_THESIS_INVALIDATED`: Exits at market on confirmed structural support failure.
+
+================================================================================
+7. EPISODIC MEMORY & MATHEMATICAL REGRET (ORGAN 7)
+================================================================================
+
+Every completed trade lifecycle is compiled into an `EpisodeLog` and persisted to
+`episodes.jsonl`:
+
+7.1 Mathematical Metrics:
+- Prediction Error (e):
+  e = Gross_Realized_Return - Predicted_Runway (r_hat)
+- Mathematical Regret (rg):
+  rg = |e| * Approved_Size_Factor
+- Risk-Adjusted Reward:
+  Reward = Net_Realized_PnL_Pct / max(Stress_Loss_Pct, 1.0)
+
+7.2 Multi-Format Persistence:
+- `episodes.jsonl`: Complete high-dimensional JSON Lines for post-mortem machine learning.
+- `trade_history.json`: Structured database storing trade metrics, fees, and error.
+- `trade_journal.md`: Human-readable GitHub-flavored Markdown performance summary.
+- `trade_journal.csv`: UTF-8-BOM spreadsheet ledger with automated Windows lock queue
+  (handles open Excel locks without process termination).
+
+================================================================================
+8. THE EVOLUTIONARY DREAM ENGINE (ORGAN 8)
+================================================================================
+
+Implements offline simulation and parameter recalibration (`dream_engine.py`):
+- Replays past `EpisodeLog` records across different market regimes.
+- Measures Mean Prediction Error and Regret clusters.
+- Automatically diagnoses edge decay:
+  - If Mean Prediction Error < -0.20%: Recommends increasing runway hurdle.
+  - If Regret clusters in high volatility: Recommends tightening Shadow Self stress cap.
+- Exports diagnostic calibration report to `dream_report.md`.
+- Runs completely offline without risking live exchange capital.
+
+================================================================================
+9. SUBCONSCIOUS FALLBACK REFLEXES & SURVIVAL INVARIANTS
+================================================================================
+
+Hardwired Priority-0 reflexes that override the normal decision loop:
+
+9.1 Blind Reflex (Sensory Feed Failure):
+- Triggers if: Feed latency > 5,000ms, or bid/ask spread > 0.25%, or price <= 0.
+- Action: Unconditionally REJECTS all new entries. Cancels pending limit orders. Enters
+  blind defensive hold until sensory feed stabilizes.
+
+9.2 Motor Reflex (Execution Failure):
+- Triggers if: OKX API returns >= 2 consecutive order rejection / network errors.
+- Action: Freezes order dispatch with `REFLEX_MOTOR_LOCKDOWN`. Retries position reconciliation
+  with exponential backoff.
+
+9.3 Safety Reflex (Drawdown Lockdown):
+- Triggers if: Cumulative 24-hour drawdown reaches >= 2.0%.
+- Action: Paralyzes all entry proposals (`ENTER_CORE_LOT_1`, `SCALE_IN_LOT_2`). Permits only
+  risk-reducing exits (`CUT_THESIS_INVALIDATED`, `BANK_PROFIT`).
+
+================================================================================
+10. DEATH PROTOCOL & REBIRTH CYCLE
+================================================================================
+
+10.1 Death Protocol (Emergency Hard Stop):
+- Triggers on: Hard account capital breach (e.g. -5.0%), persistent WebSocket crash (>60s),
+  or unauthorized credential tamper.
+- Execution sequence:
+  1. Freeze: Immediately halt all new intent generation.
+  2. Cancel: Atomic call to OKX REST `DELETE /api/v5/trade/cancel-all-after` and open orders.
+  3. Flatten: Market sell open spot position if volatility is expanding.
+  4. Lock: Write emergency crash dump to disk.
+  5. Sleep: Terminate loop and send high-priority Telegram alert.
+
+10.2 Rebirth Cycle:
+- Supervised restart sequence:
+  1. Purge: Archive corrupted state files to `archive_legacy_trades/`.
+  2. Validate: Verify OKX API keys, balance, and network latency.
+  3. Recalibrate: Run `dream_engine.py` to confirm feature weights.
+  4. Dry-Run: Run 30 seconds of live WebSocket ingestion without order placement.
+  5. Re-Arm: Resume normal trading with 50% initial sizing factor.
+
+================================================================================
+11. COMPLETE OXY (OKX) V5 EXCHANGE IMPLEMENTATION SPECIFICATION
+================================================================================
+
+This section specifies the exact requirements to build the autonomous exchange execution layer
+for OKX (Oxy) Spot trading (BTC/USDT):
+
+11.1 Authentication & Request Signing:
+All private REST and WebSocket calls require OKX V5 signature headers:
+- `OK-ACCESS-KEY`: API Key string
+- `OK-ACCESS-SIGN`: Base64-encoded HMAC-SHA256 signature
+- `OK-ACCESS-TIMESTAMP`: ISO 8601 UTC timestamp format: `YYYY-MM-DDTHH:MM:SS.sssZ`
+- `OK-ACCESS-PASSPHRASE`: User-defined API passphrase
+
+Signature Formula:
+  pre_hash = timestamp + method.upper() + request_path + (body_json_str if body else "")
+  signature = base64.b64encode(hmac.new(secret_key.encode('utf-8'), pre_hash.encode('utf-8'), hashlib.sha256).digest()).decode('utf-8')
+
+11.2 Endpoints Architecture:
+- Public WebSocket: `wss://ws.okx.com:8443/ws/v5/public`
+  Channels subscribed:
+  - `trades` (instId: BTC-USDT) -> Sub-second public trade tape
+  - `books50-l2-tbt` (instId: BTC-USDT) -> 50-level tick-by-tick order book
+  - `tickers` (instId: BTC-USDT) -> 24h volume and price benchmarks
+  - `open-interest` (instId: BTC-USDT-SWAP) -> Futures open interest
+  - `funding-rate` (instId: BTC-USDT-SWAP) -> Perpetual funding rates
+
+- Private REST Endpoints: `https://www.okx.com`
+  - GET `/api/v5/account/balance` -> Real-time USDT and BTC free equity
+  - GET `/api/v5/account/positions` -> Live position reconciliation
+  - POST `/api/v5/trade/order` -> Order placement (Spot market / limit / post-only)
+  - POST `/api/v5/trade/cancel-order` -> Cancel specific order
+  - POST `/api/v5/trade/cancel-batch-orders` -> Cancel multiple orders
+  - GET `/api/v5/trade/orders-pending` -> Query unfilled active orders
+
+11.3 OKX Spot Fee Accounting Model:
+- Standard OKX Spot taker fee: 0.10% (0.0010)
+- Standard OKX Spot maker fee: 0.08% (0.0008)
+- Round-Trip Taker Standard: 0.20% (0.0020)
+- Fee Integration Formula:
+  Net_PnL = ((Exit_Price - Entry_Price) / Entry_Price) - 0.0020
+  - All gross profits must clear 0.20% before any trade is recorded as net positive.
+  - The Mind enforces Net_EV > +0.05% after deducting this 0.20% baseline fee.
+
+11.4 Order State Machine & Anti-Hanging Protection:
+When placing an order:
+1. Generate unique Client Order ID: `clOrdId = "btctool_" + uuid4().hex[:16]`
+2. Dispatch order with 5-second timeout.
+3. If order is limit/post-only and remains unfilled after 5 seconds:
+   - Call `/api/v5/trade/cancel-order`.
+   - Re-check `/api/v5/account/balance` to reconcile any partial fills.
+   - If partially filled: update active trade lot size and blended entry price.
+   - If completely unfilled: return to `WAIT_IN_CASH`. Never leave orphan hanging orders.
+
+================================================================================
+12. STEP-BY-STEP BUILD, DEPLOYMENT & 24/7 DAEMON GUIDE
+================================================================================
+
+12.1 Directory Structure:
+```text
+btctool-2.0/
+├── alert_bot.py            # Main autonomous event daemon & keep-alive server
+├── zebra_bot.py            # Orchestrator wiring Perception -> Mind -> Risk -> Hands
+├── market_stream.py        # Asynchronous OKX WebSocket sensory ingestion
+├── market_state.py         # 100-Screen Vectorized State Matrix & FeatureVector
+├── conviction_engine.py    # Continuous Edge, Urgency & Net EV Brain
+├── risk_engine.py          # Deterministic Conscience, 5 Invariants & Reflexes
+├── execution_manager.py    # Lifecycle manager, dynamic sizing, trailing stops
+├── okx_trader.py           # OKX V5 REST API execution client
+├── trade_logger.py         # Multi-format ledger (Markdown, CSV, JSON, JSONL)
+├── dream_engine.py         # Offline replay & parameter recalibration organ
+├── test_zebra.py           # Complete unit & integration test suite (7 tests)
+├── PROJECT_BLUEPRINT.md    # Master single source of truth
+├── requirements.txt        # Python dependency manifest
+├── telegram_config.json    # Telegram bot token and chat ID
+└── okx_credentials.json    # OKX API key, secret, passphrase (gitignored)
+```
+
+12.2 Python Dependencies (`requirements.txt`):
+```text
+websockets>=12.0
+requests>=2.31.0
+numpy>=1.26.0
+pandas>=2.2.0
+plotly>=5.18.0
+streamlit>=1.31.0
+```
+
+12.3 Configuration Setup:
+1. `telegram_config.json`:
+   {
+     "bot_token": "YOUR_TELEGRAM_BOT_TOKEN",
+     "chat_id": "YOUR_TELEGRAM_CHAT_ID"
+   }
+2. `okx_credentials.json`:
+   {
+     "api_key": "YOUR_OKX_API_KEY",
+     "secret_key": "YOUR_OKX_SECRET_KEY",
+     "passphrase": "YOUR_OKX_PASSPHRASE",
+     "is_simulated": false
+   }
+
+12.4 Verification Before Live Launch:
+Run the unit test suite:
+  `python -m unittest test_zebra.py`
+All 7 tests must pass in <0.10s:
+- Synthetic stream & candle aggregation
+- Anti-spoofing orderbook & tanh imbalance
+- Vectorized 100-Screen State Matrix speed (<15ms)
+- Predictive brain & multi-screen decisions
+- Execution manager clean slate & trailing ratchets
+- Subconscious reflexes (Blind, Motor, Safety) & Shadow Self
+- Episodic memory logging & Dream Engine replay
+
+12.5 Launching the 24/7 Autonomous Daemon:
+To launch with a clean slate starting from Trade #1:
+  `python -u alert_bot.py --clean`
+To run continuously in background on Linux/macOS:
+  `nohup python -u alert_bot.py > bot.log 2>&1 &`
+To run continuously on Windows:
+  `python -u alert_bot.py` (or through system service / PM2 / background task).
+
+12.6 Live Health Monitoring:
+- Built-in HTTP health check server listens on port `10000`.
+- Ping `http://localhost:10000` via UptimeRobot or curl for 24/7 uptime monitoring.
+- Send `/status` to your Telegram bot at any time to receive instant 11-timeframe telemetry.
+
+================================================================================
+END OF SPECIFICATION · BTCTOOL 2.0 AUTONOMOUS TRADING AGENT
+================================================================================
