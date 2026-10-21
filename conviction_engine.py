@@ -93,7 +93,8 @@ class BeliefSystem:
 
         # Persistence multiplier: prevents isolated 1-tick flash spikes from triggering full conviction
         pers_mult = min(1.0, 0.70 + (0.15 * min(persistence, 2)))
-        raw_conviction = abs(smoothed_bias) / (1.0 + smoothed_entropy)
+        # Calibrated conviction: normalizes practical signal capacity (0.35) to [0.0, 1.0] domain
+        raw_conviction = abs(smoothed_bias) / (0.35 * (1.0 + 0.5 * smoothed_entropy))
         conviction = float(np.clip(raw_conviction * pers_mult, 0.0, 1.0))
 
         # Regime belief classification
@@ -318,7 +319,7 @@ class FreeConvictionEngine:
 
         raw_edge = (0.35 * trend_term) + (0.25 * imb_term) + (0.20 * abs_term) + (0.20 * flow_term) - (0.15 * entropy)
         edge = float(np.clip(raw_edge, -1.0, 1.0))
-        instant_conf = float(max(0.0, abs(edge) / (1.0 + entropy)))
+        instant_conf = float(np.clip(abs(edge) / (0.35 * (1.0 + 0.5 * entropy)), 0.0, 1.0))
         urgency = float(instant_conf * max(trend_term, 0.0))
 
         # 2.2 UPDATE EXPLICIT BELIEF SYSTEM (Component 5) & ADAPTIVE HURDLES (Component 2)
@@ -340,7 +341,8 @@ class FreeConvictionEngine:
 
         # 2.3 NET EXPECTED VALUE FORMULATION (Spec Section 11.2)
         dist_to_struct_res = max(nearest_resistance - price, 0.0)
-        projected_move = max(dist_to_struct_res, 1.2 * atr)
+        macro_space = max(macro_ceiling - price, 0.0) if is_balloon_expanding else 0.0
+        projected_move = max(dist_to_struct_res, macro_space, 1.2 * atr)
         projected_gross_pct = max((projected_move / price) * 100.0, immediate_runway) if price > 0 else 0.0
         spread_pct = float(matrix.get("spread_pct", 0.0))
         # Dynamic slippage estimation: baseline 0.02%, scaled by half-spread + 25% execution impact
@@ -371,12 +373,13 @@ class FreeConvictionEngine:
         # 2.4 MANDATORY NET EXPECTANCY GATE (v3.0 Invariant 4)
         # Rejects entries if Net EV <= 0.05% or if immediate runway is compressed without macro space.
         # Zero bypass loopholes permitted!
-        if net_ev_pct <= 0.05 or (immediate_runway < adaptive_runway and macro_runway < 1.50):
+        effective_runway = max(immediate_runway, macro_runway if is_balloon_expanding else 0.0)
+        if net_ev_pct <= 0.05 or effective_runway < adaptive_runway:
             return TradeIntent(
                 action="WAIT_IN_CASH",
-                expected_runway_pct=immediate_runway,
+                expected_runway_pct=effective_runway,
                 confidence=effective_conf,
-                reason=f"NO REAL GAIN ON TABLE: Net EV={net_ev_pct:+.2f}%, Immediate runway is only +{immediate_runway:.2f}% (requires >= {adaptive_runway:.2f}% adaptive hurdle under entropy {belief.entropy_ema:.2f}). Sitting in cash.",
+                reason=f"NO REAL GAIN ON TABLE: Net EV={net_ev_pct:+.2f}%, Effective runway is only +{effective_runway:.2f}% (requires >= {adaptive_runway:.2f}% adaptive hurdle under entropy {belief.entropy_ema:.2f}). Sitting in cash.",
                 telemetry=intent_telemetry,
             )
 
@@ -392,9 +395,9 @@ class FreeConvictionEngine:
 
         # 2.5B ADAPTIVE CONFIDENCE THRESHOLD BASED ON REGIME (v3.0 Priority 3)
         # TREND: 0.50 | BALANCED / RANGE: 0.65 | CHOP / HIGH ENTROPY: 0.80
-        if is_balloon_expanding and vol_regime >= 1.0 and entropy < 0.40:
+        if belief.regime_belief == "BULL_ACCELERATION" or (is_balloon_expanding and entropy < 0.50):
             regime_conf_hurdle = 0.50
-        elif is_slow_market or entropy >= 0.65 or vol_regime < 0.70:
+        elif is_slow_market or entropy >= 0.65 or belief.regime_belief == "CHOP_COMPRESSION":
             regime_conf_hurdle = 0.80
         else:
             regime_conf_hurdle = 0.65
@@ -432,7 +435,7 @@ class FreeConvictionEngine:
 
             if governor:
                 h = governor.get_health("DIP_ABSORPTION_TURN")
-                pw = float(np.clip(h.win_rate, 0.25, 0.80)) if h.trades_last_20 >= 3 else float(np.clip(0.55 + 0.10 * (absorption_idx / 20.0), 0.40, 0.70))
+                pw = float(np.clip(h.win_rate, 0.25, 0.80)) if h.total_trades >= 3 else float(np.clip(0.55 + 0.10 * (absorption_idx / 20.0), 0.40, 0.70))
             else:
                 pw = float(np.clip(0.55 + 0.10 * min(absorption_idx / 20.0, 1.0), 0.40, 0.70))
 
@@ -481,7 +484,7 @@ class FreeConvictionEngine:
 
             if governor:
                 h = governor.get_health("MACRO_BALLOON_BREAKOUT")
-                pw = float(np.clip(h.win_rate, 0.20, 0.80)) if h.trades_last_20 >= 3 else float(np.clip(0.40 + 0.15 * tuned_confidence, 0.35, 0.65))
+                pw = float(np.clip(h.win_rate, 0.20, 0.80)) if h.total_trades >= 3 else float(np.clip(0.40 + 0.15 * tuned_confidence, 0.35, 0.65))
             else:
                 pw = float(np.clip(0.40 + 0.15 * tuned_confidence, 0.35, 0.65))
 

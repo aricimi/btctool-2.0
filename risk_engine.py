@@ -41,6 +41,7 @@ class SetupHealth:
     size_multiplier: float = 1.0  # 0.0 to 1.0
     confidence_modifier: float = 0.0  # +0.00, +0.05, +0.10
     is_disabled: bool = False
+    trades_last_20: int = 0
 
 
 class SetupPerformanceGovernor:
@@ -116,6 +117,7 @@ class SetupPerformanceGovernor:
             size_multiplier=size_mult,
             confidence_modifier=conf_mod,
             is_disabled=disabled,
+            trades_last_20=len(trades),
         )
 
 

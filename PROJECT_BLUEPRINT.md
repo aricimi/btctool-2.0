@@ -314,18 +314,21 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
        $$\text{bias}_t = \lambda \cdot \text{bias}_{t-1} + (1 - \lambda) \cdot \text{raw\_edge}_t$$
        $$\text{entropy\_ema}_t = \lambda \cdot \text{entropy\_ema}_{t-1} + (1 - \lambda) \cdot \text{entropy}_t$$
      - Polarity persistence: Tracks consecutive ticks of consistent sign, applying an anti-flicker conviction multiplier ($\min(1.0, 0.70 + 0.15 \cdot \text{persistence})$) to prevent 1-tick flash spikes from triggering full size.
+     - Calibrated Conviction Normalization: Maps practical signal capacity ($0.35$) onto the $[0.0, 1.0]$ probability domain:
+       $$\text{Conviction} = \text{clip}\left(\frac{|\text{bias}_t|}{0.35 \cdot (1.0 + 0.5 \cdot \text{entropy\_ema}_t)}, 0.0, 1.0\right) \cdot \text{pers\_mult}$$
      - Regime belief classification: `BULL_ACCELERATION`, `BEAR_PRESSURE`, `CHOP_COMPRESSION`, `NEUTRAL_WAIT`.
    - **Component 3: Adaptive Confidence Thresholds based on Regime:**
-     - TREND: $\theta_{\text{conf}} = 0.50$ (clean flow, enter early into waves).
+     - TREND / `BULL_ACCELERATION`: $\theta_{\text{conf}} = 0.50$ (clean flow, enter early into waves).
      - BALANCED / RANGE: $\theta_{\text{conf}} = 0.65$.
-     - CHOP / HIGH ENTROPY: $\theta_{\text{conf}} = 0.80$ (demands overwhelming institutional conviction before risking capital).
+     - CHOP / HIGH ENTROPY ($\ge 0.65$) or `CHOP_COMPRESSION`: $\theta_{\text{conf}} = 0.80$ (demands overwhelming institutional conviction before risking capital).
    - **Component 7: Intuition Tripwires (Modifiers Only):**
      - Fast-path tape acceleration ($>8.0$ trades/sec with positive CVD) or strong absorption ($A_i > 20$) adds $+0.05$ to confidence.
      - Spread inflation ($>0.15\%$) or aggressive taker dumps subtracts $-0.05$ from confidence. Never triggers trades directly.
    - **Component 4: Mandatory Net Expectancy Gate:**
-     $$\mathbb{E}[\text{PnL}_{\text{net}}] = \frac{\max(\text{distance to structural resistance}, 1.2 \cdot \text{ATR})}{P} \times 100 - \text{OKX Fee (0.20%)} - \text{Slippage}_{\text{dynamic}}$$
+     $$\text{Projected\_Move} = \max(\text{distance to structural resistance}, \text{macro\_space if balloon expanding}, 1.2 \cdot \text{ATR})$$
+     $$\mathbb{E}[\text{PnL}_{\text{net}}] = \frac{\text{Projected\_Move}}{P} \times 100 - \text{OKX Fee (0.20%)} - \text{Slippage}_{\text{dynamic}}$$
      where $\text{Slippage}_{\text{dynamic}} = \max\left(0.02\%, \frac{\text{spread\_pct}}{2.0} \times 1.25\right)$, accurately penalizing friction during spread expansions.
-     Unconditionally rejects trades where $\mathbb{E}[\text{PnL}_{\text{net}}] \le 0.05\%$. Zero bypass loopholes permitted!
+     Unconditionally rejects trades where $\mathbb{E}[\text{PnL}_{\text{net}}] \le 0.05\%$ or $\text{effective\_runway} < \text{adaptive\_runway\_hurdle}$. Zero bypass loopholes permitted!
    - **Momentum Ignition Gating:** Breakouts strictly require: $\text{effective\_edge} \ge 0.15$, $\text{effective\_urgency} \ge 0.15$, tuned confidence $\ge \theta_{\text{conf}}$, and Belief State $\neq$ `CHOP_COMPRESSION`.
    - **Dip Turn Reversal Trigger:** When testing structural support with resting bid absorption ($A_i > 12.0$, $\tanh_{\text{imb}} \ge 0.0$) and clearing adaptive runway hurdle.
    - **Overhauled Trailing Stop & Breakeven Calibration (Hands & Lifecycle):**
