@@ -40,89 +40,18 @@ class TradeJournal:
             except Exception as e:
                 print(f"[Journal] Error loading history: {e}")
 
-        # Seed with initial historical record
+        # Clean slate default initialization
         self.data: Dict[str, Any] = {
-            "trades": [
-                {
-                    "id": 1,
-                    "type": "SPOT_BUY",
-                    "setup": "MULTI-SCALE CONFLUENCE",
-                    "entry_time": "2026-10-18 22:26:54",
-                    "entry_price": 80938.79,
-                    "exit_time": "2026-10-18 23:40:19",
-                    "exit_price": 81133.34,
-                    "duration": "1h 13m",
-                    "gross_pnl_pct": 0.24,
-                    "okx_fee_pct": -0.20,
-                    "net_pnl_pct": 0.04,
-                    "exit_reason": "1M Thrust Exhaustion at Resistance",
-                    "status": "CLOSED_PROFIT"
-                },
-                {
-                    "id": 2,
-                    "type": "SPOT_BUY",
-                    "setup": "BREAKOUT RE-ENGAGEMENT",
-                    "entry_time": "2026-10-18 23:53:30",
-                    "entry_price": 81175.20,
-                    "exit_time": "2026-10-19 00:55:00",
-                    "exit_price": 81750.00,
-                    "duration": "1h 01m",
-                    "gross_pnl_pct": 0.71,
-                    "okx_fee_pct": -0.20,
-                    "net_pnl_pct": 0.51,
-                    "exit_reason": "Trailing Stop Locked Profit",
-                    "status": "CLOSED_PROFIT"
-                },
-                {
-                    "id": 3,
-                    "type": "SPOT_BUY",
-                    "setup": "TAKER IGNITION CONFLUENCE",
-                    "entry_time": "2026-10-19 01:28:25",
-                    "entry_price": 82130.00,
-                    "exit_time": "2026-10-19 03:43:49",
-                    "exit_price": 82522.00,
-                    "duration": "2h 15m",
-                    "gross_pnl_pct": 0.48,
-                    "okx_fee_pct": -0.20,
-                    "net_pnl_pct": 0.28,
-                    "exit_reason": "1M Volume/Thrust Stalled at Resistance",
-                    "status": "CLOSED_PROFIT"
-                },
-                {
-                    "id": 4,
-                    "type": "SPOT_BUY",
-                    "setup": "MULTI-SCALE CONFLUENCE (DIP REVERSAL)",
-                    "entry_time": "2026-10-19 05:24:23",
-                    "entry_price": 82585.10,
-                    "exit_time": "2026-10-19 06:47:30",
-                    "exit_price": 82810.10,
-                    "duration": "1h 23m",
-                    "gross_pnl_pct": 0.27,
-                    "okx_fee_pct": -0.20,
-                    "net_pnl_pct": 0.07,
-                    "exit_reason": "1M Volume/Thrust Stalled at Resistance",
-                    "status": "CLOSED_PROFIT"
-                },
-                {
-                    "id": 5,
-                    "type": "SPOT_BUY",
-                    "setup": "RE-ENGAGEMENT: BREAKOUT MOMENTUM RESUMPTION",
-                    "entry_time": "2026-10-19 06:56:54",
-                    "entry_price": 82786.10,
-                    "exit_time": None,
-                    "exit_price": None,
-                    "duration": None,
-                    "target_1": 83472.91,
-                    "target_2": 84068.15,
-                    "stop_loss": 82328.22,
-                    "gross_pnl_pct": None,
-                    "okx_fee_pct": -0.20,
-                    "net_pnl_pct": None,
-                    "exit_reason": None,
-                    "status": "ACTIVE_OPEN"
-                }
-            ],
-            "stats": {}
+            "trades": [],
+            "stats": {
+                "total_closed_trades": 0,
+                "wins": 0,
+                "losses": 0,
+                "win_rate_pct": 0.0,
+                "gross_cumulative_pct": 0.0,
+                "total_fees_pct": 0.0,
+                "net_cumulative_pct": 0.0,
+            },
         }
         self._recalculate_and_save()
 

@@ -36,12 +36,27 @@ class ExecutionManager:
         os.makedirs(ARCHIVE_DIR, exist_ok=True)
         timestamp_str = time.strftime("%Y%m%d_%H%M%S")
 
-        files_to_archive = ["trade_history.json", "trade_journal.csv", "trade_journal.md", "bot_state.json"]
+        files_to_archive = [
+            "trade_history.json",
+            "trade_journal.csv",
+            "trade_journal.md",
+            "bot_state.json",
+            "episodes.jsonl",
+            "dream_report.md",
+        ]
         for fname in files_to_archive:
             src = os.path.join(BASE_DIR, fname)
             if os.path.exists(src):
                 dst = os.path.join(ARCHIVE_DIR, f"{timestamp_str}_{fname}")
                 shutil.copy2(src, dst)
+
+        # Clear active episodes.jsonl for clean post-upgrade memory
+        ep_file = os.path.join(BASE_DIR, "episodes.jsonl")
+        if os.path.exists(ep_file):
+            try:
+                os.remove(ep_file)
+            except Exception as e:
+                logger.warning(f"[Execution] Could not remove episodes.jsonl: {e}")
 
         # Reset trade_history.json to clean slate
         fresh_history = {

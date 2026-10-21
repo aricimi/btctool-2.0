@@ -98,6 +98,9 @@ class TestZebraBot(unittest.TestCase):
         self.stream.bids = {81990.0: 5.0, 81950.0: 10.0}
         self.stream.asks = {82010.0: 4.0, 82050.0: 8.0}
 
+        # Warm-up pass to eliminate initial Python/JIT import latency
+        _ = self.state_calculator.extract_state_matrix(self.stream)
+
         t0 = time.time()
         matrix = self.state_calculator.extract_state_matrix(self.stream)
         elapsed_ms = (time.time() - t0) * 1000.0

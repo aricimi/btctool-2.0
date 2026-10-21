@@ -1,28 +1,15 @@
 ﻿Trade #,Status,Type,Setup,Entry Time,Exit Time,Hold Duration,Entry Price ($),Exit Price ($),Target 1 ($),Target 2 ($),Stop Loss ($),Gross PnL (%),OKX Fee (%),Net PnL (%),Result,Exit Reason
-1,CLOSED_LOSS,SPOT_BUY,ZEBRA AUTONOMOUS: P_up=71.7%,2026-10-19 22:17:19,2026-10-19 22:25:18,7m,82052.80,82000.00,,,,-0.06%,-0.20%,-0.26%,LOSS,ZEBRA EXIT: Directional edge flipped negative (P_up=39.3%). Exiting immediately at market. (P_up=39.3%)
-2,CLOSED_LOSS,SPOT_BUY,ZEBRA AUTONOMOUS: P_up=69.3%,2026-10-19 22:27:10,2026-10-19 22:28:25,1m,82021.80,82021.30,,,,-0.00%,-0.20%,-0.20%,LOSS,ZEBRA EXIT: Directional edge flipped negative (P_up=43.4%). Exiting immediately at market. (P_up=43.4%)
-3,CLOSED_LOSS,SPOT_BUY,ZEBRA AUTONOMOUS: P_up=71.4%,2026-10-19 22:29:51,2026-10-19 22:30:55,1m,82024.90,82014.40,,,,-0.01%,-0.20%,-0.21%,LOSS,ZEBRA EXIT: Directional edge flipped negative (P_up=42.4%). Exiting immediately at market. (P_up=42.4%)
-4,CLOSED_LOSS,SPOT_BUY,ZEBRA AUTONOMOUS: P_up=67.3%,2026-10-19 22:34:38,2026-10-19 22:35:10,0m,82043.50,82010.90,,,,-0.04%,-0.20%,-0.24%,LOSS,ZEBRA EXIT: Directional edge flipped negative (P_up=43.8%). Exiting immediately at market. (P_up=43.8%)
-5,CLOSED_LOSS,SPOT_BUY,ZEBRA AUTONOMOUS: P_up=68.8%,2026-10-19 22:35:58,2026-10-19 22:38:55,2m,82013.60,81988.80,,,,-0.03%,-0.20%,-0.23%,LOSS,ZEBRA EXIT: Directional edge flipped negative (P_up=43.1%). Exiting immediately at market. (P_up=43.1%)
-6,CLOSED_LOSS,SPOT_BUY,ZEBRA AUTONOMOUS: P_up=73.4%,2026-10-19 22:40:15,2026-10-19 22:47:13,6m,82025.30,82004.40,,,,-0.03%,-0.20%,-0.23%,LOSS,ZEBRA EXIT: Directional edge flipped negative (P_up=41.7%). Exiting immediately at market. (P_up=41.7%)
-7,CLOSED_LOSS,SPOT_BUY,ZEBRA AUTONOMOUS: P_up=67.2%,2026-10-19 22:48:24,2026-10-19 22:50:03,1m,82018.90,82004.30,,,,-0.02%,-0.20%,-0.22%,LOSS,ZEBRA EXIT: Directional edge flipped negative (P_up=43.6%). Exiting immediately at market. (P_up=43.6%)
-8,CLOSED_LOSS,SPOT_BUY,ZEBRA AUTONOMOUS: P_up=70.9%,2026-10-19 22:59:48,2026-10-19 23:02:01,2m,82023.00,82028.50,,,,+0.01%,-0.20%,-0.19%,LOSS,ZEBRA EXIT: Directional edge flipped negative (P_up=42.7%). Exiting immediately at market. (P_up=42.7%)
-9,CLOSED_LOSS,SPOT_BUY,ZEBRA AUTONOMOUS: P_up=68.5%,2026-10-19 23:03:05,2026-10-19 23:18:54,15m,82049.90,82078.70,,,,+0.04%,-0.20%,-0.16%,LOSS,ZEBRA EXIT: Directional edge flipped negative (P_up=41.2%). Exiting immediately at market. (P_up=41.2%)
-10,CLOSED_LOSS,SPOT_BUY,ZEBRA AUTONOMOUS: P_up=66.8%,2026-10-19 23:23:09,2026-10-19 23:26:09,3m,82125.00,82101.60,,,,-0.03%,-0.20%,-0.23%,LOSS,ZEBRA EXIT: Directional edge flipped negative (P_up=42.0%). Exiting immediately at market. (P_up=42.0%)
-11,CLOSED_LOSS,SPOT_BUY,ZEBRA AUTONOMOUS: P_up=68.8%,2026-10-19 23:29:37,2026-10-19 23:32:59,3m,82081.40,82078.00,,,,-0.00%,-0.20%,-0.20%,LOSS,ZEBRA EXIT: Directional edge flipped negative (P_up=43.9%). Exiting immediately at market. (P_up=43.9%)
-12,CLOSED_LOSS,SPOT_BUY,ZEBRA AUTONOMOUS: P_up=67.1%,2026-10-20 00:03:42,2026-10-20 00:31:03,27m,82107.10,82108.50,,,,+0.00%,-0.20%,-0.20%,LOSS,ZEBRA EXIT: Directional edge flipped negative (P_up=43.8%). Exiting immediately at market. (P_up=43.8%)
-13,CLOSED_LOSS,SPOT_BUY,ZEBRA AUTONOMOUS: P_up=68.0%,2026-10-20 03:46:22,2026-10-20 03:47:05,0m,81704.70,81799.90,,,,+0.12%,-0.20%,-0.08%,LOSS,ZEBRA EXIT: Directional edge flipped negative (P_up=43.5%). Exiting immediately at market. (P_up=43.5%)
-14,CLOSED_LOSS,SPOT_BUY,ZEBRA AUTONOMOUS: P_up=68.0%,2026-10-20 03:56:12,2026-10-20 03:57:05,0m,81817.10,81808.90,,,,-0.01%,-0.20%,-0.21%,LOSS,ZEBRA EXIT: Directional edge flipped negative (P_up=41.4%). Exiting immediately at market. (P_up=41.4%)
-15,CLOSED_LOSS,SPOT_BUY,ZEBRA AUTONOMOUS: P_up=72.3%,2026-10-20 04:48:30,2026-10-20 04:49:35,1m,81829.80,81814.80,,,,-0.02%,-0.20%,-0.22%,LOSS,ZEBRA EXIT: Directional edge flipped negative (P_up=43.5%). Exiting immediately at market. (P_up=43.5%)
-16,CLOSED_LOSS,SPOT_BUY,ZEBRA AUTONOMOUS: P_up=68.7%,2026-10-20 04:50:23,2026-10-20 04:51:02,0m,81843.70,81875.00,,,,+0.04%,-0.20%,-0.16%,LOSS,ZEBRA EXIT: Directional edge flipped negative (P_up=42.4%). Exiting immediately at market. (P_up=42.4%)
-17,CLOSED_LOSS,SPOT_BUY,ZEBRA AUTONOMOUS: P_up=69.7%,2026-10-20 05:07:13,2026-10-20 05:16:06,8m,81898.50,81889.30,,,,-0.01%,-0.20%,-0.21%,LOSS,ZEBRA EXIT: Directional edge flipped negative (P_up=41.1%). Exiting immediately at market. (P_up=41.1%)
-18,CLOSED_LOSS,SPOT_BUY,ZEBRA AUTONOMOUS: P_up=69.7%,2026-10-20 05:33:02,2026-10-20 06:28:02,55m,81971.20,82094.40,,,,+0.15%,-0.20%,-0.05%,LOSS,ZEBRA EXIT: Directional edge flipped negative (P_up=40.0%). Exiting immediately at market. (P_up=40.0%)
+1,CLOSED_LOSS,SPOT_BUY,ZEBRA WHALE: MACRO_BALLOON_BREAKOUT,2026-10-20 18:07:28,2026-10-20 18:12:12,4m,82635.10,82453.30,87238.30,,82453.30,-0.22%,-0.20%,-0.42%,LOSS,"ZEBRA EXIT: STOP HIT: Price crossed floor at $82,453.30. Controlled cut small (-0.15%)."
+2,CLOSED_LOSS,SPOT_BUY,ZEBRA WHALE: MACRO_BALLOON_BREAKOUT,2026-10-20 18:12:13,2026-10-20 20:25:35,2h 13m,82453.30,82534.40,87238.30,,82271.90,+0.10%,-0.20%,-0.10%,LOSS,ZEBRA EXIT: STRUCTURAL BREAKDOWN: Support broken without bid absorption. Controlled cut small (+0.15%).
+3,CLOSED_LOSS,SPOT_BUY,ZEBRA WHALE: DIP_ABSORPTION_TURN,2026-10-20 20:28:03,2026-10-20 20:28:04,0m,82535.60,82545.80,82536.16,,82162.95,+0.01%,-0.20%,-0.19%,LOSS,ZEBRA EXIT: TARGET HIT (+0.01%). Resistance capping momentum. Securing profit in wallet.
+4,CLOSED_LOSS,SPOT_BUY,ZEBRA WHALE: DIP_ABSORPTION_TURN,2026-10-20 20:28:08,2026-10-20 20:28:16,0m,82539.70,82564.50,82548.85,,82167.05,+0.03%,-0.20%,-0.17%,LOSS,ZEBRA EXIT: TARGET HIT (+0.03%). Resistance capping momentum. Securing profit in wallet.
+5,CLOSED_PROFIT,SPOT_BUY,ZEBRA WHALE: DIP_ABSORPTION_TURN,2026-10-20 20:28:20,2026-10-21 00:20:01,3h 51m,82567.00,83076.50,82593.38,,82194.35,+0.62%,-0.20%,+0.42%,WIN,"ZEBRA EXIT: TRAILING STOP HIT (+0.63% net). Locking in banked profit at $83,076.50."
 
 === SUMMARY PERFORMANCE ===
-Total Closed Trades,18
-Win Rate,0.0%
-Wins,0
-Losses,18
-Gross Cumulative Gain,+0.10%
-Total OKX Fees Deducted,-3.60%
-Net Realized Profit,-3.50%
+Total Closed Trades,5
+Win Rate,20.0%
+Wins,1
+Losses,4
+Gross Cumulative Gain,+0.54%
+Total OKX Fees Deducted,-1.00%
+Net Realized Profit,-0.46%
