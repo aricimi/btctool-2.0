@@ -36,7 +36,7 @@ This document serves as the **Single Source of Truth** for the entire project.
 | **Trade History Data** | JSON Persistence | [`trade_history.json`](file:///c:/gemini%20proyect/btctool%202.0/trade_history.json) | Structured trade lifecycle database with full duration, fee, and PnL metrics |
 | **Frontend UI** | Streamlit + Plotly | [`app.py`](file:///c:/gemini%20proyect/btctool%202.0/app.py) | Interactive dark theme, multi-timeframe matrices, trade directive card, triple RSI subplots, persistent disclaimers |
 | **Theme / Server** | Streamlit Config | [`.streamlit/config.toml`](file:///c:/gemini%20proyect/btctool%202.0/.streamlit/config.toml) | Primary: `#00FFA3`, Background: `#0A0E17`, Secondary: `#131B2E`, Headless: `true` |
-| **Dependencies** | Python PIP | [`requirements.txt`](file:///c:/gemini%20proyect/btctool%202.0/requirements.txt) | `pandas`, `numpy`, `yfinance`, `streamlit`, `requests`, `gunicorn`, `plotly` |
+| **Dependencies** | Python PIP | [`requirements.txt`](file:///c:/gemini%20proyect/btctool%202.0/requirements.txt) | `pandas`, `numpy`, `yfinance`, `streamlit`, `requests`, `gunicorn`, `plotly`, `scikit-learn`, `websockets` |
 | **Edge Tunnel** | Cloudflare Tunnel | Daemon Process | Maps local `http://localhost:8501` to live public edge URL |
 
 ---
@@ -458,6 +458,7 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
      - Added buffer warmup fallback telemetry: responds immediately with clean status if queried during initial WebSocket stream initialization.
      - Unified TelegramNotifier across zebra_bot.py and alert_bot.py into a single canonical class.
      - Added integration test test_21_telegram_command_normalization_and_routing in test_zebra.py (21 passing integration and unit tests).
+     - Added websockets>=12.0 to requirements.txt to satisfy cloud deployment dependencies for Render.
    - **Strict Workspace Isolation Rule (AGENTS.md Rule 4):** The agent environment is strictly locked to `c:\gemini proyect\btctool 2.0`. Under no circumstances may any file be created, read, written, modified, or exported outside the project root.
    - **Master Technical Specification Document (`BTCTOOL_2_0_FULL_SPECIFICATION_WITH_OXY.txt`):** Synchronized to Version 3.2.0 Production with all mathematical formulas, OKX V5 REST and WebSocket specifications, fee model, anti-hanging state machine, and production daemon setup. Stored strictly in the project root.
 

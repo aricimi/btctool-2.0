@@ -6,3 +6,4 @@ requests
 gunicorn
 plotly
 scikit-learn>=1.4.0
+websockets>=12.0
