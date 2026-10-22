@@ -344,12 +344,12 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
    - **Component 1: Setup Performance Governor (`SetupPerformanceGovernor` & `SetupHealth`):**
      - Monitors rolling 20 closed trades for each setup name (`MACRO_BALLOON_BREAKOUT`, `DIP_ABSORPTION_TURN`).
      - Computes rolling win rate, average net PnL, and health score in $[0, 100]$.
-     - 5 Contiguous Half-Open Health Tiers:
-       - $[80.0, 100.0]$: 100% sizing, +0.00 hurdle modifier, active.
-       - $[60.0, 80.0)$: 75% sizing, +0.00 hurdle modifier, active.
-       - $[40.0, 60.0)$: 50% sizing, +0.05 hurdle modifier, active.
-       - $[20.0, 40.0)$: 25% sizing, +0.10 hurdle modifier, active.
-       - $[0.0, 20.0)$: 0% sizing, VETO (`REJECT`).
+     - 5 Contiguous Half-Open Health Tiers (with Burn-In Grace Period, default $N \ge 5$ trades):
+       - $[80.0, 100.0]$: 100% sizing, +0.00 hurdle modifier, active (Pristine).
+       - $[60.0, 80.0)$: 75% sizing, +0.00 hurdle modifier, active (Healthy).
+       - $[40.0, 60.0)$: 50% sizing, +0.05 hurdle modifier, active (Degraded).
+       - $[20.0, 40.0)$: 25% sizing, +0.10 hurdle modifier, active (Stressed).
+       - $[0.0, 20.0)$: If $N < \text{min\_burn\_in\_trades}$ (default: 5 closed trades): clamped to Tier 4 Stressed (25% sizing, +0.10 hurdle modifier, `is_disabled = False`) to prevent $N=1$ noise lockouts. If $N \ge \text{min\_burn\_in\_trades}$: 0% sizing, VETO (`REJECT`, `BLOCK_SETUP_UNHEALTHY`).
    - **Component 5: Thesis Failure Counter & Dual-Class Cooldown (`ThesisFailureCounter` — Spec Section 5.2):**
      - Single Source of Truth for setup-level cooldown governance.
      - **Class A (Market Condition Gate):** Zero timer. Real-time condition evaluation. Elevated entropy ($\ge 0.70$) yields `WAIT_HIGH_ENTROPY`. Unlocks early ONLY when $\text{Entropy} < 0.40$ and normalized trend transition $\tanh(400.0 \times \text{trend\_strength}) \ge 0.15$ with setup criteria reconfirmed.
@@ -430,6 +430,12 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
          - Priority-0 microstructural fault injection (invalid price, feed latency $>5\text{s}$, spread $>0.25\%$, 2 API errors).
          - Dynamic spread-based slippage model and fee accounting ($0.20\%$ deduction).
          - OKX spot client safe unconfigured handling, conditional market stops, and IOC slippage-capped exits.
+   - **Version 3.2.4 Institutional Release (Governor Burn-In Grace Period — Priority 1):**
+     - Resolved the $N=1$ hair-trigger lockout in `SetupPerformanceGovernor` (`risk_engine.py`).
+     - Introduced `min_burn_in_trades: int = 5` burn-in threshold before `BLOCK_SETUP_UNHEALTHY` ($0.0\text{x}$ sizing) can permanently disable a setup.
+     - During burn-in ($N < 5$), health scores $< 20.0$ are dynamically clamped to Tier 4 (Stressed: $0.25\text{x}$ sizing, $+0.10$ confidence hurdle modifier, `is_disabled = False`).
+     - Updated `evaluate_entry_eligibility` in `risk_engine.py` to evaluate the authoritative `setup_health.is_disabled` state.
+     - Expanded unit test coverage in `test_zebra.py` with `test_19_governor_burn_in_grace_period` (19 passing unit tests).
    - **Strict Workspace Isolation Rule (AGENTS.md Rule 4):** The agent environment is strictly locked to `c:\gemini proyect\btctool 2.0`. Under no circumstances may any file be created, read, written, modified, or exported outside the project root.
    - **Master Technical Specification Document (`BTCTOOL_2_0_FULL_SPECIFICATION_WITH_OXY.txt`):** Synchronized to Version 3.2.0 Production with all mathematical formulas, OKX V5 REST and WebSocket specifications, fee model, anti-hanging state machine, and production daemon setup. Stored strictly in the project root.
 

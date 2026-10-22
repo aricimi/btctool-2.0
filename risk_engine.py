@@ -52,8 +52,9 @@ class SetupPerformanceGovernor:
     5 contiguous institutional health tiers.
     """
 
-    def __init__(self, window_size: int = 20):
+    def __init__(self, window_size: int = 20, min_burn_in_trades: int = 5):
         self.window_size = window_size
+        self.min_burn_in_trades = min_burn_in_trades
         self.history: Dict[str, List[float]] = {}
 
     def record_trade_result(self, setup_name: str, net_pnl_pct: float):
@@ -84,7 +85,8 @@ class SetupPerformanceGovernor:
         # [60, 80):  Healthy  -> size 0.75, conf_mod +0.00
         # [40, 60):  Degraded -> size 0.50, conf_mod +0.05
         # [20, 40):  Stressed -> size 0.25, conf_mod +0.10
-        # [0, 20):   Disabled -> size 0.00, disabled = True
+        # [0, 20):   Disabled -> size 0.00, disabled = True (Only if len(trades) >= min_burn_in_trades;
+        #            otherwise clamped to Stressed tier size 0.25, conf_mod +0.10, disabled = False)
         if health_score >= 80.0:
             size_mult = 1.00
             conf_mod = 0.00
@@ -102,9 +104,14 @@ class SetupPerformanceGovernor:
             conf_mod = 0.10
             disabled = False
         else:
-            size_mult = 0.00
-            conf_mod = 0.00
-            disabled = True
+            if len(trades) < self.min_burn_in_trades:
+                size_mult = 0.25
+                conf_mod = 0.10
+                disabled = False
+            else:
+                size_mult = 0.00
+                conf_mod = 0.00
+                disabled = True
 
         return SetupHealth(
             setup_name=clean_name,
@@ -428,7 +435,7 @@ class RiskEngine:
         if daily_drawdown_pct >= max_daily_drawdown:
             return "BLOCK_ACCOUNT_LOCKDOWN", 0.0, 0.0
 
-        if setup_health.is_disabled or setup_health.health_score < 20.0:
+        if setup_health.is_disabled:
             return "BLOCK_SETUP_UNHEALTHY", 0.0, 0.0
 
         # Class B Loss Cooldown: Immutable, zero early release permitted

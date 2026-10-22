@@ -496,17 +496,24 @@ class TestZebraBot(unittest.TestCase):
         from risk_engine import RiskEngine, TradeIntent, SetupPerformanceGovernor, ThesisFailureCounter, ConscienceEscalation, LightweightStressEngine
         from conviction_engine import FreeConvictionEngine
 
-        # 1. Setup Performance Governor
-        gov = SetupPerformanceGovernor(window_size=20)
+        # 1. Setup Performance Governor (with Burn-In Grace Period)
+        gov = SetupPerformanceGovernor(window_size=20, min_burn_in_trades=5)
         setup = "TEST_BREAKOUT"
-        # 4 consecutive bad trades (-0.40% each)
+        # 4 consecutive bad trades (-0.40% each) - inside burn-in grace period (< 5)
         for _ in range(4):
             gov.record_trade_result(setup, -0.40)
         health = gov.get_health(setup)
         self.assertEqual(health.win_rate, 0.0)
         self.assertLess(health.health_score, 20.0, "Repeated bad losses must crash health score below 20")
-        self.assertTrue(health.is_disabled, "Health < 20 must disable the setup")
-        self.assertEqual(health.size_multiplier, 0.0)
+        self.assertFalse(health.is_disabled, "During burn-in (< 5 trades), setup must NOT be permanently disabled")
+        self.assertEqual(health.size_multiplier, 0.25, "During burn-in with score < 20, sizing is clamped to 0.25x")
+        self.assertEqual(health.confidence_modifier, 0.10, "During burn-in with score < 20, conf_mod is +0.10")
+
+        # 5th bad trade: completes burn-in (total_trades >= 5) -> now permanently disabled
+        gov.record_trade_result(setup, -0.40)
+        health_post_burnin = gov.get_health(setup)
+        self.assertTrue(health_post_burnin.is_disabled, "Once burn-in completes (>= 5 trades), score < 20 must disable setup")
+        self.assertEqual(health_post_burnin.size_multiplier, 0.0)
 
         # 2. Thesis Failure Counter & Cooldown
         fc = ThesisFailureCounter(max_consecutive_failures=3, cooldown_seconds=600.0)
@@ -1033,6 +1040,37 @@ class TestZebraBot(unittest.TestCase):
         low_ent_matrix["balloon_geometry"]["is_balloon_expanding"] = True
         intent_low_ent = engine.evaluate(low_ent_matrix)
         self.assertNotIn("NO REAL GAIN ON TABLE", intent_low_ent.reason)
+
+    def test_19_governor_burn_in_grace_period(self):
+        """Verify Priority 1: Governor Burn-In Grace Period prevents N=1 premature lockout."""
+        from risk_engine import RiskEngine, SetupPerformanceGovernor, TradeIntent
+
+        engine = RiskEngine()
+        # Verify default min_burn_in_trades is 5
+        self.assertEqual(engine.governor.min_burn_in_trades, 5)
+
+        setup_name = "MACRO_BALLOON_BREAKOUT"
+        t0 = 1792500000.0
+        # Simulate Trade 1 loss (-0.686%) at t0
+        engine.record_trade_outcome(setup_name, -0.686, timestamp=t0)
+
+        health = engine.governor.get_health(setup_name)
+        self.assertEqual(health.total_trades, 1)
+        self.assertLess(health.health_score, 20.0, "Single loss crashes raw health score below 20.0")
+        self.assertFalse(health.is_disabled, "During burn-in (total_trades < 5), setup must NOT be disabled")
+        self.assertEqual(health.size_multiplier, 0.25, "Burn-in Tier 4 clamps sizing to 0.25x")
+        self.assertEqual(health.confidence_modifier, 0.10, "Burn-in Tier 4 requires +0.10 confidence")
+
+        # Evaluate entry eligibility after Class-B cooldown (5.4m = 324s) expires:
+        dummy_matrix = {
+            "timestamp": t0 + 600.0,
+            "feature_vector": {"entropy": 0.40, "trend_strength": 0.001},
+            "latest_price": 83000.0,
+        }
+        status, size_mult, conf_mod = engine.evaluate_entry_eligibility(setup_name, dummy_matrix)
+        self.assertNotEqual(status, "BLOCK_SETUP_UNHEALTHY", "Setup must not be blocked during burn-in")
+        self.assertIn(status, ("REDUCE_SIZE_AND_CONFIRM", "NORMAL_ELIGIBILITY"))
+        self.assertEqual(size_mult, 0.25, "Burn-in maintains clamped 0.25x size factor")
 
 
 if __name__ == "__main__":
