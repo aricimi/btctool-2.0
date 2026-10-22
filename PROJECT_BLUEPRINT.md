@@ -460,6 +460,7 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
      - Unified TelegramNotifier across zebra_bot.py and alert_bot.py into a single canonical class.
      - Added integration test test_21_telegram_command_normalization_and_routing in test_zebra.py (21 passing integration and unit tests).
      - Added websockets>=12.0 to requirements.txt to satisfy cloud deployment dependencies for Render.
+     - Fixed typing imports (Optional, Dict, Any, Tuple, List) and added __future__.annotations in zebra_bot.py to resolve Python 3.11 NameError on Render.
    - **Strict Workspace Isolation Rule (AGENTS.md Rule 4):** The agent environment is strictly locked to `c:\gemini proyect\btctool 2.0`. Under no circumstances may any file be created, read, written, modified, or exported outside the project root.
    - **Master Technical Specification Document (`BTCTOOL_2_0_FULL_SPECIFICATION_WITH_OXY.txt`):** Synchronized to Version 3.2.0 Production with all mathematical formulas, OKX V5 REST and WebSocket specifications, fee model, anti-hanging state machine, and production daemon setup. Stored strictly in the project root.
 
