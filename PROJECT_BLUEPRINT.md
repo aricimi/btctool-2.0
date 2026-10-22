@@ -170,6 +170,7 @@ This document serves as the **Single Source of Truth** for the entire project.
   - **Buffer Warmup Fallback Telemetry:** Responds immediately with clean operational status even if queried during the initial 2-second WebSocket buffer warming phase prior to the first 100-screen state matrix compilation.
 * **24/7 Cloud Architecture (Render + UptimeRobot):**
   - Integrated HTTP Health Check endpoint on `$PORT` (default 10000) supporting both `HEAD` and `GET`.
+  - Service configuration via [`render.yaml`](file:///c:/gemini%20proyect/btctool%202.0/render.yaml): `runtime: python`, explicit `branch: main`, `autoDeploy: true`, `PYTHONUNBUFFERED: "1"`, with production Telegram environment variables.
   - Keeps Render service permanently awake via UptimeRobot 5-minute HTTP keep-alive pings.
   - Zero local PC dependency: runs 24/7/365 in the cloud without sleeping.
 
