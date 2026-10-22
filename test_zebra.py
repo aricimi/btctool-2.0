@@ -1072,6 +1072,61 @@ class TestZebraBot(unittest.TestCase):
         self.assertIn(status, ("REDUCE_SIZE_AND_CONFIRM", "NORMAL_ELIGIBILITY"))
         self.assertEqual(size_mult, 0.25, "Burn-in maintains clamped 0.25x size factor")
 
+    def test_20_bayesian_sensory_anchored_expectancy(self):
+        """Verify Priority 2: Bayesian / Sensory-Anchored Expectancy Gate prevents absorbing barrier."""
+        from conviction_engine import FreeConvictionEngine
+        from risk_engine import RiskEngine
+
+        engine = FreeConvictionEngine()
+        risk_gate = RiskEngine()
+
+        setup_name = "MACRO_BALLOON_BREAKOUT"
+        # 1. With N=0 trades, win_rate_prob in telemetry equals sensory prior
+        base_matrix = {
+            "latest_price": 84000.0,
+            "tanh_imbalance": 0.25,
+            "trade_velocity": 8.5,
+            "cvd": 100.0,
+            "absorption_index": 15.0,
+            "spread_pct": 0.02,
+            "composite_atr": 200.0,
+            "multi_screen_bounds": {
+                "nearest_support": 83800.0,
+                "nearest_resistance": 85000.0,
+                "macro_ceiling": 86000.0,
+                "pooled_swing_high": 83990.0,
+                "immediate_runway_pct": 1.19,
+                "macro_runway_pct": 2.38,
+            },
+            "balloon_geometry": {"is_balloon_expanding": True, "regime": "EXPANDING_BALLOON"},
+            "micro_turn": {"is_green_building": True, "velocity_slowing": False},
+            "feature_vector": {"entropy": 0.35, "trend_strength": 0.001, "vol_regime": 1.0, "liquidity": 15.0},
+        }
+
+        # Warm up belief system to BULL_ACCELERATION with high conviction
+        for _ in range(5):
+            intent_0 = engine.evaluate(base_matrix, active_trade=None, governor=risk_gate.governor)
+
+        pw_0 = intent_0.telemetry.get("win_rate_prob")
+        self.assertIsNotNone(pw_0)
+        self.assertGreaterEqual(pw_0, 0.40)
+        self.assertLessEqual(pw_0, 0.65)
+
+        # 2. Simulate 3 consecutive losses (N=3, WR=0.0%)
+        # In legacy code, pw collapsed to 0.20 via clip(win_rate, 0.20, 0.80) with unit bug
+        # In Bayesian code, pw smoothly shrinks toward sensory prior with M=10 pseudo-trades:
+        # pw = (3 * 0.0 + 10 * pw_0) / 13 = (10/13) * pw_0
+        t0 = 1792500000.0
+        for k in range(3):
+            risk_gate.record_trade_outcome(setup_name, -0.50, timestamp=t0 + k * 1000)
+
+        intent_3 = engine.evaluate(base_matrix, active_trade=None, governor=risk_gate.governor)
+        pw_3 = intent_3.telemetry.get("win_rate_prob")
+        self.assertIsNotNone(pw_3)
+        expected_pw_3 = (10.0 * pw_0) / 13.0
+        self.assertAlmostEqual(pw_3, expected_pw_3, places=2)
+        self.assertGreater(pw_3, 0.30, "Bayesian shrinkage must NOT collapse to 0.20 absorbing state after only 3 trades")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -442,11 +442,14 @@ class FreeConvictionEngine:
             target_pct = ((target - price) / price) * 100.0 if price > 0 else 0.0
             stop_pct = ((price - dynamic_invalidation) / price) * 100.0 if price > 0 else 0.0
 
+            p_sensory = float(np.clip(0.55 + 0.10 * (absorption_idx / 20.0), 0.40, 0.70))
             if governor:
                 h = governor.get_health("DIP_ABSORPTION_TURN")
-                pw = float(np.clip(h.win_rate, 0.25, 0.80)) if h.total_trades >= 3 else float(np.clip(0.55 + 0.10 * (absorption_idx / 20.0), 0.40, 0.70))
+                m_prior = 10.0
+                pw_raw = (h.total_trades * (h.win_rate / 100.0) + m_prior * p_sensory) / (h.total_trades + m_prior)
+                pw = float(np.clip(pw_raw, 0.25, 0.80))
             else:
-                pw = float(np.clip(0.55 + 0.10 * min(absorption_idx / 20.0, 1.0), 0.40, 0.70))
+                pw = p_sensory
 
             ev_dip, rr_dip = self.calculate_classical_expectancy(pw, target_pct, stop_pct, slippage_pct=dynamic_slippage_pct)
             if rr_dip < 1.50:
@@ -495,11 +498,14 @@ class FreeConvictionEngine:
             target_pct = ((target - price) / price) * 100.0 if price > 0 else 0.0
             stop_pct = ((price - dynamic_invalidation) / price) * 100.0 if price > 0 else 0.0
 
+            p_sensory = float(np.clip(0.40 + 0.15 * tuned_confidence, 0.35, 0.65))
             if governor:
                 h = governor.get_health("MACRO_BALLOON_BREAKOUT")
-                pw = float(np.clip(h.win_rate, 0.20, 0.80)) if h.total_trades >= 3 else float(np.clip(0.40 + 0.15 * tuned_confidence, 0.35, 0.65))
+                m_prior = 10.0
+                pw_raw = (h.total_trades * (h.win_rate / 100.0) + m_prior * p_sensory) / (h.total_trades + m_prior)
+                pw = float(np.clip(pw_raw, 0.20, 0.80))
             else:
-                pw = float(np.clip(0.40 + 0.15 * tuned_confidence, 0.35, 0.65))
+                pw = p_sensory
 
             ev_breakout, rr_breakout = self.calculate_classical_expectancy(pw, target_pct, stop_pct, slippage_pct=dynamic_slippage_pct)
             if rr_breakout < 1.50:

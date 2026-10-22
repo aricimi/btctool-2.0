@@ -436,6 +436,14 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
      - During burn-in ($N < 5$), health scores $< 20.0$ are dynamically clamped to Tier 4 (Stressed: $0.25\text{x}$ sizing, $+0.10$ confidence hurdle modifier, `is_disabled = False`).
      - Updated `evaluate_entry_eligibility` in `risk_engine.py` to evaluate the authoritative `setup_health.is_disabled` state.
      - Expanded unit test coverage in `test_zebra.py` with `test_19_governor_burn_in_grace_period` (19 passing unit tests).
+   - **Version 3.2.5 Institutional Release (Bayesian Sensory-Anchored Expectancy Gate — Priority 2):**
+     - Resolved the $N=3$ absorbing barrier and percentage unit-mismatch bug in `conviction_engine.py`.
+     - Legacy logic evaluated `np.clip(h.win_rate, floor, 0.80)` when $N \ge 3$, where `h.win_rate` was scaled $[0.0, 100.0]$, instantly clipping any loss streak to the minimum $0.20$ floor.
+     - Implemented Bayesian conjugate shrinkage anchored to real-time sensory conviction prior:
+       $$p_w = \text{clip}\left(\frac{N \times (\text{win\_rate} / 100.0) + M \times p_{\text{sensory}}}{N + M}, \text{floor}, 0.80\right)$$
+       where $M = 10.0$ pseudo-trades represents the sensory prior weight, $p_{\text{sensory}}$ is derived from real-time microstructure/belief dynamics, and empirical win rate is normalized by dividing by 100.0.
+     - Ensures smooth empirical adaptation as $N \to \infty$ while preventing premature mathematical lockouts during small-sample calibration.
+     - Added unit test `test_20_bayesian_sensory_anchored_expectancy` in `test_zebra.py` (20 passing integration and unit tests).
    - **Strict Workspace Isolation Rule (AGENTS.md Rule 4):** The agent environment is strictly locked to `c:\gemini proyect\btctool 2.0`. Under no circumstances may any file be created, read, written, modified, or exported outside the project root.
    - **Master Technical Specification Document (`BTCTOOL_2_0_FULL_SPECIFICATION_WITH_OXY.txt`):** Synchronized to Version 3.2.0 Production with all mathematical formulas, OKX V5 REST and WebSocket specifications, fee model, anti-hanging state machine, and production daemon setup. Stored strictly in the project root.
 
