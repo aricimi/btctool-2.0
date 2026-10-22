@@ -91,14 +91,15 @@ class TelegramNotifier:
     def is_configured(self) -> bool:
         return bool(self.bot_token and self.chat_id and self.bot_token != "YOUR_BOT_TOKEN_HERE")
 
-    def send_message(self, text: str) -> bool:
+    def send_message(self, text: str, target_chat_id: Optional[str] = None) -> bool:
         """Sends an HTML formatted push message directly to Telegram."""
         if not self.is_configured:
             return False
 
+        dest_chat = str(target_chat_id) if target_chat_id else str(self.chat_id)
         url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
         payload = {
-            "chat_id": self.chat_id,
+            "chat_id": dest_chat,
             "text": text,
             "parse_mode": "HTML",
             "disable_web_page_preview": True
@@ -109,7 +110,7 @@ class TelegramNotifier:
             if r.status_code == 200:
                 clean_title = text.split("\n")[0]
                 clean_title = re.sub(r'<[^>]+>', '', clean_title)
-                logger.info(f"[Telegram] Sent: {clean_title}")
+                logger.info(f"[Telegram] Sent to {dest_chat}: {clean_title}")
                 return True
             else:
                 logger.error(f"[Telegram Error] HTTP {r.status_code}: {r.text}")
@@ -118,25 +119,44 @@ class TelegramNotifier:
             logger.error(f"[Telegram Network Error] {e}")
             return False
 
-    def poll_incoming_command(self) -> Optional[str]:
-        """Polls Telegram getUpdates for on-demand user commands."""
+    def poll_incoming_commands(self) -> List[Tuple[str, str]]:
+        """
+        Polls Telegram getUpdates for all on-demand user commands.
+        Returns a list of (raw_command_text, sender_chat_id).
+        """
         if not self.is_configured:
-            return None
+            return []
         url = f"https://api.telegram.org/bot{self.bot_token}/getUpdates"
-        params = {"offset": self.last_update_id + 1, "timeout": 0, "limit": 5}
+        params = {"offset": self.last_update_id + 1, "timeout": 0, "limit": 10}
+        commands: List[Tuple[str, str]] = []
         try:
-            r = requests.get(url, params=params, timeout=3)
+            r = requests.get(url, params=params, timeout=4)
             if r.status_code == 200:
                 updates = r.json().get("result", [])
                 for u in updates:
                     self.last_update_id = max(self.last_update_id, u.get("update_id", 0))
-                    msg = u.get("message", {})
+                    msg = u.get("message") or u.get("edited_message") or {}
                     text = msg.get("text", "").strip()
+                    sender_id = str(msg.get("chat", {}).get("id") or self.chat_id)
                     if text.startswith("/"):
-                        return text
-        except Exception:
-            pass
-        return None
+                        commands.append((text, sender_id))
+        except Exception as e:
+            logger.debug(f"[Telegram Poll Network] {e}")
+        return commands
+
+    def poll_incoming_command(self) -> Optional[str]:
+        """Backward-compatible single command polling."""
+        cmds = self.poll_incoming_commands()
+        return cmds[0][0] if cmds else None
+
+    def send_test_ping(self) -> bool:
+        msg = (
+            "⚡ <b>btctool 2.0 · Telegram Alert System Online</b>\n\n"
+            "Your mobile alert bot is successfully connected!\n"
+            "Operating in pure <b>Event-Driven Autonomous Mode</b> (Zero Clock Spam).\n"
+            "Send <code>/status</code> at any time to receive instant live telemetry."
+        )
+        return self.send_message(msg)
 
 
 class ZebraBotEngine:
@@ -156,9 +176,24 @@ class ZebraBotEngine:
             logger.info("[Zebra] Successfully restored active cooldown timers from persistent state.")
         self.notifier = TelegramNotifier()
         self.consecutive_api_errors = 0
+        self.latest_matrix: Optional[Dict[str, Any]] = None
+        self._listener_task: Optional[asyncio.Task] = None
 
         if clean_start:
             self.execution.reset_clean_slate()
+
+    async def _telegram_listener_loop(self):
+        """Dedicated background task polling and responding to Telegram commands."""
+        logger.info("[Zebra] Dedicated Telegram Command Listener task active.")
+        while True:
+            try:
+                # Run polling in threadpool executor to guarantee non-blocking event loop execution
+                cmds = await asyncio.to_thread(self.notifier.poll_incoming_commands)
+                for raw_cmd, sender_id in cmds:
+                    self._handle_telegram_cmd(raw_cmd, self.latest_matrix, p_up=0.0, sender_chat_id=sender_id)
+            except Exception as e:
+                logger.error(f"[Telegram Listener Loop Error] {e}")
+            await asyncio.sleep(1.0)
 
     async def run(self):
         """Starts continuous sensory loop and autonomous evaluation."""
@@ -169,6 +204,9 @@ class ZebraBotEngine:
 
         # 1. Start WebSocket Stream
         self.stream.start()
+
+        # Start decoupled Telegram Command Listener Task immediately
+        self._listener_task = asyncio.create_task(self._telegram_listener_loop())
 
         # 2. Wait for initial data buffer
         await asyncio.sleep(2.0)
@@ -193,6 +231,7 @@ class ZebraBotEngine:
 
                 # 1. PERCEPTION: Extract 100-Screen State Matrix (<2ms)
                 matrix = self.state_calculator.extract_state_matrix(self.stream)
+                self.latest_matrix = matrix
 
                 # 2. COGNITION (Mind): Models Propose TradeIntent
                 active_trade = self.execution.active_trade
@@ -342,11 +381,6 @@ class ZebraBotEngine:
                 if active_trade:
                     self.execution.update_highest_price(matrix["latest_price"])
 
-                # Check Telegram command listener
-                cmd = self.notifier.poll_incoming_command()
-                if cmd:
-                    self._handle_telegram_cmd(cmd, matrix, p_up=0.0)
-
                 # Periodic garbage collection and CSV auto-flush
                 if cycle_count % 30 == 0:
                     self.execution.journal.flush_pending_csv()
@@ -357,9 +391,21 @@ class ZebraBotEngine:
 
             await asyncio.sleep(1.0)
 
-    def _handle_telegram_cmd(self, cmd: str, matrix: dict, p_up: float = 0.0):
+    def _handle_telegram_cmd(self, cmd: str, matrix: Optional[dict] = None, p_up: float = 0.0, sender_chat_id: Optional[str] = None):
         """Responds to on-demand Telegram commands with Whale & Multi-Screen telemetry."""
-        if cmd in ("/status", "/ping", "/info"):
+        clean_cmd = cmd.strip().split()[0].split("@")[0].lower()
+        if clean_cmd in ("/status", "/ping", "/info", "/start", "/help"):
+            if not matrix:
+                connecting_msg = (
+                    "⚡ <b>ZEBRA BOT: SYSTEM ONLINE</b>\n\n"
+                    "• Status: <code>BUFFERING / STREAM CONNECTING</code>\n"
+                    "• Mode: 24/7 Autonomous Expected Value Engine\n"
+                    "• Feed: OKX Public WebSocket Ingress\n\n"
+                    "Initial 100-screen state matrix is warming up. Please retry in a few seconds."
+                )
+                self.notifier.send_message(connecting_msg, target_chat_id=sender_chat_id)
+                return
+
             price = matrix.get("latest_price", 0.0)
             tanh_imb = matrix.get("tanh_imbalance", 0.0)
             absorption = matrix.get("absorption_index", 0.0)
@@ -433,7 +479,7 @@ class ZebraBotEngine:
                 gate_str = "SLOW MARKET (Chop Filter)" if is_slow else ("WAITING FOR RUNWAY" if imm_runway < 0.45 else "PATIENT SCANNING")
                 status_msg += f"<b>Active Position:</b> 100% DEFENSIVE CASH ({gate_str})\n"
 
-            self.notifier.send_message(status_msg)
+            self.notifier.send_message(status_msg, target_chat_id=sender_chat_id)
 
 
 def main():

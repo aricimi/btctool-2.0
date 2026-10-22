@@ -162,6 +162,12 @@ This document serves as the **Single Source of Truth** for the entire project.
   8. `📈 UPDATE: RATCHET STOP LOSS HIGHER`: Dynamically ratchets trailing stop as price pushes higher into profit.
   9. `🛡️ UPDATE: MOVE STOP TO BREAKEVEN`: Breakeven locking order once price pushes forward into profit.
   10. `📡 On-Demand Telemetry via Telegram (/status)`: Sub-second (<1s) live engine status check via Telegram command listener with 100% spot-pure metrics.
+* **Decoupled Asynchronous Telegram Command Daemon (v3.3.0 Upgrade):**
+  - **Non-Blocking Background Task (`_telegram_listener_loop`):** Runs as an independent concurrent `asyncio` task separate from the sensory perception loop. Market calculation loops and WebSocket buffer updates never block or delay command ingestion.
+  - **Thread-Pool Offloading (`asyncio.to_thread`):** Synchronous HTTP polling (`requests.get`) is offloaded to a background threadpool executor, preventing any event loop stalls.
+  - **Robust Command Normalization:** Parses incoming text using `cmd.strip().split()[0].split("@")[0].lower()`. Strips bot handles (e.g. `/status@MyBot`), ignores trailing whitespace/arguments, and normalizes case (`/STATUS` -> `/status`).
+  - **Originating Sender Direct Routing:** Detects the message origin (`msg["chat"]["id"]`) and routes telemetry replies directly to the querying chat, eliminating routing failures when queried from secondary accounts or Telegram clients.
+  - **Buffer Warmup Fallback Telemetry:** Responds immediately with clean operational status even if queried during the initial 2-second WebSocket buffer warming phase prior to the first 100-screen state matrix compilation.
 * **24/7 Cloud Architecture (Render + UptimeRobot):**
   - Integrated HTTP Health Check endpoint on `$PORT` (default 10000) supporting both `HEAD` and `GET`.
   - Keeps Render service permanently awake via UptimeRobot 5-minute HTTP keep-alive pings.
@@ -444,6 +450,14 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
        where $M = 10.0$ pseudo-trades represents the sensory prior weight, $p_{\text{sensory}}$ is derived from real-time microstructure/belief dynamics, and empirical win rate is normalized by dividing by 100.0.
      - Ensures smooth empirical adaptation as $N \to \infty$ while preventing premature mathematical lockouts during small-sample calibration.
      - Added unit test `test_20_bayesian_sensory_anchored_expectancy` in `test_zebra.py` (20 passing integration and unit tests).
+   - **Version 3.3.0 Institutional Release (Decoupled Async Telegram Command Daemon):**
+     - Decoupled Telegram command ingestion from the synchronous trading perception loop into an independent concurrent asyncio task (_telegram_listener_loop).
+     - Offloaded network polling (poll_incoming_commands) to thread-pool executor using asyncio.to_thread to guarantee sub-second command response without blocking the event loop.
+     - Implemented robust command normalization: automatically strips bot handles (e.g. /status@MyBtcAlertBot), trims whitespace, and normalizes case (/STATUS -> /status).
+     - Implemented direct sender chat routing: automatically detects chat_id of the command sender and dispatches telemetry directly back to the requesting user/group, eliminating silent drops across multi-client setups.
+     - Added buffer warmup fallback telemetry: responds immediately with clean status if queried during initial WebSocket stream initialization.
+     - Unified TelegramNotifier across zebra_bot.py and alert_bot.py into a single canonical class.
+     - Added integration test test_21_telegram_command_normalization_and_routing in test_zebra.py (21 passing integration and unit tests).
    - **Strict Workspace Isolation Rule (AGENTS.md Rule 4):** The agent environment is strictly locked to `c:\gemini proyect\btctool 2.0`. Under no circumstances may any file be created, read, written, modified, or exported outside the project root.
    - **Master Technical Specification Document (`BTCTOOL_2_0_FULL_SPECIFICATION_WITH_OXY.txt`):** Synchronized to Version 3.2.0 Production with all mathematical formulas, OKX V5 REST and WebSocket specifications, fee model, anti-hanging state machine, and production daemon setup. Stored strictly in the project root.
 

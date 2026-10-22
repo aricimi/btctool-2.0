@@ -1127,6 +1127,85 @@ class TestZebraBot(unittest.TestCase):
         self.assertAlmostEqual(pw_3, expected_pw_3, places=2)
         self.assertGreater(pw_3, 0.30, "Bayesian shrinkage must NOT collapse to 0.20 absorbing state after only 3 trades")
 
+    def test_21_telegram_command_normalization_and_routing(self):
+        """Verify Telegram command normalization (/status@Bot, uppercase), direct routing, and buffer fallbacks."""
+        from zebra_bot import TelegramNotifier, ZebraBotEngine
+
+        notifier = TelegramNotifier(bot_token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11", chat_id="999888777")
+        self.assertTrue(notifier.is_configured)
+
+        # 1. Mock getUpdates returning bot handle command and sender chat
+        mock_updates = {
+            "ok": True,
+            "result": [
+                {
+                    "update_id": 501,
+                    "message": {
+                        "chat": {"id": 11223344},
+                        "text": "/status@MyTestAlertBot",
+                    }
+                },
+                {
+                    "update_id": 502,
+                    "edited_message": {
+                        "chat": {"id": 55667788},
+                        "text": "  /PING  ",
+                    }
+                }
+            ]
+        }
+
+        with patch("requests.get") as mock_get:
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = mock_updates
+            mock_get.return_value = mock_resp
+
+            commands = notifier.poll_incoming_commands()
+            self.assertEqual(len(commands), 2)
+            self.assertEqual(commands[0], ("/status@MyTestAlertBot", "11223344"))
+            self.assertEqual(commands[1], ("/PING", "55667788"))
+            self.assertEqual(notifier.last_update_id, 502)
+
+        # 2. Test ZebraBotEngine command handler with handle stripping and empty matrix fallback
+        engine = ZebraBotEngine()
+        engine.notifier = notifier
+
+        with patch.object(notifier, "send_message") as mock_send:
+            # Test /status@... when matrix is None (warming up)
+            engine._handle_telegram_cmd("/status@MyTestAlertBot", matrix=None, sender_chat_id="11223344")
+            self.assertTrue(mock_send.called)
+            sent_text, kwargs = mock_send.call_args[0][0], mock_send.call_args[1]
+            self.assertIn("BUFFERING / STREAM CONNECTING", sent_text)
+            self.assertEqual(kwargs.get("target_chat_id"), "11223344")
+
+            # Test /STATUS when matrix has data
+            mock_send.reset_mock()
+            sample_matrix = {
+                "latest_price": 84500.0,
+                "tanh_imbalance": 0.42,
+                "absorption_index": 18.5,
+                "multi_screen_bounds": {
+                    "nearest_support": 84200.0,
+                    "nearest_resistance": 85100.0,
+                    "macro_ceiling": 86000.0,
+                    "immediate_runway_pct": 0.71,
+                    "macro_runway_pct": 1.77,
+                },
+                "balloon_geometry": {
+                    "regime": "EXPANDING_BALLOON",
+                    "is_balloon_expanding": True,
+                    "is_slow_market": False,
+                },
+            }
+            engine._handle_telegram_cmd("/STATUS", matrix=sample_matrix, sender_chat_id="55667788")
+            self.assertTrue(mock_send.called)
+            sent_text, kwargs = mock_send.call_args[0][0], mock_send.call_args[1]
+            self.assertIn("ZEBRA BOT MULTI-SCREEN TELEMETRY", sent_text)
+            self.assertIn("$84,500.00", sent_text)
+            self.assertIn("EXPANDING_BALLOON", sent_text)
+            self.assertEqual(kwargs.get("target_chat_id"), "55667788")
+
 
 if __name__ == "__main__":
     unittest.main()

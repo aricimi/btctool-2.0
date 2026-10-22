@@ -1,32 +1,29 @@
 """
-btctool 2.0 - Institutional Telegram Mobile Scalping & Ping-Pong Alert Bot
-Architecture: Real-time Bybit/OKX order book scanner + 5M/15M ping-pong scalp engine.
-Dispatches instant push alerts for entries, target hits (>= +0.20%), and stop invalidations.
+btctool 2.0 - Institutional Telegram Mobile Scalping & Zebra Bot Daemon
+Architecture: Real-time OKX order book and WebSocket stream scanner.
+Dispatches instant push alerts for entries, target hits, and stop invalidations.
 """
 
 import os
 import sys
-from typing import Optional, Dict, Any, Tuple, List
+from typing import Optional
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 import json
-import time
 import datetime
 import threading
-import gc
 from http.server import HTTPServer, BaseHTTPRequestHandler
-import math
-import re
-import numpy as np
-import requests
-
 import asyncio
-from zebra_bot import ZebraBotEngine
 
-
-CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "telegram_config.json")
+from zebra_bot import (
+    ZebraBotEngine,
+    TelegramNotifier,
+    CONFIG_FILE,
+    DEFAULT_BOT_TOKEN,
+    DEFAULT_CHAT_ID,
+)
 
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
@@ -42,7 +39,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.end_headers()
         payload = {
             "status": "online",
-            "service": "btctool 2.0 Telegram Scalping Alert Engine",
+            "service": "btctool 2.0 Truly Free Zebra Bot Engine",
             "utc_time": datetime.datetime.now(datetime.timezone.utc).isoformat()
         }
         self.wfile.write(json.dumps(payload).encode("utf-8"))
@@ -62,96 +59,6 @@ def start_health_server(port: int = 10000) -> Optional[HTTPServer]:
     except Exception as e:
         print(f"[Warning] Could not start HTTP health server on port {port}: {e}")
         return None
-
-
-DEFAULT_BOT_TOKEN = "8981948899:AAFqJwDyX1_ZMnXRQSp2m6yNk9HuHJ9A7h0"
-DEFAULT_CHAT_ID = "8922701269"
-
-
-class TelegramNotifier:
-    """Handles secure delivery of instant push alerts and on-demand commands."""
-
-    def __init__(self, bot_token: Optional[str] = None, chat_id: Optional[str] = None):
-        self.bot_token = bot_token or os.environ.get("TELEGRAM_BOT_TOKEN")
-        self.chat_id = chat_id or os.environ.get("TELEGRAM_CHAT_ID")
-        
-        # Load from config file if not in environment
-        if (not self.bot_token or not self.chat_id) and os.path.exists(CONFIG_FILE):
-            try:
-                with open(CONFIG_FILE, "r") as f:
-                    cfg = json.load(f)
-                    self.bot_token = self.bot_token or cfg.get("bot_token")
-                    self.chat_id = self.chat_id or cfg.get("chat_id")
-            except Exception:
-                pass
-
-        # Final production fallback ensuring zero cloud container silence
-        self.bot_token = self.bot_token or DEFAULT_BOT_TOKEN
-        self.chat_id = self.chat_id or DEFAULT_CHAT_ID
-        self.last_update_id = 0
-
-    @property
-    def is_configured(self) -> bool:
-        return bool(self.bot_token and self.chat_id and self.bot_token != "YOUR_BOT_TOKEN_HERE")
-
-    def send_message(self, text: str) -> bool:
-        """Sends an HTML formatted push message directly to your Telegram chat."""
-        if not self.is_configured:
-            print("[Telegram] Alert not sent: Bot Token or Chat ID not configured.")
-            return False
-
-        url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
-        payload = {
-            "chat_id": self.chat_id,
-            "text": text,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": True
-        }
-
-        try:
-            r = requests.post(url, json=payload, timeout=6)
-            if r.status_code == 200:
-                lines = [l.strip() for l in text.split("\n") if l.strip()]
-                clean_title = re.sub(r'<[^>]+>', '', lines[0]) if lines else "Alert"
-                print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Telegram Alert Sent: {clean_title}")
-                return True
-            else:
-                print(f"[Telegram Error] HTTP {r.status_code}: {r.text}")
-                return False
-        except Exception as e:
-            print(f"[Telegram Network Error] {e}")
-            return False
-
-    def poll_incoming_command(self) -> Optional[str]:
-        """Polls Telegram getUpdates for on-demand user commands (e.g. /status, /info, /ping)."""
-        if not self.is_configured:
-            return None
-        url = f"https://api.telegram.org/bot{self.bot_token}/getUpdates"
-        params = {"offset": self.last_update_id + 1, "timeout": 0, "limit": 5}
-        try:
-            r = requests.get(url, params=params, timeout=4)
-            if r.status_code == 200:
-                data = r.json()
-                if data.get("ok") and data.get("result"):
-                    for update in data["result"]:
-                        self.last_update_id = max(self.last_update_id, update.get("update_id", 0))
-                        msg = update.get("message", {})
-                        if str(msg.get("chat", {}).get("id")) == str(self.chat_id):
-                            text = msg.get("text", "").strip()
-                            if text:
-                                return text
-        except Exception:
-            pass
-        return None
-
-    def send_test_ping(self) -> bool:
-        msg = (
-            "⚡ <b>btctool 2.0 · Telegram Alert System Online</b>\n\n"
-            "Your mobile alert bot is successfully connected!\n"
-            "Operating in pure <b>Event-Driven Autonomous Mode</b> (Zero Clock Spam).\n"
-            "Send <code>/status</code> at any time to receive instant live telemetry."
-        )
-        return self.send_message(msg)
 
 
 def setup_wizard():
@@ -221,5 +128,3 @@ if __name__ == "__main__":
     else:
         clean = "--clean" in sys.argv
         run_bot(clean_start=clean)
-
-
