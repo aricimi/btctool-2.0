@@ -324,12 +324,16 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
    - **Component 7: Intuition Tripwires (Modifiers Only):**
      - Fast-path tape acceleration ($>8.0$ trades/sec with positive CVD) or strong absorption ($A_i > 20$) adds $+0.05$ to confidence.
      - Spread inflation ($>0.15\%$) or aggressive taker dumps subtracts $-0.05$ from confidence. Never triggers trades directly.
-   - **Component 4: Mandatory Net Expectancy Gate:**
+   - **Component 4: Mandatory Net Expectancy Gate & Low-Entropy Runway Decoupling:**
      $$\text{Projected\_Move} = \max(\text{distance to structural resistance}, \text{macro\_space if balloon expanding}, 1.2 \cdot \text{ATR})$$
      $$\mathbb{E}[\text{PnL}_{\text{net}}] = \frac{\text{Projected\_Move}}{P} \times 100 - \text{OKX Fee (0.20%)} - \text{Slippage}_{\text{dynamic}}$$
      where $\text{Slippage}_{\text{dynamic}} = \max\left(0.02\%, \frac{\text{spread\_pct}}{2.0} \times 1.25\right)$, accurately penalizing friction during spread expansions.
      Unconditionally rejects trades where $\mathbb{E}[\text{PnL}_{\text{net}}] \le 0.05\%$ or $\text{effective\_runway} < \text{adaptive\_runway\_hurdle}$. Zero bypass loopholes permitted!
-   - **Momentum Ignition Gating:** Breakouts strictly require: $\text{effective\_edge} \ge 0.15$, $\text{effective\_urgency} \ge 0.15$, tuned confidence $\ge \theta_{\text{conf}}$, and Belief State $\neq$ `CHOP_COMPRESSION`.
+     - **Runway Decoupling by Entropy & Setup Type:**
+       - For breakout candidates (`is_balloon_expanding` or price clearing pooled swing high) strictly under low entropy ($\text{entropy} < 0.50$), `effective_runway` is decoupled from local micro-resistance and evaluated against macro-expansion space:
+         $$\text{macro\_target} = \max(\text{macro\_ceiling}, P \times 1.012, P + 2.0 \cdot \text{ATR})$$
+         preventing premature rejection while price is actively breaking through nearby resistance.
+       - For `DIP_ABSORPTION_TURN` and all setups under moderate/high entropy ($\text{entropy} \ge 0.50$), runway strictly adheres to local micro-resistance, preserving baseline protection against range-bound fakeouts.
    - **Dip Turn Reversal Trigger:** When testing structural support with resting bid absorption ($A_i > 12.0$, $\tanh_{\text{imb}} \ge 0.0$) and clearing adaptive runway hurdle.
    - **Overhauled Trailing Stop & Breakeven Calibration (Hands & Lifecycle):**
      - Breakeven trigger requires gain $\ge +0.60\%$ (giving breakout trades oxygen to establish).

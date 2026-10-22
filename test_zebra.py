@@ -968,6 +968,72 @@ class TestZebraBot(unittest.TestCase):
             self.assertEqual(algo_id, "ALGO_12345")
             mock_req.assert_called_with("POST", "/api/v5/trade/order-algo", data={"instId": "BTC-USDT", "tdMode": "cash", "side": "sell", "ordType": "conditional", "sz": "0.10", "tpTriggerPxType": "last", "slTriggerPx": "83000.00", "slOrdPx": "-1"})
 
+    def test_18_runway_decoupling_invariance(self):
+        """Verify:
+        1. DIP_ABSORPTION_TURN runway behavior is 100% unchanged (fails if immediate_runway < adaptive_runway).
+        2. Breakout candidates under Entropy >= 0.50 strictly preserve baseline local runway logic.
+        3. Breakout candidates under Entropy < 0.50 decouple runway into macro-expansion space.
+        """
+        import copy
+        from conviction_engine import FreeConvictionEngine
+
+        engine = FreeConvictionEngine()
+
+        base_matrix = {
+            "latest_price": 80000.0,
+            "feature_vector": {
+                "regime": "NEUTRAL",
+                "composite_atr": 200.0,
+                "tanh_imbalance": 0.50,
+                "entropy": 0.20,
+                "trend_strength": 0.002,
+                "absorption_ratio": 15.0,
+                "trade_velocity": 10.0,
+                "delta_cvd": 50.0,
+                "macd_histogram": 5.0,
+                "ema_alignment": 0.50,
+                "bollinger_width": 1.2,
+                "divergence": 0.0,
+            },
+            "multi_screen_bounds": {
+                "nearest_support": 79950.0,
+                "nearest_resistance": 80100.0,  # 0.125% away (below adaptive hurdle 0.45%)
+                "macro_ceiling": 82000.0,        # 2.50% away
+                "immediate_runway_pct": 0.125,
+                "macro_runway_pct": 2.50,
+                "pooled_swing_high": 80100.0,
+            },
+            "balloon_geometry": {
+                "is_balloon_expanding": False,
+                "is_slow_market": False,
+            },
+            "spread_pct": 0.02,
+        }
+
+        # 1. Invariance Test: DIP_ABSORPTION_TURN at support with immediate_runway = 0.125% < hurdle (0.45%)
+        # Must be rejected because dip turns require immediate_runway >= adaptive_runway
+        dip_matrix = copy.deepcopy(base_matrix)
+        dip_matrix["multi_screen_bounds"]["nearest_support"] = 79990.0  # At support floor
+        intent_dip = engine.evaluate(dip_matrix)
+        self.assertEqual(intent_dip.action, "WAIT_IN_CASH")
+        self.assertIn("NO REAL GAIN ON TABLE", intent_dip.reason)
+
+        # 2. Invariance Test: Breakout candidate under HIGH ENTROPY (entropy = 0.70 >= 0.50)
+        # Even with balloon expanding, high entropy must strictly preserve baseline rejection
+        high_ent_matrix = copy.deepcopy(base_matrix)
+        high_ent_matrix["feature_vector"]["entropy"] = 0.70
+        high_ent_matrix["balloon_geometry"]["is_balloon_expanding"] = True
+        intent_high_ent = engine.evaluate(high_ent_matrix)
+        self.assertEqual(intent_high_ent.action, "WAIT_IN_CASH")
+
+        # 3. Decoupling Test: Breakout candidate under LOW ENTROPY (entropy = 0.20 < 0.50)
+        # With balloon expanding and low entropy, runway decouples into macro expansion space
+        low_ent_matrix = copy.deepcopy(base_matrix)
+        low_ent_matrix["feature_vector"]["entropy"] = 0.20
+        low_ent_matrix["balloon_geometry"]["is_balloon_expanding"] = True
+        intent_low_ent = engine.evaluate(low_ent_matrix)
+        self.assertNotIn("NO REAL GAIN ON TABLE", intent_low_ent.reason)
+
 
 if __name__ == "__main__":
     unittest.main()

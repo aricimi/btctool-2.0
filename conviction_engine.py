@@ -371,9 +371,18 @@ class FreeConvictionEngine:
         }
 
         # 2.4 MANDATORY NET EXPECTANCY GATE (v3.0 Invariant 4)
-        # Rejects entries if Net EV <= 0.05% or if immediate runway is compressed without macro space.
+        # Rejects entries if Net EV <= 0.05% or if runway is compressed.
         # Zero bypass loopholes permitted!
-        effective_runway = max(immediate_runway, macro_runway if is_balloon_expanding else 0.0)
+        # Runway Decoupling: Breakout candidates under low entropy (< 0.50) evaluate macro-expansion runway.
+        # DIP_ABSORPTION and all setups under Entropy >= 0.50 strictly preserve baseline local runway logic.
+        is_breakout_candidate = is_balloon_expanding or (price >= (pooled_swing_high - 1.0))
+        if is_breakout_candidate and (entropy < 0.50):
+            macro_target_price = max(macro_ceiling, price * 1.012, price + (2.0 * atr))
+            macro_expansion_runway = ((macro_target_price - price) / price) * 100.0 if price > 0 else 0.0
+            effective_runway = max(immediate_runway, macro_expansion_runway)
+        else:
+            effective_runway = max(immediate_runway, macro_runway if is_balloon_expanding else 0.0)
+
         if net_ev_pct <= 0.05 or effective_runway < adaptive_runway:
             return TradeIntent(
                 action="WAIT_IN_CASH",
@@ -477,8 +486,12 @@ class FreeConvictionEngine:
         is_belief_aligned = belief.regime_belief in ("BULL_ACCELERATION", "NEUTRAL_WAIT")
 
         if (is_clearing_high or is_balloon_expanding) and has_real_momentum and is_belief_aligned and (tanh_imb >= 0.0 or trade_vel > 6.0):
-            target = macro_ceiling
-            effective_runway = max(macro_runway, projected_gross_pct)
+            # Target macro expansion space when entropy < 0.50 and macro_ceiling is compressed
+            if entropy < 0.50:
+                target = max(macro_ceiling, price * 1.012, price + (2.0 * atr))
+            else:
+                target = macro_ceiling
+            effective_runway = max(macro_runway, projected_gross_pct, ((target - price) / price) * 100.0 if price > 0 else 0.0)
             target_pct = ((target - price) / price) * 100.0 if price > 0 else 0.0
             stop_pct = ((price - dynamic_invalidation) / price) * 100.0 if price > 0 else 0.0
 
