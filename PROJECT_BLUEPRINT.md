@@ -168,9 +168,10 @@ This document serves as the **Single Source of Truth** for the entire project.
   - **Robust Command Normalization:** Parses incoming text using `cmd.strip().split()[0].split("@")[0].lower()`. Strips bot handles (e.g. `/status@MyBot`), ignores trailing whitespace/arguments, and normalizes case (`/STATUS` -> `/status`).
   - **Originating Sender Direct Routing:** Detects the message origin (`msg["chat"]["id"]`) and routes telemetry replies directly to the querying chat, eliminating routing failures when queried from secondary accounts or Telegram clients.
   - **Buffer Warmup Fallback Telemetry:** Responds immediately with clean operational status even if queried during the initial 2-second WebSocket buffer warming phase prior to the first 100-screen state matrix compilation.
-* **24/7 Cloud Architecture (Render + UptimeRobot):**
+* **24/7 Cloud Architecture & Credential Hardening (Render + UptimeRobot):**
   - Integrated HTTP Health Check endpoint on `$PORT` (default 10000) supporting both `HEAD` and `GET`.
-  - Service configuration via [`render.yaml`](file:///c:/gemini%20proyect/btctool%202.0/render.yaml): `runtime: python`, explicit `branch: main`, `autoDeploy: true`, `PYTHONUNBUFFERED: "1"`, with production Telegram environment variables.
+  - Service configuration via [`render.yaml`](file:///c:/gemini%20proyect/btctool%202.0/render.yaml): `runtime: python`, explicit `branch: main`, `autoDeploy: true`, `PYTHONUNBUFFERED: "1"`.
+  - **Zero-Credential Git Exposure Guarantee:** Hardcoded fallback tokens stripped from codebase (`DEFAULT_BOT_TOKEN = ""`) and `render.yaml` configured with `sync: false` for `TELEGRAM_BOT_TOKEN`. All credentials ingested strictly through runtime environment variables or gitignored `telegram_config.json`.
   - Keeps Render service permanently awake via UptimeRobot 5-minute HTTP keep-alive pings.
   - Zero local PC dependency: runs 24/7/365 in the cloud without sleeping.
 

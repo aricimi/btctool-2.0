@@ -13,6 +13,6 @@ services:
       - key: PYTHONUNBUFFERED
         value: "1"
       - key: TELEGRAM_BOT_TOKEN
-        value: "8981948899:AAFqJwDyX1_ZMnXRQSp2m6yNk9HuHJ9A7h0"
+        sync: false
       - key: TELEGRAM_CHAT_ID
         value: "8922701269"
