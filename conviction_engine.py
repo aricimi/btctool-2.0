@@ -370,39 +370,12 @@ class FreeConvictionEngine:
             "macro_ceiling": macro_ceiling,
         }
 
-        # 2.4 MANDATORY NET EXPECTANCY GATE (v3.0 Invariant 4)
-        # Rejects entries if Net EV <= 0.05% or if runway is compressed.
-        # Zero bypass loopholes permitted!
-        # Runway Decoupling: Breakout candidates under low entropy (< 0.50) evaluate macro-expansion runway.
-        # DIP_ABSORPTION and all setups under Entropy >= 0.50 strictly preserve baseline local runway logic.
-        is_breakout_candidate = is_balloon_expanding or (price >= (pooled_swing_high - 1.0))
-        if is_breakout_candidate and (entropy < 0.50):
-            macro_target_price = max(macro_ceiling, price * 1.012, price + (2.0 * atr))
-            macro_expansion_runway = ((macro_target_price - price) / price) * 100.0 if price > 0 else 0.0
-            effective_runway = max(immediate_runway, macro_expansion_runway)
-        else:
-            effective_runway = max(immediate_runway, macro_runway if is_balloon_expanding else 0.0)
+        # 2.4 MANDATORY NET EXPECTANCY GATE (v3.2.6 Decoupled Pre-Setup Filter)
+        # Note: Universal pre-setup runway veto has been removed to allow Setup A (DIP_ABSORPTION_TURN)
+        # and Setup B (MACRO_BALLOON_BREAKOUT) to evaluate their distinct structural edge and macro-expansion
+        # space independently under their own dedicated classical expectancy and R:R gates.
 
-        if net_ev_pct <= 0.05 or effective_runway < adaptive_runway:
-            return TradeIntent(
-                action="WAIT_IN_CASH",
-                expected_runway_pct=effective_runway,
-                confidence=effective_conf,
-                reason=f"NO REAL GAIN ON TABLE: Net EV={net_ev_pct:+.2f}%, Effective runway is only +{effective_runway:.2f}% (requires >= {adaptive_runway:.2f}% adaptive hurdle under entropy {belief.entropy_ema:.2f}). Sitting in cash.",
-                telemetry=intent_telemetry,
-            )
-
-        # 2.5 SLOW MARKET: Lines are horizontal and volume compressed -> Stay in cash
-        if is_slow_market and immediate_runway < (adaptive_runway + 0.15):
-            return TradeIntent(
-                action="WAIT_IN_CASH",
-                expected_runway_pct=immediate_runway,
-                confidence=effective_conf,
-                reason=f"SLOW MARKET: Bollinger lines horizontal and volume compressed (runway +{immediate_runway:.2f}%). Sitting 100% in cash.",
-                telemetry=intent_telemetry,
-            )
-
-        # 2.5B ADAPTIVE CONFIDENCE THRESHOLD BASED ON REGIME (v3.0 Priority 3)
+        # 2.5 ADAPTIVE CONFIDENCE THRESHOLD BASED ON REGIME (v3.0 Priority 3)
         # TREND: 0.50 | BALANCED / RANGE: 0.65 | CHOP / HIGH ENTROPY: 0.80
         if belief.regime_belief == "BULL_ACCELERATION" or (is_balloon_expanding and entropy < 0.50):
             regime_conf_hurdle = 0.50
@@ -431,14 +404,20 @@ class FreeConvictionEngine:
         # 2.6 SETUP A: BOTTOM / DIP TURN PREDICTION (BUYING LOW AT SUPPORT)
         dist_to_support = abs(price - nearest_support)
         is_at_support_floor = dist_to_support <= (0.85 * atr)
+
+        # Macro mean-reversion target (v3.2.6 Decoupled Runway)
+        macro_mean_reversion_target = max(nearest_resistance, price * 1.012, price + (2.0 * atr))
+        dip_target_runway = ((macro_mean_reversion_target - price) / price) * 100.0 if price > 0 else 0.0
+        effective_dip_runway = max(immediate_runway, dip_target_runway)
+
         is_absorption_confirmed = (
             (tanh_imb > 0.10 or absorption_idx > 12.0)
             and tanh_imb >= 0.0
-            and immediate_runway >= adaptive_runway
+            and effective_dip_runway >= adaptive_runway
         )
 
         if is_at_support_floor and is_absorption_confirmed:
-            target = nearest_resistance
+            target = macro_mean_reversion_target
             target_pct = ((target - price) / price) * 100.0 if price > 0 else 0.0
             stop_pct = ((price - dynamic_invalidation) / price) * 100.0 if price > 0 else 0.0
 
@@ -471,9 +450,9 @@ class FreeConvictionEngine:
                 entry_price=price,
                 target_price=target,
                 proposed_stop=dynamic_invalidation,
-                expected_runway_pct=immediate_runway,
+                expected_runway_pct=effective_dip_runway,
                 confidence=max(tuned_confidence, 0.75),
-                reason=f"DIP TURN PREDICTED: Tested support (${nearest_support:,.2f}) with bid absorption (Ai={absorption_idx:.1f}, tanh_imb={tanh_imb:+.2f}). Belief={belief.regime_belief} (pers={belief.persistence_ticks}). True Net EV={ev_dip:+.2f}% (R:R {rr_dip:.2f}:1, pw={pw*100:.0f}%). Target: ${target:,.2f} (+{immediate_runway:.2f}%).",
+                reason=f"DIP TURN PREDICTED: Tested support (${nearest_support:,.2f}) with bid absorption (Ai={absorption_idx:.1f}, tanh_imb={tanh_imb:+.2f}). Belief={belief.regime_belief} (pers={belief.persistence_ticks}). True Net EV={ev_dip:+.2f}% (R:R {rr_dip:.2f}:1, pw={pw*100:.0f}%). Target: ${target:,.2f} (+{effective_dip_runway:.2f}%).",
                 telemetry={**intent_telemetry, "true_net_ev": ev_dip, "rr_ratio": rr_dip, "win_rate_prob": pw},
             )
 
@@ -531,6 +510,16 @@ class FreeConvictionEngine:
                 confidence=max(tuned_confidence, 0.80),
                 reason=f"MOMENTUM IGNITION: Validated surge (Edge={effective_edge:+.2f}, Urgency={effective_urgency:.2f}, Conf={tuned_confidence:.2f}). Belief={belief.regime_belief} (pers={belief.persistence_ticks}). Flowing into macro space (${macro_ceiling:,.2f}, +{effective_runway:.2f}%) with True Net EV=+{ev_breakout:.2f}% (R:R {rr_breakout:.2f}:1, pw={pw*100:.0f}%).",
                 telemetry={**intent_telemetry, "true_net_ev": ev_breakout, "rr_ratio": rr_breakout, "win_rate_prob": pw},
+            )
+
+        # 2.8 FALLBACK: Slow market or patient scanning in cash
+        if is_slow_market and immediate_runway < (adaptive_runway + 0.15):
+            return TradeIntent(
+                action="WAIT_IN_CASH",
+                expected_runway_pct=immediate_runway,
+                confidence=effective_conf,
+                reason=f"SLOW MARKET: Bollinger lines horizontal and volume compressed (runway +{immediate_runway:.2f}%). Sitting 100% in cash.",
+                telemetry=intent_telemetry,
             )
 
         # Default fallback: Patiently scanning in cash

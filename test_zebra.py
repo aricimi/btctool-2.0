@@ -137,7 +137,7 @@ class TestZebraBot(unittest.TestCase):
         }
         hurdle_decision = self.brain.evaluate(low_runway_matrix, active_trade=None)
         self.assertEqual(hurdle_decision["action"], "WAIT_IN_CASH")
-        self.assertIn("NO REAL GAIN ON TABLE", hurdle_decision["reason"])
+        self.assertTrue(any(k in hurdle_decision["reason"] for k in ["NO REAL GAIN ON TABLE", "SLOW MARKET", "PATIENT SCANNING"]))
 
         # 2. DIP TURN PREDICTION ENTRY: Testing support floor, absorption confirmed, green candle building
         dip_matrix = {
@@ -1023,7 +1023,7 @@ class TestZebraBot(unittest.TestCase):
         dip_matrix["multi_screen_bounds"]["nearest_support"] = 79990.0  # At support floor
         intent_dip = engine.evaluate(dip_matrix)
         self.assertEqual(intent_dip.action, "WAIT_IN_CASH")
-        self.assertIn("NO REAL GAIN ON TABLE", intent_dip.reason)
+        self.assertTrue(any(k in intent_dip.reason for k in ["NO REAL GAIN ON TABLE", "PATIENT SCANNING", "SLOW MARKET"]))
 
         # 2. Invariance Test: Breakout candidate under HIGH ENTROPY (entropy = 0.70 >= 0.50)
         # Even with balloon expanding, high entropy must strictly preserve baseline rejection
@@ -1205,6 +1205,55 @@ class TestZebraBot(unittest.TestCase):
             self.assertIn("$84,500.00", sent_text)
             self.assertIn("EXPANDING_BALLOON", sent_text)
             self.assertEqual(kwargs.get("target_chat_id"), "55667788")
+
+    def test_22_unblocked_mean_reversion_dip_absorption(self):
+        """Verify v3.2.6 Decoupled Macro Mean-Reversion Dip Absorption:
+        1. When price is at support floor with confirmed bid absorption, compressed micro-resistance
+           (< 0.45% immediate runway) no longer suppresses entry via a global pre-setup veto.
+        2. Setup A projects macro mean-reversion target max(res, price * 1.012, price + 2.0 * atr).
+        3. Expectancy and R:R clear hurdles, triggering ENTER_CORE_LOT_1 with DIP_ABSORPTION_TURN.
+        """
+        engine = FreeConvictionEngine()
+        price = 79500.0
+        nearest_support = 79480.0     # Within 0.85 * ATR ($170)
+        nearest_resistance = 79700.0  # +0.25% immediate runway (< 0.45% adaptive hurdle)
+        atr = 200.0
+
+        dip_matrix = {
+            "latest_price": price,
+            "absorption_index": 18.0,
+            "tanh_imbalance": 0.35,
+            "trade_velocity": 4.0,
+            "cvd": 12.0,
+            "composite_atr": atr,
+            "feature_vector": {
+                "entropy": 0.40,
+                "trend_strength": -0.001,
+                "vol_regime": 1.0,
+            },
+            "multi_screen_bounds": {
+                "nearest_support": nearest_support,
+                "nearest_resistance": nearest_resistance,
+                "macro_ceiling": 82000.0,
+                "immediate_runway_pct": ((nearest_resistance - price) / price) * 100.0,  # +0.25%
+                "macro_runway_pct": ((82000.0 - price) / price) * 100.0,
+                "pooled_swing_high": 81500.0,
+            },
+            "balloon_geometry": {
+                "is_balloon_expanding": False,
+                "is_slow_market": False,
+            },
+            "spread_pct": 0.02,
+        }
+
+        intent = engine.evaluate(dip_matrix)
+        self.assertEqual(intent.action, "ENTER_CORE_LOT_1")
+        self.assertEqual(intent.scenario, "DIP_ABSORPTION_TURN")
+        self.assertGreaterEqual(intent.expected_runway_pct, 1.10)
+        self.assertGreaterEqual(intent.target_price, price * 1.012)
+        self.assertIn("DIP TURN PREDICTED", intent.reason)
+        self.assertGreaterEqual(intent.telemetry["rr_ratio"], 1.50)
+        self.assertGreater(intent.telemetry["true_net_ev"], 0.05)
 
 
 if __name__ == "__main__":

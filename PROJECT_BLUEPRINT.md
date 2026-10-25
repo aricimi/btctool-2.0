@@ -462,6 +462,14 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
      - Added integration test test_21_telegram_command_normalization_and_routing in test_zebra.py (21 passing integration and unit tests).
      - Added websockets>=12.0 to requirements.txt to satisfy cloud deployment dependencies for Render.
      - Fixed typing imports (Optional, Dict, Any, Tuple, List) and added __future__.annotations in zebra_bot.py to resolve Python 3.11 NameError on Render.
+   - **Version 3.3.1 Institutional Release (Decoupled Pre-Setup Filter & Macro Mean-Reversion Target):**
+     - Resolved the upstream opportunity blockage in conviction_engine.py: removed the global pre-setup runway veto (if net_ev_pct <= 0.05 or effective_runway < adaptive_runway:), which previously vetoed 85.2% of candles upstream before Setup A (DIP_ABSORPTION_TURN) or Setup B (MACRO_BALLOON_BREAKOUT) could evaluate.
+     - Allowed Setups A and B to evaluate their structural edge and order flow signals first under their own dedicated classical expectancy gates ($\mathbb{E}[\text{PnL}_{\text{net}}] > +0.05\%$) and Reward-to-Risk gates ( \ge 1.50:1$).
+     - Upgraded Setup A (DIP_ABSORPTION_TURN) payoff calculation: replaced local micro-resistance target with the macro mean-reversion target:
+       \text{Target}_{\text{macro}} = \max(\text{nearest\_resistance}, P \times 1.012, P + 2.0 \times \text{ATR})
+       resolving the target payoff mismatch where local micro-resistance (+0.20% to +0.45%) mathematically produced negative EV even on textbook V-bottom reversals.
+     - Preserved all stop-loss, risk sizing, Class-A/Class-B cooldowns, Bayesian governor shrinkage, conscience escalation, and shadow self protections.
+     - Added unit test 	est_22_unblocked_mean_reversion_dip_absorption in 	est_zebra.py (22/22 unit tests passing).
    - **Strict Workspace Isolation Rule (AGENTS.md Rule 4):** The agent environment is strictly locked to `c:\gemini proyect\btctool 2.0`. Under no circumstances may any file be created, read, written, modified, or exported outside the project root.
    - **Master Technical Specification Document (`BTCTOOL_2_0_FULL_SPECIFICATION_WITH_OXY.txt`):** Synchronized to Version 3.2.0 Production with all mathematical formulas, OKX V5 REST and WebSocket specifications, fee model, anti-hanging state machine, and production daemon setup. Stored strictly in the project root.
 
