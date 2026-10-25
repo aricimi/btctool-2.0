@@ -509,7 +509,61 @@ class FreeConvictionEngine:
                     telemetry={**intent_telemetry, "true_net_ev": ev_exp, "rr_ratio": rr_exp, "win_rate_prob": pw_exp},
                 )
 
-        # 2.8 SETUP B: MOMENTUM IGNITION / BREAKOUT SURGE (v3.0 Gated Momentum Flow)
+        # 2.8 SETUP D: TREND PULLBACK CONTINUATION (Value Zone Re-Entry)
+        ema9 = float(tf_5m.get("ema_9", price))
+        ema21 = float(tf_5m.get("ema_21", price))
+        ema50 = float(tf_5m.get("ema_50", price))
+
+        is_trend_aligned = (
+            (ema9 > ema21 > ema50) and
+            (trend_strength >= 0.0006) and
+            (belief.regime_belief in ("BULL_ACCELERATION", "NEUTRAL_WAIT")) and
+            (entropy < 0.60)
+        )
+
+        dist_from_swing_high = ((pooled_swing_high - price) / price) * 100.0 if price > 0 else 0.0
+        is_in_value_zone = (
+            price <= (ema9 + (0.15 * atr)) and
+            price >= (ema21 - (0.35 * atr)) and
+            dist_from_swing_high >= 0.25
+        )
+
+        is_pullback_supported = (
+            price >= (ema21 - (0.20 * atr)) and
+            (tanh_imb >= 0.0 or trade_vel > 4.0)
+        )
+
+        if is_trend_aligned and is_in_value_zone and is_pullback_supported:
+            target_d = max(pooled_swing_high, price * 1.012, price + (2.0 * atr))
+            target_pct_d = ((target_d - price) / price) * 100.0 if price > 0 else 0.0
+            
+            dynamic_stop_d = round(ema21 - (0.40 * atr), 2)
+            stop_pct_d = ((price - dynamic_stop_d) / price) * 100.0 if price > 0 else 0.0
+
+            p_sensory_d = float(np.clip(0.60 + 0.10 * np.tanh(400.0 * trend_strength), 0.50, 0.75))
+            if governor:
+                h = governor.get_health("TREND_PULLBACK_CONTINUATION")
+                m_prior = 10.0
+                pw_raw = (h.total_trades * (h.win_rate / 100.0) + m_prior * p_sensory_d) / (h.total_trades + m_prior)
+                pw_d = float(np.clip(pw_raw, 0.25, 0.80))
+            else:
+                pw_d = p_sensory_d
+
+            ev_d, rr_d = self.calculate_classical_expectancy(pw_d, target_pct_d, stop_pct_d, slippage_pct=dynamic_slippage_pct)
+            if rr_d >= 1.50 and ev_d > 0.05:
+                return TradeIntent(
+                    action="ENTER_CORE_LOT_1",
+                    scenario="TREND_PULLBACK_CONTINUATION",
+                    entry_price=price,
+                    target_price=target_d,
+                    proposed_stop=dynamic_stop_d,
+                    expected_runway_pct=target_pct_d,
+                    confidence=max(tuned_confidence, 0.75),
+                    reason=f"TREND CONTINUATION: Pullback into Value Zone (${ema21:,.2f}) with trend_strength={trend_strength:.4f}. True Net EV={ev_d:+.2f}% (R:R {rr_d:.2f}:1, pw={pw_d*100:.0f}%). Target: ${target_d:,.2f} (+{target_pct_d:.2f}%).",
+                    telemetry={**intent_telemetry, "true_net_ev": ev_d, "rr_ratio": rr_d, "win_rate_prob": pw_d},
+                )
+
+        # 2.9 SETUP B: MOMENTUM IGNITION / BREAKOUT SURGE (v3.0 Gated Momentum Flow)
         # STRICT GATES:
         # 1. Price at swing high or clean balloon expanding
         # 2. Positive Edge (>= +0.15)

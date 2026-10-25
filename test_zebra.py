@@ -1319,6 +1319,74 @@ class TestZebraBot(unittest.TestCase):
         self.assertGreaterEqual(intent.telemetry["rr_ratio"], 1.50)
         self.assertGreater(intent.telemetry["true_net_ev"], 0.05)
 
+    def test_24_trend_pullback_continuation(self):
+        """Verify Setup D (TREND_PULLBACK_CONTINUATION):
+        1. In an established bullish trend (ema9 > ema21 > ema50, trend_strength > 0.0006, entropy < 0.60).
+        2. Price is in mid-air (far above support, dist_from_swing_high >= 0.25%).
+        3. Setup A is inactive (not at support floor) and Setup B is inactive (not at swing high).
+        4. Setup D enters the EMA9-EMA21 Value Zone, generating ENTER_CORE_LOT_1 with TREND_PULLBACK_CONTINUATION.
+        """
+        engine = FreeConvictionEngine()
+        price = 81500.0
+        ema9 = 81520.0
+        ema21 = 81420.0
+        ema50 = 81200.0
+        pooled_swing_high = 82200.0  # +0.86% above (in mid-air)
+        nearest_support = 80800.0    # Far below ($700 below, dist > 0.85*atr)
+        atr = 150.0
+
+        trend_matrix = {
+            "latest_price": price,
+            "absorption_index": 5.0,
+            "tanh_imbalance": 0.15,
+            "trade_velocity": 6.0,
+            "cvd": 18.0,
+            "composite_atr": atr,
+            "timeframes": {
+                "5m": {
+                    "ema_9": ema9,
+                    "ema_21": ema21,
+                    "ema_50": ema50,
+                    "bb_mid": ema21,
+                    "bb_upper": 81800.0,
+                    "bb_lower": 81040.0,
+                    "bb_width": 0.93,
+                    "bb_pct_b": 0.60,
+                    "atr": atr,
+                }
+            },
+            "feature_vector": {
+                "entropy": 0.35,
+                "trend_strength": 0.0012,
+                "vol_regime": 1.0,
+            },
+            "multi_screen_bounds": {
+                "nearest_support": nearest_support,
+                "nearest_resistance": 81800.0,
+                "macro_ceiling": 82500.0,
+                "immediate_runway_pct": ((81800.0 - price) / price) * 100.0,
+                "macro_runway_pct": ((82500.0 - price) / price) * 100.0,
+                "pooled_swing_high": pooled_swing_high,
+            },
+            "balloon_geometry": {
+                "is_balloon_expanding": False,
+                "is_slow_market": False,
+            },
+            "spread_pct": 0.02,
+        }
+
+        # Prime belief system to positive bias
+        engine.belief_system.state.directional_bias = 0.25
+        engine.belief_system.state.regime_belief = "BULL_ACCELERATION"
+
+        intent = engine.evaluate(trend_matrix)
+        self.assertEqual(intent.action, "ENTER_CORE_LOT_1")
+        self.assertEqual(intent.scenario, "TREND_PULLBACK_CONTINUATION")
+        self.assertGreaterEqual(intent.expected_runway_pct, 0.80)
+        self.assertIn("TREND CONTINUATION", intent.reason)
+        self.assertGreaterEqual(intent.telemetry["rr_ratio"], 1.50)
+        self.assertGreater(intent.telemetry["true_net_ev"], 0.05)
+
 
 if __name__ == "__main__":
     unittest.main()

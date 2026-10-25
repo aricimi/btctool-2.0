@@ -478,6 +478,14 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
      - Enforces dedicated classical expectancy ($\mathbb{E}[\text{PnL}_{\text{net}}] > +0.05\%$) and Reward-to-Risk ( \ge 1.50:1$).
      - Preserves all stop-loss, risk sizing, Class-A/Class-B cooldowns, Bayesian governor shrinkage, and conscience escalation protections.
      - Added unit test 	est_23_volatility_expansion_impulse in 	est_zebra.py (23/23 unit tests passing).
+   - **Version 3.3.3 Institutional Release (Setup D: Trend Pullback Continuation):**
+     - Implemented Setup D (TREND_PULLBACK_CONTINUATION) in conviction_engine.py to capture mid-air pullbacks in established directional trends.
+     - Resolves the Mid-Air Blind Spot where Setup A rejected entries (NOT AT SUPPORT) and Setup B rejected entries (PRICE NOT AT HIGH).
+     - Evaluates established trend alignment (ema9 > ema21 > ema50, 	rend_strength >= 0.0006, entropy < 0.60) and entries into the dynamic EMA9-EMA21 Value Zone.
+     - Tucks dynamic invalidation structurally beneath EMA21 (ema21 - 0.40 * atr) while projecting targets to swing highs / macro continuation (pooled_swing_high, price * 1.012, price + 2.0 * atr).
+     - Enforces dedicated classical expectancy ($\mathbb{E}[\text{PnL}_{\text{net}}] > +0.05\%$) and Reward-to-Risk ( \ge 1.50:1$).
+     - Preserves all stop-loss, risk sizing, Class-A/Class-B cooldowns, Bayesian governor shrinkage, and conscience escalation protections.
+     - Added unit test 	est_24_trend_pullback_continuation in 	est_zebra.py (24/24 unit tests passing).
    - **Strict Workspace Isolation Rule (AGENTS.md Rule 4):** The agent environment is strictly locked to `c:\gemini proyect\btctool 2.0`. Under no circumstances may any file be created, read, written, modified, or exported outside the project root.
    - **Master Technical Specification Document (`BTCTOOL_2_0_FULL_SPECIFICATION_WITH_OXY.txt`):** Synchronized to Version 3.2.0 Production with all mathematical formulas, OKX V5 REST and WebSocket specifications, fee model, anti-hanging state machine, and production daemon setup. Stored strictly in the project root.
 
