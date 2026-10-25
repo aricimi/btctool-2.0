@@ -243,11 +243,16 @@ class BacktestRunner:
                     self.active_trade = None
                     continue
 
-                # 3. Ratchet Trailing Stop higher
-                current_gain = ((bar_high - entry_p) / entry_p) * 100.0
-                if current_gain >= 0.60 and stop_p < (entry_p * 1.0025):
-                    trade["trailing_stop"] = round(entry_p * 1.0025, 2)
-                if current_gain >= 1.20:
+                # 3. Ratchet Trailing Stop higher (Continuous Proportional Profit-Retention Ratchet - CPPR)
+                if bar_high > trade.get("highest_price", entry_p):
+                    trade["highest_price"] = bar_high
+                peak_gain = ((trade.get("highest_price", bar_high) - entry_p) / entry_p) * 100.0
+                if peak_gain >= 0.50:
+                    locked_gain = max(0.25, peak_gain * 0.60)
+                    cppr_stop = round(entry_p * (1.0 + (locked_gain / 100.0)), 2)
+                    if cppr_stop > trade["trailing_stop"]:
+                        trade["trailing_stop"] = cppr_stop
+                if peak_gain >= 1.20:
                     sup = matrix["multi_screen_bounds"]["nearest_support"]
                     atr = matrix["composite_atr"]
                     if sup > entry_p and (sup - 0.8 * atr) > trade["trailing_stop"]:

@@ -215,6 +215,8 @@ class FreeConvictionEngine:
         if active_trade:
             entry = float(active_trade.get("entry", price))
             gain_pct = (price - entry) / entry if entry > 0 else 0.0
+            highest_price = max(float(active_trade.get("highest_price", entry)), price)
+            peak_gain_pct = (highest_price - entry) / entry if entry > 0 else gain_pct
             target_price = float(active_trade.get("target_price", nearest_resistance))
             trailing_stop = float(active_trade.get("trailing_stop", active_trade.get("invalidation_floor", entry * 0.997)))
             tranche_2 = bool(active_trade.get("tranche_2_added", False))
@@ -242,16 +244,20 @@ class FreeConvictionEngine:
                         telemetry={"scenario": scenario, "gain_pct": gain_pct},
                     )
 
-            # 1.2 DYNAMIC NOISE-IMMUNE TRAILING RATCHET (GIVING WINNERS ROOM TO RUN)
+            # 1.2 CONTINUOUS PROPORTIONAL PROFIT-RETENTION RATCHET (CPPR)
             updated_trailing_stop = trailing_stop
-            # Step 1: Once price gains +0.60% (confirmed macro trend impulse), move stop to Breakeven + Guaranteed Fee Protection (+0.25%)
-            if gain_pct >= 0.0060 and trailing_stop < (entry * 1.0025):
-                updated_trailing_stop = round(entry * 1.0025, 2)
-                logger.info(f"[Brain] Trade confirmed into macro trend: trailing stop moved to Breakeven+Fee: ${updated_trailing_stop:,.2f} (+0.25% gross)")
+            # Step 1: Once peak excursion reaches +0.50% gross (+0.30% net), lock continuous proportional profit retention:
+            # Floor = max(0.25% breakeven-fee floor, peak_gain * 0.60 retention)
+            if peak_gain_pct >= 0.0050:
+                locked_gain_pct = max(0.0025, peak_gain_pct * 0.60)
+                cppr_stop = round(entry * (1.0 + locked_gain_pct), 2)
+                if cppr_stop > updated_trailing_stop:
+                    updated_trailing_stop = cppr_stop
+                    logger.info(f"[Brain] CPPR Ratchet: Peak +{peak_gain_pct*100:.2f}% gross -> trailing stop locked to ${updated_trailing_stop:,.2f} (+{locked_gain_pct*100:.2f}% gross)")
 
-            # Step 2: As price surges higher (gain >= +1.20%), ratchet stop behind the rising nearest support
+            # Step 2: As price surges higher (peak gain >= +1.20%), ratchet stop behind the rising nearest support
             # with minimum 0.8 * ATR breathing buffer, preventing sub-minute noise asphyxiation
-            if gain_pct >= 0.0120 and nearest_support > entry:
+            if peak_gain_pct >= 0.0120 and nearest_support > entry:
                 ratchet_level = round(nearest_support - (0.8 * atr), 2)
                 if ratchet_level > updated_trailing_stop:
                     updated_trailing_stop = ratchet_level
