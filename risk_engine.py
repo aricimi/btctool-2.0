@@ -365,6 +365,8 @@ class RiskEngine:
     def __init__(self, history_file: Optional[str] = None):
         self.last_invalidation_exit_price: float = 0.0
         self.last_invalidation_timestamp: float = 0.0
+        self.last_trade_entry_price: float = 0.0
+        self.exhausted_price_zones: List[Tuple[float, float, float]] = []  # (center_price, radius, timestamp)
         self.governor = SetupPerformanceGovernor()
         self.failure_counter = ThesisFailureCounter()
         self.escalation = ConscienceEscalation()
@@ -392,18 +394,47 @@ class RiskEngine:
             except Exception as e:
                 logger.warning(f"[RiskGate] Could not seed governor from {history_file}: {e}")
 
-    def record_invalidation_exit(self, exit_price: float, timestamp: float = 0.0):
+    def record_exhausted_zone(self, center_price: float, radius: float, timestamp: float = 0.0):
+        """Records an exhausted price zone (Mechanism D) to prevent post-exit re-entry churn."""
+        if center_price > 0.0 and radius > 0.0:
+            self.exhausted_price_zones.append((float(center_price), float(radius), float(timestamp)))
+            logger.info(f"[RiskGate] Registered exhausted price zone: ${center_price:,.2f} +/- ${radius:,.2f}")
+
+    def clear_exhausted_zones(self):
+        """Clears all exhausted price zones."""
+        self.exhausted_price_zones.clear()
+
+    def record_invalidation_exit(self, exit_price: float, timestamp: float = 0.0, radius: float = 0.0):
         """Records price level where a thesis broke down to prevent re-entering a false breakout at the same level."""
         self.last_invalidation_exit_price = float(exit_price)
         self.last_invalidation_timestamp = float(timestamp)
         logger.info(f"[RiskGate] Recorded invalidation level: ${self.last_invalidation_exit_price:,.2f}")
+        ep = self.last_trade_entry_price if self.last_trade_entry_price > 0.0 else float(exit_price)
+        if ep > 0.0:
+            rad = float(radius) if radius > 0.0 else 150.0
+            self.record_exhausted_zone(ep, rad, timestamp=timestamp)
+            self.last_trade_entry_price = 0.0
 
-    def record_trade_outcome(self, setup_name: str, net_pnl_pct: float, timestamp: float = 0.0):
+    def record_trade_outcome(
+        self,
+        setup_name: str,
+        net_pnl_pct: float,
+        timestamp: float = 0.0,
+        entry_price: float = 0.0,
+        radius: float = 0.0
+    ):
         """Records finalized trade outcome into Governor, Failure Counter, and Escalation organs."""
         self.governor.record_trade_result(setup_name, net_pnl_pct)
         health = self.governor.get_health(setup_name)
         self.failure_counter.record_outcome(setup_name, net_pnl_pct, health_score=health.health_score, timestamp=timestamp)
         self.escalation.record_trade(net_pnl_pct)
+
+        # Mechanism D: One-Trade-Per-Price-Zone Protection
+        ep = float(entry_price) if entry_price > 0.0 else self.last_trade_entry_price
+        if ep > 0.0:
+            rad = float(radius) if radius > 0.0 else 150.0
+            self.record_exhausted_zone(ep, rad, timestamp=timestamp)
+            self.last_trade_entry_price = 0.0
 
     def evaluate_entry_eligibility(
         self,
@@ -539,7 +570,8 @@ class RiskEngine:
         # STATE 1: ACTIVE POSITION MANAGEMENT
         # ==================================================================
         if active_trade:
-            entry = float(active_trade.get("entry", price))
+            entry = float(active_trade.get("entry_price", active_trade.get("entry", price)))
+            self.last_trade_entry_price = entry
             gain_pct = (price - entry) / entry if entry > 0 else 0.0
             trailing_stop = float(active_trade.get("trailing_stop", active_trade.get("invalidation_floor", entry * 0.995)))
             target_price = float(active_trade.get("target_price", nearest_resistance))
@@ -665,6 +697,17 @@ class RiskEngine:
                         action="WAIT_IN_CASH",
                         reason=f"REJECTED BY RISK GATE: Breakout intent at ${price:,.2f} is below prior failed invalidation level (${self.last_invalidation_exit_price:,.2f}).",
                         telemetry={"last_invalidation_exit_price": self.last_invalidation_exit_price},
+                    )
+
+            # Mechanism D: One-Trade-Per-Price-Zone Protection (Anti-Churn Guard)
+            for z_price, z_rad, z_ts in self.exhausted_price_zones:
+                if abs(price - z_price) <= z_rad:
+                    logger.info(f"[RiskGate] VETO ANTI-CHURN: Price ${price:,.2f} is inside exhausted price zone (${z_price:,.2f} +/- ${z_rad:,.2f}).")
+                    return RiskDecision(
+                        status="REJECT",
+                        action="WAIT_IN_CASH",
+                        reason=f"REJECTED BY ANTI-CHURN ZONE GUARD: Price ${price:,.2f} is inside exhausted price zone (${z_price:,.2f} +/- ${z_rad:,.2f}).",
+                        telemetry={"exhausted_zone_center": z_price, "exhausted_zone_radius": z_rad},
                     )
 
             # --------------------------------------------------------------

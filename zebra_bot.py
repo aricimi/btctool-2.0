@@ -351,7 +351,12 @@ class ZebraBotEngine:
                     net_gain_pct = gain_pct - 0.0020
                     scenario = active_trade.get("scenario", "TRADE") if active_trade else "TRADE"
 
-                    self.risk_gate.record_trade_outcome(scenario, net_gain_pct, timestamp=matrix.get("timestamp", 0.0))
+                    entry_p = float(active_trade.get("entry_price", 0.0)) if active_trade else 0.0
+                    atr_val = float(matrix.get("composite_atr", 150.0))
+                    self.risk_gate.record_trade_outcome(
+                        scenario, net_gain_pct, timestamp=matrix.get("timestamp", 0.0),
+                        entry_price=entry_p, radius=atr_val * 1.0
+                    )
                     self.execution.close_position(exit_price=exit_p, exit_reason=reason, cooldown_state=self.risk_gate.failure_counter.export_state())
                     self.notifier.send_message(
                         f"🏁 <b>ZEBRA BOT: PROFIT BANKED (+{net_gain_pct*100:.2f}% NET)</b>\n\n"
@@ -369,8 +374,13 @@ class ZebraBotEngine:
                     net_pnl_pct = gain_pct - 0.0020
                     scenario = active_trade.get("scenario", "TRADE") if active_trade else "TRADE"
 
-                    self.risk_gate.record_invalidation_exit(exit_p, matrix.get("timestamp", 0.0))
-                    self.risk_gate.record_trade_outcome(scenario, net_pnl_pct, timestamp=matrix.get("timestamp", 0.0))
+                    entry_p = float(active_trade.get("entry_price", 0.0)) if active_trade else 0.0
+                    atr_val = float(matrix.get("composite_atr", 150.0))
+                    self.risk_gate.record_invalidation_exit(exit_p, matrix.get("timestamp", 0.0), radius=atr_val * 1.0)
+                    self.risk_gate.record_trade_outcome(
+                        scenario, net_pnl_pct, timestamp=matrix.get("timestamp", 0.0),
+                        entry_price=entry_p, radius=atr_val * 1.0
+                    )
                     self.execution.close_position(exit_price=exit_p, exit_reason=reason, cooldown_state=self.risk_gate.failure_counter.export_state())
                     self.notifier.send_message(
                         f"🛑 <b>ZEBRA BOT: THESIS CUT (PRESERVE CAPITAL)</b>\n\n"

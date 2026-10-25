@@ -1387,6 +1387,74 @@ class TestZebraBot(unittest.TestCase):
         self.assertGreaterEqual(intent.telemetry["rr_ratio"], 1.50)
         self.assertGreater(intent.telemetry["true_net_ev"], 0.05)
 
+    def test_25_one_trade_per_price_zone_anti_churn(self):
+        """
+        Verify Mechanism D: One-Trade-Per-Price-Zone Protection (Invariant 4A).
+        Ensures that once a trade is executed in a price zone, subsequent entry intents
+        within the exhausted price zone radius (+/- 1.0 ATR) are vetoed to prevent post-exit churn.
+        """
+        from risk_engine import RiskEngine, TradeIntent
+
+        risk_gate = RiskEngine()
+        entry_price = 81500.0
+        zone_radius = 150.0
+        t0 = 1730000000.0
+
+        # 1. Record completed trade outcome in zone
+        risk_gate.record_trade_outcome(
+            "DIP_ABSORPTION_TURN",
+            net_pnl_pct=0.40,
+            timestamp=t0,
+            entry_price=entry_price,
+            radius=zone_radius
+        )
+        self.assertEqual(len(risk_gate.exhausted_price_zones), 1)
+        self.assertEqual(risk_gate.exhausted_price_zones[0][0], entry_price)
+        self.assertEqual(risk_gate.exhausted_price_zones[0][1], zone_radius)
+
+        # 2. Candidate intent inside exhausted zone ($81,550 is within $81,500 +/- $150)
+        inside_matrix = {
+            "latest_price": 81550.0,
+            "timestamp": t0 + 300.0,
+            "feature_vector": {"entropy": 0.40, "trend_strength": 0.0010},
+            "order_book": {"imbalance": 0.20, "absorption_idx": 15.0},
+            "multi_screen_bounds": {"nearest_support": 81400.0, "nearest_resistance": 82200.0},
+            "balloon_geometry": {"is_balloon_expanding": False, "is_slow_market": False},
+            "spread_pct": 0.02,
+        }
+        inside_intent = TradeIntent(
+            action="ENTER_CORE_LOT_1",
+            scenario="DIP_ABSORPTION_TURN",
+            entry_price=81550.0,
+            confidence=0.75,
+            telemetry={"adaptive_conf_hurdle": 0.50}
+        )
+
+        decision_inside = risk_gate.evaluate(inside_intent, inside_matrix)
+        self.assertEqual(decision_inside.status, "REJECT")
+        self.assertEqual(decision_inside.action, "WAIT_IN_CASH")
+        self.assertIn("REJECTED BY ANTI-CHURN ZONE GUARD", decision_inside.reason)
+
+        # 3. Candidate intent outside exhausted zone ($81,800 is outside $81,500 +/- $150)
+        outside_matrix = dict(inside_matrix)
+        outside_matrix["latest_price"] = 81800.0
+        outside_intent = TradeIntent(
+            action="ENTER_CORE_LOT_1",
+            scenario="DIP_ABSORPTION_TURN",
+            entry_price=81800.0,
+            confidence=0.75,
+            telemetry={"adaptive_conf_hurdle": 0.50}
+        )
+
+        decision_outside = risk_gate.evaluate(outside_intent, outside_matrix)
+        self.assertNotIn("ANTI-CHURN ZONE GUARD", decision_outside.reason)
+
+        # 4. Clear exhausted zones and verify previously blocked price is permitted
+        risk_gate.clear_exhausted_zones()
+        self.assertEqual(len(risk_gate.exhausted_price_zones), 0)
+        decision_cleared = risk_gate.evaluate(inside_intent, inside_matrix)
+        self.assertNotIn("ANTI-CHURN ZONE GUARD", decision_cleared.reason)
+
 
 if __name__ == "__main__":
     unittest.main()

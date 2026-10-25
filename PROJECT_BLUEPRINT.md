@@ -386,7 +386,7 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
    - **Deterministic Risk Invariants (Evaluated after Reflexes Clear):**
      1. *Expectancy & Adaptive Hurdle Gate:* Enforces Mind's dynamic runway hurdle ($\theta_{\text{runway}}$) with absolute hard floor of $0.40\%$ and reward-to-risk $\ge 1.5:1$.
      2. *Noise-Immune Floor Gate:* Enforces ATR-anchored structural stop buffers ($\min(P - 0.8\text{ATR}, P - \text{clamped\_risk})$).
-     3. *Anti-Churn / Post-Stop Clearance:* Vetoes breakout intents proposed at or below previous invalidation exit price levels.
+     3. *Anti-Churn / Post-Stop Clearance & Mechanism D Zone Guard:* Vetoes breakout intents proposed at or below previous invalidation exit price levels, and vetoes candidate entries inside active exhausted price zones ($[P_{\text{entry}} \pm 1.0 \times \text{ATR}]$) to prevent toxic post-exit re-entry churn.
      4. *Scale-In / Invalidation Harmonization:* Verifies stop sits strictly below Lot 2 scale-in discount zone.
      5. *In-Situ Memory Soft Stop:* Queries live order book depth when floor is touched. Holds with noise immunity if resting bids absorb sweep ($A_i > 15.0$); approves cut only on bid collapse. Hard backstop ($0.8 \times \text{ATR}$) prevents bag-holding.
      6. *Shadow Self Worst-Case Stress Simulation Gate (`bot.txt`):* Calculates simulated adverse drop to noise-immune stop ($\text{stress\_loss\_pct} = \frac{P_{\text{entry}} - P_{\text{stop}}}{P_{\text{entry}}} \times 100$). If stress drop exceeds max risk budget ($0.75\%$), dynamically clamps sizing: $\text{approved\_size\_factor} = \min(\text{size\_factor}, \frac{\text{max\_risk}}{\text{stress\_drop}})$.
@@ -486,6 +486,13 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
      - Enforces dedicated classical expectancy ($\mathbb{E}[\text{PnL}_{\text{net}}] > +0.05\%$) and Reward-to-Risk ( \ge 1.50:1$).
      - Preserves all stop-loss, risk sizing, Class-A/Class-B cooldowns, Bayesian governor shrinkage, and conscience escalation protections.
      - Added unit test 	est_24_trend_pullback_continuation in 	est_zebra.py (24/24 unit tests passing).
+   - **Version 3.3.4 Institutional Release (Mechanism D: One-Trade-Per-Price-Zone Anti-Churn Protection):**
+     - Implemented Mechanism D (One-Trade-Per-Price-Zone Protection) under Invariant 4A in `risk_engine.py` to eliminate destructive post-exit re-entry churn in exhausted structural levels.
+     - When a trade completes (whether via target exit or stop invalidation), the price band $[P_{\text{entry}} \pm 1.0 \times \text{ATR}]$ is registered as an exhausted price zone (`exhausted_price_zones`).
+     - Subsequent candidate entries proposed within any active exhausted zone are vetoed under Invariant 4A with `REJECTED BY ANTI-CHURN ZONE GUARD`, keeping the bot in cash until price breaks out cleanly to a new structural level.
+     - Preserves all setups (A, B, C, D), confidence calculations, governor health logic, Class-A/Class-B cooldowns, and risk sizing.
+     - Synchronized `backtest.py` and `zebra_bot.py` to pass entry prices and ATR radius to `record_trade_outcome`.
+     - Added unit test `test_25_one_trade_per_price_zone_anti_churn` in `test_zebra.py` (25/25 unit tests passing).
    - **Strict Workspace Isolation Rule (AGENTS.md Rule 4):** The agent environment is strictly locked to `c:\gemini proyect\btctool 2.0`. Under no circumstances may any file be created, read, written, modified, or exported outside the project root.
    - **Master Technical Specification Document (`BTCTOOL_2_0_FULL_SPECIFICATION_WITH_OXY.txt`):** Synchronized to Version 3.2.0 Production with all mathematical formulas, OKX V5 REST and WebSocket specifications, fee model, anti-hanging state machine, and production daemon setup. Stored strictly in the project root.
 

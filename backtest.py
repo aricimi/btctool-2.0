@@ -211,7 +211,10 @@ class BacktestRunner:
                         "status": "CLOSED_LOSS" if net_pnl <= 0 else "CLOSED_PROFIT",
                     })
                     self.trades.append(trade)
-                    self.risk_gate.record_trade_outcome(trade["scenario"], net_pnl, timestamp=ts)
+                    self.risk_gate.record_trade_outcome(
+                        trade["scenario"], net_pnl, timestamp=ts,
+                        entry_price=entry_p, radius=matrix.get("composite_atr", 150.0) * 1.0
+                    )
                     self.equity_curve.append(self.equity_curve[-1] * (1.0 + (net_pnl / 100.0)))
                     self.active_trade = None
                     continue
@@ -232,7 +235,10 @@ class BacktestRunner:
                         "status": "CLOSED_PROFIT",
                     })
                     self.trades.append(trade)
-                    self.risk_gate.record_trade_outcome(trade["scenario"], net_pnl, timestamp=ts)
+                    self.risk_gate.record_trade_outcome(
+                        trade["scenario"], net_pnl, timestamp=ts,
+                        entry_price=entry_p, radius=matrix.get("composite_atr", 150.0) * 1.0
+                    )
                     self.equity_curve.append(self.equity_curve[-1] * (1.0 + (net_pnl / 100.0)))
                     self.active_trade = None
                     continue
