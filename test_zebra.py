@@ -1255,6 +1255,70 @@ class TestZebraBot(unittest.TestCase):
         self.assertGreaterEqual(intent.telemetry["rr_ratio"], 1.50)
         self.assertGreater(intent.telemetry["true_net_ev"], 0.05)
 
+    def test_23_volatility_expansion_impulse(self):
+        """Verify Setup C (VOLATILITY_EXPANSION_IMPULSE):
+        1. When price breaks out of a compressed squeeze (bb_width < 0.65%),
+           price closes above the 5m upper Bollinger band with positive velocity/CVD.
+        2. Even if price is far below the 100-bar macro high (pooled_swing_high),
+           Setup C detects the internal squeeze ignition without waiting for macro highs.
+        3. Generates ENTER_CORE_LOT_1 with scenario VOLATILITY_EXPANSION_IMPULSE.
+        """
+        engine = FreeConvictionEngine()
+        price = 81200.0
+        bb_mid = 81000.0
+        bb_upper = 81180.0
+        bb_lower = 80820.0
+        nearest_resistance = 81150.0
+        macro_ceiling = 82500.0
+        pooled_swing_high = 83500.0  # Far above price (High-Water gate would block Setup B)
+        atr = 150.0
+
+        squeeze_matrix = {
+            "latest_price": price,
+            "absorption_index": 8.0,
+            "tanh_imbalance": 0.20,
+            "trade_velocity": 7.5,
+            "cvd": 25.0,
+            "composite_atr": atr,
+            "timeframes": {
+                "5m": {
+                    "bb_mid": bb_mid,
+                    "bb_upper": bb_upper,
+                    "bb_lower": bb_lower,
+                    "bb_width": ((bb_upper - bb_lower) / bb_mid) * 100.0,  # ~0.44% (tight squeeze)
+                    "bb_pct_b": 1.05,
+                    "atr": atr,
+                }
+            },
+            "feature_vector": {
+                "entropy": 0.40,
+                "trend_strength": 0.001,
+                "vol_regime": 1.0,
+            },
+            "multi_screen_bounds": {
+                "nearest_support": 80850.0,
+                "nearest_resistance": nearest_resistance,
+                "macro_ceiling": macro_ceiling,
+                "immediate_runway_pct": ((nearest_resistance - price) / price) * 100.0,
+                "macro_runway_pct": ((macro_ceiling - price) / price) * 100.0,
+                "pooled_swing_high": pooled_swing_high,
+            },
+            "balloon_geometry": {
+                "is_balloon_expanding": False,
+                "is_slow_market": False,
+                "pinched_screens": 2,
+            },
+            "spread_pct": 0.02,
+        }
+
+        intent = engine.evaluate(squeeze_matrix)
+        self.assertEqual(intent.action, "ENTER_CORE_LOT_1")
+        self.assertEqual(intent.scenario, "VOLATILITY_EXPANSION_IMPULSE")
+        self.assertGreaterEqual(intent.expected_runway_pct, 1.20)
+        self.assertIn("VOLATILITY EXPANSION", intent.reason)
+        self.assertGreaterEqual(intent.telemetry["rr_ratio"], 1.50)
+        self.assertGreater(intent.telemetry["true_net_ev"], 0.05)
+
 
 if __name__ == "__main__":
     unittest.main()

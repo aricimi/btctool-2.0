@@ -470,6 +470,14 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
        resolving the target payoff mismatch where local micro-resistance (+0.20% to +0.45%) mathematically produced negative EV even on textbook V-bottom reversals.
      - Preserved all stop-loss, risk sizing, Class-A/Class-B cooldowns, Bayesian governor shrinkage, conscience escalation, and shadow self protections.
      - Added unit test 	est_22_unblocked_mean_reversion_dip_absorption in 	est_zebra.py (22/22 unit tests passing).
+   - **Version 3.3.2 Institutional Release (Setup C: Volatility Expansion Impulse):**
+     - Implemented Setup C (VOLATILITY_EXPANSION_IMPULSE) in conviction_engine.py to capture squeeze firing impulses leaving internal consolidation channels.
+     - Resolves the High-Water Gate by evaluating 5m Bollinger upper band breakouts (price >= bb_upper or b_pct_b >= 0.95) and local resistance rather than requiring 100-bar macro highs (pooled_swing_high).
+     - Resolves Band Expansion Lag by triggering instantaneously on compression-precursor firings (is_squeeze_precursor and is_expansion_firing) with trade velocity and order flow confirmation.
+     - Resolves Belief Inertia by anchoring sensory confidence to instantaneous expansion velocity (.80$ floor) rather than chop-decayed EMA conviction.
+     - Enforces dedicated classical expectancy ($\mathbb{E}[\text{PnL}_{\text{net}}] > +0.05\%$) and Reward-to-Risk ( \ge 1.50:1$).
+     - Preserves all stop-loss, risk sizing, Class-A/Class-B cooldowns, Bayesian governor shrinkage, and conscience escalation protections.
+     - Added unit test 	est_23_volatility_expansion_impulse in 	est_zebra.py (23/23 unit tests passing).
    - **Strict Workspace Isolation Rule (AGENTS.md Rule 4):** The agent environment is strictly locked to `c:\gemini proyect\btctool 2.0`. Under no circumstances may any file be created, read, written, modified, or exported outside the project root.
    - **Master Technical Specification Document (`BTCTOOL_2_0_FULL_SPECIFICATION_WITH_OXY.txt`):** Synchronized to Version 3.2.0 Production with all mathematical formulas, OKX V5 REST and WebSocket specifications, fee model, anti-hanging state machine, and production daemon setup. Stored strictly in the project root.
 

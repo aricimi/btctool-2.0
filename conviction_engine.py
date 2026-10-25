@@ -456,7 +456,60 @@ class FreeConvictionEngine:
                 telemetry={**intent_telemetry, "true_net_ev": ev_dip, "rr_ratio": rr_dip, "win_rate_prob": pw},
             )
 
-        # 2.7 SETUP B: MOMENTUM IGNITION / BREAKOUT SURGE (v3.0 Gated Momentum Flow)
+        # 2.7 SETUP C: VOLATILITY EXPANSION IMPULSE (Squeeze Firing Ignition)
+        tfs = matrix.get("timeframes", {})
+        tf_5m = tfs.get("5m", {})
+        pinched_screens = int(balloon.get("pinched_screens", 0))
+
+        bb_upper = float(tf_5m.get("bb_upper", price * 1.005))
+        bb_mid = float(tf_5m.get("bb_mid", price))
+        bb_width = float(tf_5m.get("bb_width", 0.60))
+        bb_pct_b = float(tf_5m.get("bb_pct_b", 0.50))
+
+        is_squeeze_precursor = (
+            bb_width < 0.65 or 
+            pinched_screens >= 2 or 
+            entropy < 0.45 or 
+            is_slow_market
+        )
+
+        is_expansion_firing = (
+            (price >= bb_upper or bb_pct_b >= 0.95) and
+            (price >= nearest_resistance - (0.10 * atr)) and
+            (trade_vel > 5.0 or cvd > 0) and
+            (tanh_imb >= 0.0)
+        )
+
+        if is_squeeze_precursor and is_expansion_firing:
+            target_exp = max(macro_ceiling, price * 1.015, price + (2.5 * atr))
+            target_pct_exp = ((target_exp - price) / price) * 100.0 if price > 0 else 0.0
+            dynamic_stop_exp = round(max(bb_mid, price - (0.80 * atr)), 2)
+            stop_pct_exp = ((price - dynamic_stop_exp) / price) * 100.0 if price > 0 else 0.0
+
+            p_sensory_exp = float(np.clip(0.55 + 0.10 * (trade_vel / 10.0) + 0.05 * min(tanh_imb, 0.5), 0.45, 0.75))
+            if governor:
+                h = governor.get_health("VOLATILITY_EXPANSION_IMPULSE")
+                m_prior = 10.0
+                pw_raw = (h.total_trades * (h.win_rate / 100.0) + m_prior * p_sensory_exp) / (h.total_trades + m_prior)
+                pw_exp = float(np.clip(pw_raw, 0.25, 0.80))
+            else:
+                pw_exp = p_sensory_exp
+
+            ev_exp, rr_exp = self.calculate_classical_expectancy(pw_exp, target_pct_exp, stop_pct_exp, slippage_pct=dynamic_slippage_pct)
+            if rr_exp >= 1.50 and ev_exp > 0.05:
+                return TradeIntent(
+                    action="ENTER_CORE_LOT_1",
+                    scenario="VOLATILITY_EXPANSION_IMPULSE",
+                    entry_price=price,
+                    target_price=target_exp,
+                    proposed_stop=dynamic_stop_exp,
+                    expected_runway_pct=target_pct_exp,
+                    confidence=max(tuned_confidence, 0.80),
+                    reason=f"VOLATILITY EXPANSION: Squeeze firing through upper band (${bb_upper:,.2f}) with velocity={trade_vel:.1f}. True Net EV={ev_exp:+.2f}% (R:R {rr_exp:.2f}:1, pw={pw_exp*100:.0f}%). Target: ${target_exp:,.2f} (+{target_pct_exp:.2f}%).",
+                    telemetry={**intent_telemetry, "true_net_ev": ev_exp, "rr_ratio": rr_exp, "win_rate_prob": pw_exp},
+                )
+
+        # 2.8 SETUP B: MOMENTUM IGNITION / BREAKOUT SURGE (v3.0 Gated Momentum Flow)
         # STRICT GATES:
         # 1. Price at swing high or clean balloon expanding
         # 2. Positive Edge (>= +0.15)
