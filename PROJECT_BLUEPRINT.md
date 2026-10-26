@@ -513,6 +513,12 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
      - Constrained Setup C (`VOLATILITY_EXPANSION_IMPULSE`): Requires simultaneous dual-horizon squeeze confirmation (`bb_width_5m < 0.65` and `bb_width_15m < 0.85`), with an expanding 1h macro ceiling located at least +1.00% above entry.
      - Preserves CPPR (Continuous Proportional Profit-Retention Ratchet) and Mechanism D (Zone Guard anti-churn) 100% active.
      - Updated unit test assertions in `test_zebra.py` to reflect Setup A governor freeze and dual-horizon Setup C squeeze requirements (26/26 unit tests passing).
+   - **Version 3.4.1 Institutional Release (Private Cloud-to-Local Ledger Synchronization & Excel Lock-Proofing):**
+     - Implemented token-authenticated cloud synchronization endpoint (`GET /api/v1/ledger` and `GET /api/v1/csv`) on `HealthCheckHandler` in `zebra_bot.py` and `alert_bot.py` protected by `SYNC_SECRET_TOKEN`, eliminating all GitHub API leakage risks and preventing Render auto-deploy restart loops.
+     - Implemented Telegram document push (`send_document`) on `TelegramNotifier`: automatically attaches updated `trade_journal.csv` to exit alerts on `BANK_PROFIT` and `CUT_THESIS_INVALIDATED`, and delivers the spreadsheet on-demand via `/csv`, `/journal`, or `/ledger` commands.
+     - Implemented Excel-lock fallback in `trade_logger.py`: if `trade_journal.csv` is locked open in Microsoft Excel during a trade close, the engine immediately writes to `trade_journal_latest.csv` and sets `pending_csv_update = True` to guarantee zero delayed or lost trade records.
+     - Created standalone synchronizer client `sync_ledger.py` supporting both one-shot sync and persistent daemon polling (`--watch`) to keep local `trade_history.json` and `trade_journal.csv` continuously fresh for auditing.
+     - Seeded local ledger with live Trades #10-13 executed over the October 25-26 live session (13 total trades, 4 wins, 9 losses, -1.99% net PnL).
    - **Strict Workspace Isolation Rule (AGENTS.md Rule 4):** The agent environment is strictly locked to `c:\gemini proyect\btctool 2.0`. Under no circumstances may any file be created, read, written, modified, or exported outside the project root.
    - **Master Technical Specification Document (`BTCTOOL_2_0_FULL_SPECIFICATION_WITH_OXY.txt`):** Synchronized to Version 3.2.0 Production with all mathematical formulas, OKX V5 REST and WebSocket specifications, fee model, anti-hanging state machine, and production daemon setup. Stored strictly in the project root.
 

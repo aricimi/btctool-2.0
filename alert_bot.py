@@ -20,45 +20,12 @@ import asyncio
 from zebra_bot import (
     ZebraBotEngine,
     TelegramNotifier,
+    HealthCheckHandler,
+    start_health_server,
     CONFIG_FILE,
     DEFAULT_BOT_TOKEN,
     DEFAULT_CHAT_ID,
 )
-
-
-class HealthCheckHandler(BaseHTTPRequestHandler):
-    """Responds to Render and UptimeRobot HTTP pings to keep service alive 24/7."""
-    def do_HEAD(self):
-        self.send_response(200)
-        self.send_header("Content-type", "application/json")
-        self.end_headers()
-
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-type", "application/json")
-        self.end_headers()
-        payload = {
-            "status": "online",
-            "service": "btctool 2.0 Truly Free Zebra Bot Engine",
-            "utc_time": datetime.datetime.now(datetime.timezone.utc).isoformat()
-        }
-        self.wfile.write(json.dumps(payload).encode("utf-8"))
-
-    def log_message(self, format, *args):
-        # Silence default access logging to keep console clean
-        return
-
-
-def start_health_server(port: int = 10000) -> Optional[HTTPServer]:
-    try:
-        server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        print(f"📡 Web Health Check Server running on port {port} (Listening for UptimeRobot pings)")
-        return server
-    except Exception as e:
-        print(f"[Warning] Could not start HTTP health server on port {port}: {e}")
-        return None
 
 
 def setup_wizard():

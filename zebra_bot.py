@@ -33,16 +33,65 @@ logger = logging.getLogger("zebra_bot")
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "telegram_config.json")
 DEFAULT_BOT_TOKEN = ""
 DEFAULT_CHAT_ID = "8922701269"
+SYNC_SECRET_TOKEN = os.environ.get("SYNC_SECRET_TOKEN", "btctool-sync-secret-8922701269")
 
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
-    """Responds to Render and UptimeRobot HTTP pings to keep service alive 24/7."""
+    """Responds to Render and UptimeRobot HTTP pings to keep service alive 24/7,
+    and exposes an authenticated ledger endpoint for secure private synchronization with local PC."""
     def do_HEAD(self):
         self.send_response(200)
         self.send_header("Content-type", "application/json")
         self.end_headers()
 
     def do_GET(self):
+        from urllib.parse import urlparse, parse_qs
+        parsed = urlparse(self.path)
+        path = parsed.path
+        query = parse_qs(parsed.query)
+
+        # Authenticated private ledger sync endpoint
+        if path in ("/api/v1/ledger", "/api/v1/csv", "/trade_journal.csv", "/trade_history.json"):
+            token = query.get("token", [""])[0]
+            if token != SYNC_SECRET_TOKEN:
+                self.send_response(403)
+                self.send_header("Content-type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "Forbidden: invalid sync token"}).encode("utf-8"))
+                return
+
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            if path in ("/api/v1/csv", "/trade_journal.csv"):
+                csv_path = os.path.join(base_dir, "trade_journal.csv")
+                if os.path.exists(csv_path):
+                    with open(csv_path, "rb") as f:
+                        data = f.read()
+                    self.send_response(200)
+                    self.send_header("Content-type", "text/csv; charset=utf-8")
+                    self.send_header("Content-Disposition", 'attachment; filename="trade_journal.csv"')
+                    self.end_headers()
+                    self.wfile.write(data)
+                    return
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+
+            hist_path = os.path.join(base_dir, "trade_history.json")
+            if os.path.exists(hist_path):
+                with open(hist_path, "rb") as f:
+                    data = f.read()
+                self.send_response(200)
+                self.send_header("Content-type", "application/json")
+                self.end_headers()
+                self.wfile.write(data)
+                return
+            else:
+                self.send_response(404)
+                self.end_headers()
+                return
+
+        # Default health check ping response
         self.send_response(200)
         self.send_header("Content-type", "application/json")
         self.end_headers()
@@ -119,6 +168,33 @@ class TelegramNotifier:
                 return False
         except Exception as e:
             logger.error(f"[Telegram Network Error] {e}")
+            return False
+
+    def send_document(self, file_path: str, caption: str = "", target_chat_id: Optional[str] = None) -> bool:
+        """Sends a document / CSV spreadsheet directly to Telegram via sendDocument."""
+        if not self.is_configured or not os.path.exists(file_path):
+            return False
+
+        dest_chat = str(target_chat_id) if target_chat_id else str(self.chat_id)
+        url = f"https://api.telegram.org/bot{self.bot_token}/sendDocument"
+        payload = {
+            "chat_id": dest_chat,
+            "caption": caption,
+            "parse_mode": "HTML"
+        }
+
+        try:
+            with open(file_path, "rb") as doc_file:
+                files = {"document": (os.path.basename(file_path), doc_file, "text/csv")}
+                r = requests.post(url, data=payload, files=files, timeout=10)
+            if r.status_code == 200:
+                logger.info(f"[Telegram Document] Sent {os.path.basename(file_path)} to {dest_chat}")
+                return True
+            else:
+                logger.error(f"[Telegram Document Error] HTTP {r.status_code}: {r.text}")
+                return False
+        except Exception as e:
+            logger.error(f"[Telegram Document Network Error] {e}")
             return False
 
     def poll_incoming_commands(self) -> List[Tuple[str, str]]:
@@ -366,6 +442,12 @@ class ZebraBotEngine:
                         f"<b>Clean Realized Profit:</b> +{net_gain_pct*100:.2f}%\n\n"
                         f"<b>Whale Action:</b> {reason}"
                     )
+                    # Automatically deliver updated CSV directly to Telegram
+                    if os.path.exists(self.execution.journal.csv_file):
+                        self.notifier.send_document(
+                            self.execution.journal.csv_file,
+                            caption=f"📊 <b>ZEBRA BOT: UPDATED TRADE JOURNAL (+{net_gain_pct*100:.2f}% NET)</b>"
+                        )
 
                 elif action == "CUT_THESIS_INVALIDATED":
                     exit_p = float(matrix["latest_price"])
@@ -388,6 +470,12 @@ class ZebraBotEngine:
                         f"<b>Net PnL Impact:</b> {net_pnl_pct*100:+.2f}%\n\n"
                         f"<b>Rectification:</b> {reason}"
                     )
+                    # Automatically deliver updated CSV directly to Telegram
+                    if os.path.exists(self.execution.journal.csv_file):
+                        self.notifier.send_document(
+                            self.execution.journal.csv_file,
+                            caption=f"📊 <b>ZEBRA BOT: UPDATED TRADE JOURNAL ({net_pnl_pct*100:+.2f}% NET)</b>"
+                        )
 
                 # Update highest price if active trade exists
                 if active_trade:
@@ -406,6 +494,18 @@ class ZebraBotEngine:
     def _handle_telegram_cmd(self, cmd: str, matrix: Optional[dict] = None, p_up: float = 0.0, sender_chat_id: Optional[str] = None):
         """Responds to on-demand Telegram commands with Whale & Multi-Screen telemetry."""
         clean_cmd = cmd.strip().split()[0].split("@")[0].lower()
+        if clean_cmd in ("/csv", "/journal", "/ledger"):
+            csv_path = self.execution.journal.csv_file
+            if os.path.exists(csv_path):
+                self.notifier.send_document(
+                    csv_path,
+                    caption="📊 <b>ZEBRA BOT: LIVE TRADE JOURNAL SPREADSHEET</b>",
+                    target_chat_id=sender_chat_id
+                )
+            else:
+                self.notifier.send_message("⚠️ No trade journal found yet.", target_chat_id=sender_chat_id)
+            return
+
         if clean_cmd in ("/status", "/ping", "/info", "/start", "/help"):
             if not matrix:
                 connecting_msg = (
