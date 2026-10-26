@@ -348,8 +348,8 @@ class FreeConvictionEngine:
         # 2.3 NET EXPECTED VALUE FORMULATION (Spec Section 11.2)
         dist_to_struct_res = max(nearest_resistance - price, 0.0)
         macro_space = max(macro_ceiling - price, 0.0) if is_balloon_expanding else 0.0
-        projected_move = max(dist_to_struct_res, macro_space, 1.2 * atr)
-        projected_gross_pct = max((projected_move / price) * 100.0, immediate_runway) if price > 0 else 0.0
+        projected_move = macro_space if is_balloon_expanding else dist_to_struct_res
+        projected_gross_pct = ((projected_move / price) * 100.0) if price > 0 else 0.0
         spread_pct = float(matrix.get("spread_pct", 0.0))
         # Dynamic slippage estimation: baseline 0.02%, scaled by half-spread + 25% execution impact
         dynamic_slippage_pct = round(max(0.02, (spread_pct / 2.0) * 1.25), 3)
@@ -407,77 +407,62 @@ class FreeConvictionEngine:
         intent_telemetry["intuition_mod"] = round(intuition_mod, 3)
         intent_telemetry["tuned_confidence"] = round(tuned_confidence, 3)
 
-        # 2.6 SETUP A: BOTTOM / DIP TURN PREDICTION (BUYING LOW AT SUPPORT)
+        # 2.6 SETUP A: BOTTOM / DIP TURN PREDICTION (FROZEN CAPITAL GOVERNOR)
         dist_to_support = abs(price - nearest_support)
         is_at_support_floor = dist_to_support <= (0.85 * atr)
 
-        # Macro mean-reversion target (v3.2.6 Decoupled Runway)
-        macro_mean_reversion_target = max(nearest_resistance, price * 1.012, price + (2.0 * atr))
-        dip_target_runway = ((macro_mean_reversion_target - price) / price) * 100.0 if price > 0 else 0.0
-        effective_dip_runway = max(immediate_runway, dip_target_runway)
+        # Physical structural target only (purged synthetic floors)
+        target_a = nearest_resistance
+        target_pct_a = ((target_a - price) / price) * 100.0 if price > 0 else 0.0
 
         is_absorption_confirmed = (
             (tanh_imb > 0.10 or absorption_idx > 12.0)
             and tanh_imb >= 0.0
-            and effective_dip_runway >= adaptive_runway
+            and target_pct_a >= adaptive_runway
         )
 
         if is_at_support_floor and is_absorption_confirmed:
-            target = macro_mean_reversion_target
-            target_pct = ((target - price) / price) * 100.0 if price > 0 else 0.0
-            stop_pct = ((price - dynamic_invalidation) / price) * 100.0 if price > 0 else 0.0
-
-            p_sensory = float(np.clip(0.55 + 0.10 * (absorption_idx / 20.0), 0.40, 0.70))
-            if governor:
-                h = governor.get_health("DIP_ABSORPTION_TURN")
-                m_prior = 10.0
-                pw_raw = (h.total_trades * (h.win_rate / 100.0) + m_prior * p_sensory) / (h.total_trades + m_prior)
-                pw = float(np.clip(pw_raw, 0.25, 0.80))
-            else:
-                pw = p_sensory
-
-            ev_dip, rr_dip = self.calculate_classical_expectancy(pw, target_pct, stop_pct, slippage_pct=dynamic_slippage_pct)
-            if rr_dip < 1.50:
+            # MANDATORY PHYSICAL RUNWAY GATE (+50 bps hurdle)
+            if target_pct_a < 0.50:
                 return TradeIntent(
                     action="WAIT_IN_CASH",
-                    reason=f"REJECTED BY RR GATE: Dip turn R:R ({rr_dip:.2f}:1) < 1.50:1 minimum threshold (Target +{target_pct:.2f}%, Risk -{stop_pct:.2f}%).",
-                    telemetry={**intent_telemetry, "rr_ratio": rr_dip, "true_net_ev": ev_dip},
-                )
-            if ev_dip <= 0.05:
-                return TradeIntent(
-                    action="WAIT_IN_CASH",
-                    reason=f"REJECTED BY EXPECTANCY GATE: Dip turn Net EV={ev_dip:+.2f}% <= +0.05% (pw={pw*100:.1f}%, Target +{target_pct:.2f}%, Risk -{stop_pct:.2f}%).",
-                    telemetry={**intent_telemetry, "rr_ratio": rr_dip, "true_net_ev": ev_dip},
+                    scenario="DIP_ABSORPTION_TURN",
+                    reason=f"REJECTED BY RUNWAY GATE: Dip runway (+{target_pct_a:.2f}%) < +0.50% minimum physical clearance.",
+                    telemetry={**intent_telemetry, "scenario": "DIP_ABSORPTION_TURN", "runway_pct": target_pct_a},
                 )
 
+            # SETUP A FROZEN (BTCTOOL 3.0 Mandate): Disables order dispatch while governing capital cascade
             return TradeIntent(
-                action="ENTER_CORE_LOT_1",
+                action="WAIT_IN_CASH",
                 scenario="DIP_ABSORPTION_TURN",
-                entry_price=price,
-                target_price=target,
-                proposed_stop=dynamic_invalidation,
-                expected_runway_pct=effective_dip_runway,
-                confidence=max(tuned_confidence, 0.75),
-                reason=f"DIP TURN PREDICTED: Tested support (${nearest_support:,.2f}) with bid absorption (Ai={absorption_idx:.1f}, tanh_imb={tanh_imb:+.2f}). Belief={belief.regime_belief} (pers={belief.persistence_ticks}). True Net EV={ev_dip:+.2f}% (R:R {rr_dip:.2f}:1, pw={pw*100:.0f}%). Target: ${target:,.2f} (+{effective_dip_runway:.2f}%).",
-                telemetry={**intent_telemetry, "true_net_ev": ev_dip, "rr_ratio": rr_dip, "win_rate_prob": pw},
+                reason=f"SETUP_A_FROZEN_GOVERNOR: Absorption detected at support (${nearest_support:,.2f}, Ai={absorption_idx:.1f}). Capital governor active; cascade held in cash.",
+                telemetry={**intent_telemetry, "scenario": "DIP_ABSORPTION_TURN", "governor_held": True, "target_price": target_a},
             )
 
         # 2.7 SETUP C: VOLATILITY EXPANSION IMPULSE (Squeeze Firing Ignition)
         tfs = matrix.get("timeframes", {})
         tf_5m = tfs.get("5m", {})
+        tf_15m = tfs.get("15m", {})
+        tf_1h = tfs.get("1h", {})
         pinched_screens = int(balloon.get("pinched_screens", 0))
 
         bb_upper = float(tf_5m.get("bb_upper", price * 1.005))
         bb_mid = float(tf_5m.get("bb_mid", price))
         bb_width = float(tf_5m.get("bb_width", 0.60))
         bb_pct_b = float(tf_5m.get("bb_pct_b", 0.50))
+        bb_width_15m = float(tf_15m.get("bb_width", 1.0))
+        bb_width_1h = float(tf_1h.get("bb_width", 1.0))
 
+        # Dual-Horizon Squeeze: 5m and 15m compressed simultaneously
         is_squeeze_precursor = (
-            bb_width < 0.65 or 
-            pinched_screens >= 2 or 
-            entropy < 0.45 or 
-            is_slow_market
+            (bb_width < 0.65 and bb_width_15m < 0.85) or
+            (entropy < 0.45 and bb_width < 0.65) or
+            (is_slow_market and bb_width_15m < 0.85)
         )
+
+        # 1H Macro Expansion and Minimum +1.00% Clearance Requirement
+        macro_ceiling_dist_pct = ((macro_ceiling - price) / price) * 100.0 if price > 0 else 0.0
+        is_1h_macro_expanding = (bb_width_1h > 1.2 or is_balloon_expanding) and (macro_ceiling_dist_pct >= 1.00)
 
         is_expansion_firing = (
             (price >= bb_upper or bb_pct_b >= 0.95) and
@@ -486,9 +471,18 @@ class FreeConvictionEngine:
             (tanh_imb >= 0.0)
         )
 
-        if is_squeeze_precursor and is_expansion_firing:
-            target_exp = max(macro_ceiling, price * 1.015, price + (2.5 * atr))
-            target_pct_exp = ((target_exp - price) / price) * 100.0 if price > 0 else 0.0
+        if is_squeeze_precursor and is_1h_macro_expanding and is_expansion_firing:
+            # Physical market structure target (macro_ceiling) only
+            target_exp = macro_ceiling
+            target_pct_exp = macro_ceiling_dist_pct
+
+            # MANDATORY PHYSICAL RUNWAY GATE (+50 bps hurdle)
+            if target_pct_exp < 0.50:
+                return TradeIntent(
+                    action="WAIT_IN_CASH",
+                    reason=f"REJECTED BY RUNWAY GATE: Squeeze runway (+{target_pct_exp:.2f}%) < +0.50% minimum physical clearance.",
+                    telemetry={**intent_telemetry, "rr_ratio": 0.0, "true_net_ev": 0.0},
+                )
             dynamic_stop_exp = round(max(bb_mid, price - (0.80 * atr)), 2)
             stop_pct_exp = ((price - dynamic_stop_exp) / price) * 100.0 if price > 0 else 0.0
 
@@ -511,7 +505,7 @@ class FreeConvictionEngine:
                     proposed_stop=dynamic_stop_exp,
                     expected_runway_pct=target_pct_exp,
                     confidence=max(tuned_confidence, 0.80),
-                    reason=f"VOLATILITY EXPANSION: Squeeze firing through upper band (${bb_upper:,.2f}) with velocity={trade_vel:.1f}. True Net EV={ev_exp:+.2f}% (R:R {rr_exp:.2f}:1, pw={pw_exp*100:.0f}%). Target: ${target_exp:,.2f} (+{target_pct_exp:.2f}%).",
+                    reason=f"VOLATILITY EXPANSION: Squeeze firing through upper band (${bb_upper:,.2f}) into expanding 1h macro ceiling (${macro_ceiling:,.2f}, +{target_pct_exp:.2f}%). True Net EV={ev_exp:+.2f}% (R:R {rr_exp:.2f}:1, pw={pw_exp*100:.0f}%).",
                     telemetry={**intent_telemetry, "true_net_ev": ev_exp, "rr_ratio": rr_exp, "win_rate_prob": pw_exp},
                 )
 
@@ -540,8 +534,17 @@ class FreeConvictionEngine:
         )
 
         if is_trend_aligned and is_in_value_zone and is_pullback_supported:
-            target_d = max(pooled_swing_high, price * 1.012, price + (2.0 * atr))
+            # Physical target strictly bound to pooled swing high (purged synthetic floors)
+            target_d = pooled_swing_high
             target_pct_d = ((target_d - price) / price) * 100.0 if price > 0 else 0.0
+
+            # MANDATORY PHYSICAL RUNWAY GATE (+50 bps hurdle)
+            if target_pct_d < 0.50:
+                return TradeIntent(
+                    action="WAIT_IN_CASH",
+                    reason=f"REJECTED BY RUNWAY GATE: Pullback runway (+{target_pct_d:.2f}%) < +0.50% minimum physical clearance.",
+                    telemetry={**intent_telemetry, "rr_ratio": 0.0, "true_net_ev": 0.0},
+                )
             
             dynamic_stop_d = round(ema21 - (0.40 * atr), 2)
             stop_pct_d = ((price - dynamic_stop_d) / price) * 100.0 if price > 0 else 0.0
@@ -581,13 +584,19 @@ class FreeConvictionEngine:
         is_belief_aligned = belief.regime_belief in ("BULL_ACCELERATION", "NEUTRAL_WAIT")
 
         if (is_clearing_high or is_balloon_expanding) and has_real_momentum and is_belief_aligned and (tanh_imb >= 0.0 or trade_vel > 6.0):
-            # Target macro expansion space when entropy < 0.50 and macro_ceiling is compressed
-            if entropy < 0.50:
-                target = max(macro_ceiling, price * 1.012, price + (2.0 * atr))
-            else:
-                target = macro_ceiling
-            effective_runway = max(macro_runway, projected_gross_pct, ((target - price) / price) * 100.0 if price > 0 else 0.0)
+            # Physical target strictly bound to macro ceiling (purged synthetic floors)
+            target = macro_ceiling
             target_pct = ((target - price) / price) * 100.0 if price > 0 else 0.0
+
+            # MANDATORY PHYSICAL RUNWAY GATE (+50 bps hurdle)
+            if target_pct < 0.50:
+                return TradeIntent(
+                    action="WAIT_IN_CASH",
+                    reason=f"REJECTED BY RUNWAY GATE: Breakout runway (+{target_pct:.2f}%) < +0.50% minimum physical clearance.",
+                    telemetry={**intent_telemetry, "rr_ratio": 0.0, "true_net_ev": 0.0},
+                )
+
+            effective_runway = max(macro_runway, target_pct)
             stop_pct = ((price - dynamic_invalidation) / price) * 100.0 if price > 0 else 0.0
 
             p_sensory = float(np.clip(0.40 + 0.15 * tuned_confidence, 0.35, 0.65))

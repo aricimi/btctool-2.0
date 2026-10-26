@@ -162,11 +162,10 @@ class TestZebraBot(unittest.TestCase):
             },
         }
         dip_decision = self.brain.evaluate(dip_matrix, active_trade=None)
-        self.assertEqual(dip_decision["action"], "ENTER_CORE_LOT_1")
+        # In BTCTOOL 3.0, Setup A is frozen as a capital governor to prevent chop & false breakout cascades
+        self.assertEqual(dip_decision["action"], "WAIT_IN_CASH")
         self.assertEqual(dip_decision["scenario"], "DIP_ABSORPTION_TURN")
-        self.assertGreaterEqual(dip_decision["expected_runway_pct"], 0.45)
-        # Mathematical guarantee: Stop MUST sit below actual entry price
-        self.assertLess(dip_decision["invalidation_floor"], dip_decision["entry_price"])
+        self.assertTrue(dip_decision["telemetry"].get("governor_held", False))
 
         # 3. RIDE UNCAPPED MACRO BREAKOUT: Target reached, balloon blowing open outward
         active_trade = {
@@ -1216,7 +1215,7 @@ class TestZebraBot(unittest.TestCase):
         engine = FreeConvictionEngine()
         price = 79500.0
         nearest_support = 79480.0     # Within 0.85 * ATR ($170)
-        nearest_resistance = 79700.0  # +0.25% immediate runway (< 0.45% adaptive hurdle)
+        nearest_resistance = 80100.0  # +0.75% immediate physical runway (>= 0.45% adaptive hurdle)
         atr = 200.0
 
         dip_matrix = {
@@ -1247,13 +1246,11 @@ class TestZebraBot(unittest.TestCase):
         }
 
         intent = engine.evaluate(dip_matrix)
-        self.assertEqual(intent.action, "ENTER_CORE_LOT_1")
+        # In BTCTOOL 3.0, Setup A is frozen as a capital governor
+        self.assertEqual(intent.action, "WAIT_IN_CASH")
         self.assertEqual(intent.scenario, "DIP_ABSORPTION_TURN")
-        self.assertGreaterEqual(intent.expected_runway_pct, 1.10)
-        self.assertGreaterEqual(intent.target_price, price * 1.012)
-        self.assertIn("DIP TURN PREDICTED", intent.reason)
-        self.assertGreaterEqual(intent.telemetry["rr_ratio"], 1.50)
-        self.assertGreater(intent.telemetry["true_net_ev"], 0.05)
+        self.assertTrue(intent.telemetry.get("governor_held", False))
+        self.assertIn("SETUP_A_FROZEN_GOVERNOR", intent.reason)
 
     def test_23_volatility_expansion_impulse(self):
         """Verify Setup C (VOLATILITY_EXPANSION_IMPULSE):
@@ -1288,7 +1285,13 @@ class TestZebraBot(unittest.TestCase):
                     "bb_width": ((bb_upper - bb_lower) / bb_mid) * 100.0,  # ~0.44% (tight squeeze)
                     "bb_pct_b": 1.05,
                     "atr": atr,
-                }
+                },
+                "15m": {
+                    "bb_width": 0.55,  # Dual-horizon compression
+                },
+                "1h": {
+                    "bb_width": 1.35,  # 1h macro expansion
+                },
             },
             "feature_vector": {
                 "entropy": 0.40,
@@ -1304,7 +1307,7 @@ class TestZebraBot(unittest.TestCase):
                 "pooled_swing_high": pooled_swing_high,
             },
             "balloon_geometry": {
-                "is_balloon_expanding": False,
+                "is_balloon_expanding": True,
                 "is_slow_market": False,
                 "pinched_screens": 2,
             },

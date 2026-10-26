@@ -501,6 +501,18 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
      - Increases winning trade average profit retention from $35.9\% \rightarrow 59.3\%$, reduces max drawdown to $0.87\%$ over continuous 34.7-day live market testing, and converts intra-trade run-ups into guaranteed banked net profit.
      - Preserves all Setups (A, B, C, D), Mechanism D anti-churn zone protection, Bayesian governor shrinkage, and conscience escalation.
      - Added unit test `test_26_continuous_proportional_profit_retention_ratchet` in `test_zebra.py` (26/26 unit tests passing).
+   - **Version 3.4.0 Institutional Release (Physical Runway Grounding & Setup A Capital Governor Freeze):**
+     - Purged synthetic target inflation (`price * 1.012`, `price * 1.015`, and synthetic ATR additions) across all setups in `conviction_engine.py`.
+     - Re-anchored mathematical expectancy calculations strictly to physically reachable market structure:
+       * Setup B (`MACRO_BALLOON_BREAKOUT`): `macro_ceiling` (1h/4h upper BBs)
+       * Setup D (`TREND_PULLBACK_CONTINUATION`): `pooled_swing_high`
+       * Setup A (`DIP_ABSORPTION_TURN`): `nearest_resistance`
+       * Setup C (`VOLATILITY_EXPANSION_IMPULSE`): `macro_ceiling`
+     - Implemented Mandatory Physical Runway Gate across all setups: Vetoes any candidate trade with net physical runway < +0.50% (`(target - price) / price < 0.0050`), eliminating negative-EV fee churn.
+     - Frozen Setup A (`DIP_ABSORPTION_TURN`) as a Capital Governor: Halts order dispatching (`WAIT_IN_CASH`) while preserving Setup A's priority slot at support in the evaluation cascade to prevent false breakout cascades into Setups B and C during chop/support consolidation.
+     - Constrained Setup C (`VOLATILITY_EXPANSION_IMPULSE`): Requires simultaneous dual-horizon squeeze confirmation (`bb_width_5m < 0.65` and `bb_width_15m < 0.85`), with an expanding 1h macro ceiling located at least +1.00% above entry.
+     - Preserves CPPR (Continuous Proportional Profit-Retention Ratchet) and Mechanism D (Zone Guard anti-churn) 100% active.
+     - Updated unit test assertions in `test_zebra.py` to reflect Setup A governor freeze and dual-horizon Setup C squeeze requirements (26/26 unit tests passing).
    - **Strict Workspace Isolation Rule (AGENTS.md Rule 4):** The agent environment is strictly locked to `c:\gemini proyect\btctool 2.0`. Under no circumstances may any file be created, read, written, modified, or exported outside the project root.
    - **Master Technical Specification Document (`BTCTOOL_2_0_FULL_SPECIFICATION_WITH_OXY.txt`):** Synchronized to Version 3.2.0 Production with all mathematical formulas, OKX V5 REST and WebSocket specifications, fee model, anti-hanging state machine, and production daemon setup. Stored strictly in the project root.
 
