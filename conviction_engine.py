@@ -148,6 +148,7 @@ class FreeConvictionEngine:
 
     def __init__(self, decay_rate: float = 0.85):
         self.belief_system = BeliefSystem(decay_rate=decay_rate)
+        self.pending_acceptance: Optional[dict] = None
 
     @staticmethod
     def calculate_classical_expectancy(
@@ -173,6 +174,7 @@ class FreeConvictionEngine:
     def reset_belief(self):
         """Resets persistent belief state to neutral baseline."""
         self.belief_system.reset()
+        self.pending_acceptance = None
 
     def evaluate(self, matrix: dict, active_trade: Optional[dict] = None, governor: Optional[Any] = None) -> TradeIntent:
         """
@@ -319,6 +321,42 @@ class FreeConvictionEngine:
         # ==================================================================
         # STATE 2: IN CASH (EXPLICIT BELIEF SYSTEM & ADAPTIVE EV MIND)
         # ==================================================================
+        # 2.0 STRUCTURAL ACCEPTANCE MICRO-RETEST VERIFICATION (v3.6.0)
+        if self.pending_acceptance is not None:
+            p_acc = self.pending_acceptance
+            b_level = float(p_acc["breakout_level"])
+            cushion_level = b_level * 0.998
+
+            candles_1m = matrix.get("candles_1m") or []
+            cur_bar = candles_1m[-1] if candles_1m else {}
+            low_price = float(cur_bar.get("low", matrix.get("best_bid", price)))
+            close_price = float(cur_bar.get("close", price))
+
+            is_holding_retest = (low_price >= cushion_level) and (close_price >= cushion_level)
+
+            if is_holding_retest:
+                intent = TradeIntent(
+                    action="ENTER_CORE_LOT_1",
+                    scenario="MACRO_BALLOON_BREAKOUT",
+                    entry_price=price,
+                    target_price=p_acc["target_price"],
+                    proposed_stop=p_acc["proposed_stop"],
+                    expected_runway_pct=p_acc["expected_runway_pct"],
+                    confidence=p_acc["confidence"],
+                    reason=f"CONFIRMED STRUCTURAL ACCEPTANCE: Price held micro-retest cushion (${cushion_level:,.2f}, 0.20% cushion of ${b_level:,.2f}) at ${price:,.2f}. Flowing into macro space (${p_acc['target_price']:,.2f}).",
+                    telemetry={**p_acc.get("intent_telemetry", {}), "acceptance_confirmed": True, "retest_level": round(b_level, 2)},
+                )
+                self.pending_acceptance = None
+                return intent
+            else:
+                self.pending_acceptance = None
+                return TradeIntent(
+                    action="WAIT_IN_CASH",
+                    scenario="MACRO_BALLOON_BREAKOUT",
+                    reason=f"STRUCTURAL ACCEPTANCE FAILED: Price collapsed below micro-retest cushion (${cushion_level:,.2f}) at ${price:,.2f}. Vetoing false breakout.",
+                    telemetry={"acceptance_failed": True, "breakout_level": round(b_level, 2), "cushion_level": round(cushion_level, 2)},
+                )
+
         f_vec = matrix.get("feature_vector", {})
         trend_strength = float(f_vec.get("trend_strength", 0.0))
         entropy = float(f_vec.get("entropy", 0.5))
@@ -630,6 +668,69 @@ class FreeConvictionEngine:
                     telemetry={**intent_telemetry, "rr_ratio": rr_breakout, "true_net_ev": ev_breakout},
                 )
 
+            # -----------------------------------------------------------------
+            # STRUCTURAL ACCEPTANCE & VOLUME CONFIRMATION GATES (v3.6.0)
+            # -----------------------------------------------------------------
+            candles_1m = matrix.get("candles_1m") or []
+            if candles_1m and len(candles_1m) >= 6:
+                if price >= (pooled_swing_high - 1.0):
+                    breakout_level = pooled_swing_high
+                else:
+                    breakout_level = price
+
+                cur_bar = candles_1m[-1]
+                is_real_green_body = cur_bar["close"] > cur_bar["open"]
+                is_closed_above_level = cur_bar["close"] >= (breakout_level - 1.0)
+
+                if not is_real_green_body:
+                    return TradeIntent(
+                        action="WAIT_IN_CASH",
+                        scenario="MACRO_BALLOON_BREAKOUT",
+                        reason=f"VETO BREAKOUT REJECTION: Candle closed red (${cur_bar['open']:,.2f} -> ${cur_bar['close']:,.2f}) indicating upper-wick rejection.",
+                        telemetry={**intent_telemetry, "candle_color_veto": True},
+                    )
+
+                if not is_closed_above_level:
+                    return TradeIntent(
+                        action="WAIT_IN_CASH",
+                        scenario="MACRO_BALLOON_BREAKOUT",
+                        reason=f"VETO BLIND TOUCH: Candle closed below breakout level (${cur_bar['close']:,.2f} < ${breakout_level:,.2f}).",
+                        telemetry={**intent_telemetry, "blind_touch_veto": True},
+                    )
+
+                prev_5 = candles_1m[-6:-1]
+                avg_vol_5 = float(np.mean([b["vol"] for b in prev_5]))
+                vol_ratio = cur_bar.get("vol", 0.0) / avg_vol_5 if avg_vol_5 > 0 else 1.0
+                if vol_ratio < 1.20:
+                    return TradeIntent(
+                        action="WAIT_IN_CASH",
+                        scenario="MACRO_BALLOON_BREAKOUT",
+                        reason=f"VETO LOW VOLUME: Breakout volume ({cur_bar.get('vol', 0):.2f}) < 1.20x 5-bar average ({avg_vol_5:.2f}).",
+                        telemetry={**intent_telemetry, "volume_veto": True},
+                    )
+
+                intent_telemetry["true_net_ev"] = ev_breakout
+                intent_telemetry["rr_ratio"] = rr_breakout
+                intent_telemetry["win_rate_prob"] = pw
+
+                # Arm pending acceptance state for micro-retest confirmation on subsequent bar
+                self.pending_acceptance = {
+                    "breakout_level": breakout_level,
+                    "target_price": target,
+                    "proposed_stop": dynamic_invalidation,
+                    "expected_runway_pct": effective_runway,
+                    "confidence": max(tuned_confidence, 0.80),
+                    "intent_telemetry": intent_telemetry,
+                }
+
+                return TradeIntent(
+                    action="WAIT_IN_CASH",
+                    scenario="MACRO_BALLOON_BREAKOUT",
+                    reason=f"AWAITING_STRUCTURAL_ACCEPTANCE_RETEST: Armed breakout acceptance candidate at ${breakout_level:,.2f}. Awaiting micro-retest hold (cushion: ${breakout_level * 0.998:,.2f}).",
+                    telemetry={**intent_telemetry, "pending_acceptance": True, "breakout_level": round(breakout_level, 2)},
+                )
+
+            # Direct execution fallback if candle buffers not provided (e.g. synthetic test matrix)
             return TradeIntent(
                 action="ENTER_CORE_LOT_1",
                 scenario="MACRO_BALLOON_BREAKOUT",
@@ -638,7 +739,7 @@ class FreeConvictionEngine:
                 proposed_stop=dynamic_invalidation,
                 expected_runway_pct=effective_runway,
                 confidence=max(tuned_confidence, 0.80),
-                reason=f"MOMENTUM IGNITION: Validated surge (Edge={effective_edge:+.2f}, Urgency={effective_urgency:.2f}, Conf={tuned_confidence:.2f}). Belief={belief.regime_belief} (pers={belief.persistence_ticks}). Flowing into macro space (${macro_ceiling:,.2f}, +{effective_runway:.2f}%) with True Net EV=+{ev_breakout:.2f}% (R:R {rr_breakout:.2f}:1, pw={pw*100:.0f}%).",
+                reason=f"MOMENTUM IGNITION: Validated surge (Edge={effective_edge:+.2f}, Urgency={effective_urgency:.2f}, Conf={tuned_confidence:.2f}). Flowing into macro space (${macro_ceiling:,.2f}, +{effective_runway:.2f}%) with True Net EV=+{ev_breakout:.2f}%.",
                 telemetry={**intent_telemetry, "true_net_ev": ev_breakout, "rr_ratio": rr_breakout, "win_rate_prob": pw},
             )
 

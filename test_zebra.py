@@ -1531,6 +1531,194 @@ class TestZebraBot(unittest.TestCase):
         self.assertIn("TRAILING STOP HIT", decision_exit["reason"])
         self.assertGreater(decision_exit["gain_pct"], 0.0020, "Gross profit must exceed 0.20% OKX fee")
 
+    def test_27_structural_acceptance_red_candle_rejection(self):
+        """
+        Verify v3.6.0: Red breakout candle (upper-wick rejection) is vetoed before entry.
+        """
+        brain = FreeConvictionEngine()
+        candles = [
+            {"open": 83000.0, "high": 83100.0, "low": 82950.0, "close": 83050.0, "vol": 10.0} for _ in range(5)
+        ]
+        # Red candle (open > close): spiked to 84150 but closed red at 83950
+        candles.append({"open": 84050.0, "high": 84150.0, "low": 83900.0, "close": 83950.0, "vol": 25.0})
+
+        matrix = {
+            "latest_price": 83950.0,
+            "candles_1m": candles,
+            "tanh_imbalance": 0.25,
+            "trade_velocity": 8.0,
+            "cvd": 150.0,
+            "absorption_index": 12.0,
+            "spread_pct": 0.02,
+            "composite_atr": 200.0,
+            "multi_screen_bounds": {
+                "nearest_support": 83500.0,
+                "nearest_resistance": 85000.0,
+                "macro_ceiling": 86000.0,
+                "pooled_swing_high": 83900.0,
+                "immediate_runway_pct": 1.25,
+                "macro_runway_pct": 2.44,
+            },
+            "balloon_geometry": {"is_balloon_expanding": True, "regime": "EXPANDING_BALLOON"},
+            "micro_turn": {"is_green_building": False, "velocity_slowing": False},
+            "feature_vector": {"entropy": 0.35, "trend_strength": 0.001, "vol_regime": 1.0, "liquidity": 15.0},
+        }
+
+        # Warm up belief system to BULL_ACCELERATION
+        for _ in range(5):
+            intent = brain.evaluate(matrix, active_trade=None)
+
+        self.assertEqual(intent.action, "WAIT_IN_CASH")
+        self.assertIn("VETO BREAKOUT REJECTION", intent.reason)
+        self.assertTrue(intent.telemetry.get("candle_color_veto"))
+
+    def test_28_structural_acceptance_low_volume_rejection(self):
+        """
+        Verify v3.6.0: Breakout candle with volume < 1.20x average is vetoed.
+        """
+        brain = FreeConvictionEngine()
+        candles = [
+            {"open": 83000.0, "high": 83100.0, "low": 82950.0, "close": 83050.0, "vol": 10.0} for _ in range(5)
+        ]
+        # Green candle, closed above resistance, but volume = 11.0 (< 12.0 = 1.20x)
+        candles.append({"open": 83900.0, "high": 84150.0, "low": 83880.0, "close": 84050.0, "vol": 11.0})
+
+        matrix = {
+            "latest_price": 84050.0,
+            "candles_1m": candles,
+            "tanh_imbalance": 0.25,
+            "trade_velocity": 8.0,
+            "cvd": 150.0,
+            "absorption_index": 12.0,
+            "spread_pct": 0.02,
+            "composite_atr": 200.0,
+            "multi_screen_bounds": {
+                "nearest_support": 83500.0,
+                "nearest_resistance": 85000.0,
+                "macro_ceiling": 86000.0,
+                "pooled_swing_high": 83900.0,
+                "immediate_runway_pct": 1.13,
+                "macro_runway_pct": 2.32,
+            },
+            "balloon_geometry": {"is_balloon_expanding": True, "regime": "EXPANDING_BALLOON"},
+            "micro_turn": {"is_green_building": True, "velocity_slowing": False},
+            "feature_vector": {"entropy": 0.35, "trend_strength": 0.001, "vol_regime": 1.0, "liquidity": 15.0},
+        }
+
+        for _ in range(5):
+            intent = brain.evaluate(matrix, active_trade=None)
+
+        self.assertEqual(intent.action, "WAIT_IN_CASH")
+        self.assertIn("VETO LOW VOLUME", intent.reason)
+        self.assertTrue(intent.telemetry.get("volume_veto"))
+
+    def test_29_structural_acceptance_confirmed_entry(self):
+        """
+        Verify v3.6.0: 3-phase structural acceptance confirms entry after holding retest.
+        """
+        brain = FreeConvictionEngine()
+        candles = [
+            {"open": 83000.0, "high": 83100.0, "low": 82950.0, "close": 83050.0, "vol": 10.0} for _ in range(5)
+        ]
+        # Bar T: Strong green breakout candle with volume = 20.0 (2.0x avg)
+        candles.append({"open": 83850.0, "high": 84150.0, "low": 83850.0, "close": 84100.0, "vol": 20.0})
+
+        matrix_t = {
+            "latest_price": 84100.0,
+            "candles_1m": candles,
+            "tanh_imbalance": 0.25,
+            "trade_velocity": 8.0,
+            "cvd": 150.0,
+            "absorption_index": 12.0,
+            "spread_pct": 0.02,
+            "composite_atr": 200.0,
+            "multi_screen_bounds": {
+                "nearest_support": 83500.0,
+                "nearest_resistance": 85000.0,
+                "macro_ceiling": 86000.0,
+                "pooled_swing_high": 83900.0,
+                "immediate_runway_pct": 1.07,
+                "macro_runway_pct": 2.26,
+            },
+            "balloon_geometry": {"is_balloon_expanding": True, "regime": "EXPANDING_BALLOON"},
+            "micro_turn": {"is_green_building": True, "velocity_slowing": False},
+            "feature_vector": {"entropy": 0.35, "trend_strength": 0.001, "vol_regime": 1.0, "liquidity": 15.0},
+        }
+
+        # Warm up belief to BULL_ACCELERATION
+        for _ in range(5):
+            intent_t = brain.evaluate(matrix_t, active_trade=None)
+
+        # Bar T must arm pending acceptance
+        self.assertEqual(intent_t.action, "WAIT_IN_CASH")
+        self.assertIn("AWAITING_STRUCTURAL_ACCEPTANCE_RETEST", intent_t.reason)
+        self.assertIsNotNone(brain.pending_acceptance)
+
+        # Bar T+1: Holds retest cushion (level = 83900, cushion = 83732.2)
+        candles_t1 = list(candles)
+        candles_t1.append({"open": 84100.0, "high": 84200.0, "low": 83950.0, "close": 84150.0, "vol": 15.0})
+        matrix_t1 = dict(matrix_t)
+        matrix_t1["latest_price"] = 84150.0
+        matrix_t1["candles_1m"] = candles_t1
+
+        intent_t1 = brain.evaluate(matrix_t1, active_trade=None)
+        self.assertEqual(intent_t1.action, "ENTER_CORE_LOT_1")
+        self.assertEqual(intent_t1.scenario, "MACRO_BALLOON_BREAKOUT")
+        self.assertIn("CONFIRMED STRUCTURAL ACCEPTANCE", intent_t1.reason)
+        self.assertTrue(intent_t1.telemetry.get("acceptance_confirmed"))
+        self.assertIsNone(brain.pending_acceptance)
+
+    def test_30_structural_acceptance_retest_collapse(self):
+        """
+        Verify v3.6.0: Retest collapse below cushion cancels candidate before execution.
+        """
+        brain = FreeConvictionEngine()
+        candles = [
+            {"open": 83000.0, "high": 83100.0, "low": 82950.0, "close": 83050.0, "vol": 10.0} for _ in range(5)
+        ]
+        # Bar T: Armed breakout
+        candles.append({"open": 83850.0, "high": 84150.0, "low": 83850.0, "close": 84100.0, "vol": 20.0})
+
+        matrix_t = {
+            "latest_price": 84100.0,
+            "candles_1m": candles,
+            "tanh_imbalance": 0.25,
+            "trade_velocity": 8.0,
+            "cvd": 150.0,
+            "absorption_index": 12.0,
+            "spread_pct": 0.02,
+            "composite_atr": 200.0,
+            "multi_screen_bounds": {
+                "nearest_support": 83500.0,
+                "nearest_resistance": 85000.0,
+                "macro_ceiling": 86000.0,
+                "pooled_swing_high": 83900.0,
+                "immediate_runway_pct": 1.07,
+                "macro_runway_pct": 2.26,
+            },
+            "balloon_geometry": {"is_balloon_expanding": True, "regime": "EXPANDING_BALLOON"},
+            "micro_turn": {"is_green_building": True, "velocity_slowing": False},
+            "feature_vector": {"entropy": 0.35, "trend_strength": 0.001, "vol_regime": 1.0, "liquidity": 15.0},
+        }
+
+        for _ in range(5):
+            brain.evaluate(matrix_t, active_trade=None)
+
+        self.assertIsNotNone(brain.pending_acceptance)
+
+        # Bar T+1: Collapses back inside range (low = 83500, close = 83600 < cushion 83732.2)
+        candles_t1 = list(candles)
+        candles_t1.append({"open": 84100.0, "high": 84100.0, "low": 83500.0, "close": 83600.0, "vol": 25.0})
+        matrix_t1 = dict(matrix_t)
+        matrix_t1["latest_price"] = 83600.0
+        matrix_t1["candles_1m"] = candles_t1
+
+        intent_t1 = brain.evaluate(matrix_t1, active_trade=None)
+        self.assertEqual(intent_t1.action, "WAIT_IN_CASH")
+        self.assertIn("STRUCTURAL ACCEPTANCE FAILED", intent_t1.reason)
+        self.assertTrue(intent_t1.telemetry.get("acceptance_failed"))
+        self.assertIsNone(brain.pending_acceptance)
+
 
 if __name__ == "__main__":
     unittest.main()
