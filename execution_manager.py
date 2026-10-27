@@ -4,6 +4,7 @@ Manages multi-lot allocations, clean-slate trade journal archiving,
 zero-leash immediate exits, and rich Telegram push alerts on every move.
 """
 
+import datetime
 import json
 import logging
 import os
@@ -135,6 +136,7 @@ class ExecutionManager:
         invalidation_floor: float,
         reason: str,
         p_up: float = 0.70,
+        lot_1_scale_pct: Optional[float] = None,
         feature_vector: Optional[dict] = None,
         trade_intent: Optional[dict] = None,
         risk_decision: Optional[dict] = None,
@@ -147,14 +149,22 @@ class ExecutionManager:
             target_1=target_price,
             target_2=0.0,
             rationale=reason,
+            lot_1_scale_pct=lot_1_scale_pct,
             feature_vector=feature_vector,
             trade_intent=trade_intent,
             risk_decision=risk_decision,
         )
 
+        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.active_trade = {
             "trade_id": trade_id,
             "entry": round(entry_price, 2),
+            "lot_1_entry": round(entry_price, 2),
+            "lot_1_scale_pct": lot_1_scale_pct,
+            "lot_2_entry": None,
+            "blended_entry": round(entry_price, 2),
+            "entry_time": now_str,
+            "scale_in_time": None,
             "highest_price": round(entry_price, 2),
             "scenario": scenario,
             "target_price": round(target_price, 2),
@@ -196,11 +206,18 @@ class ExecutionManager:
         if not self.active_trade:
             return
 
-        old_entry = self.active_trade["entry"]
+        old_entry = self.active_trade.get("lot_1_entry", self.active_trade["entry"])
         blended_entry = round((old_entry + price) / 2.0, 2)
+        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        self.active_trade["lot_1_entry"] = round(old_entry, 2)
+        self.active_trade["lot_2_entry"] = round(price, 2)
+        self.active_trade["blended_entry"] = blended_entry
+        self.active_trade["scale_in_time"] = now_str
         self.active_trade["entry"] = blended_entry
         self.active_trade["tranche_2_added"] = True
 
+        self.journal.record_scale_in(lot_2_price=price, scale_time=now_str, scale_reason=reason)
         self.save_state(market_state="SCALED_LOT_2")
         logger.info(f"[Execution] Lot 2 scaled in at ${price:,.2f}. Blended Entry=${blended_entry:,.2f}")
 

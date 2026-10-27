@@ -63,6 +63,7 @@ class TradeJournal:
         target_1: float,
         target_2: float,
         rationale: str = "",
+        lot_1_scale_pct: Optional[float] = None,
         feature_vector: Optional[dict] = None,
         trade_intent: Optional[dict] = None,
         risk_decision: Optional[dict] = None,
@@ -77,11 +78,20 @@ class TradeJournal:
         elif entry_price > 0 and target_1 > entry_price:
             pred_runway = ((target_1 - entry_price) / entry_price) * 100.0
 
+        scale_pct = lot_1_scale_pct
+        if scale_pct is None and risk_decision and "approved_size_factor" in risk_decision:
+            scale_pct = round(float(risk_decision["approved_size_factor"]) * 100.0, 1)
+
         new_trade = {
             "id": trade_id,
             "type": "SPOT_BUY",
             "setup": setup_name,
             "entry_time": now_str,
+            "lot_1_entry": round(entry_price, 2),
+            "lot_1_scale_pct": scale_pct,
+            "scale_in_time": None,
+            "lot_2_entry": None,
+            "blended_entry": round(entry_price, 2),
             "entry_price": round(entry_price, 2),
             "exit_time": None,
             "exit_price": None,
@@ -107,6 +117,36 @@ class TradeJournal:
         self.data["trades"].append(new_trade)
         self._recalculate_and_save()
         return trade_id
+
+    def record_scale_in(
+        self,
+        lot_2_price: float,
+        scale_time: Optional[str] = None,
+        scale_reason: str = ""
+    ) -> None:
+        """Records Lot 2 scale-in addition and computes blended entry price."""
+        open_trade = None
+        for t in reversed(self.data["trades"]):
+            if t.get("status") == "ACTIVE_OPEN":
+                open_trade = t
+                break
+
+        if not open_trade:
+            return
+
+        now_str = scale_time or datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        open_trade["scale_in_time"] = now_str
+        open_trade["lot_2_entry"] = round(lot_2_price, 2)
+
+        lot_1_p = open_trade.get("lot_1_entry", open_trade.get("entry_price", lot_2_price))
+        blended = round((lot_1_p + lot_2_price) / 2.0, 2)
+        open_trade["blended_entry"] = blended
+        open_trade["entry_price"] = blended  # Updates active entry price so record_exit uses blended
+
+        if scale_reason:
+            open_trade["scale_in_reason"] = scale_reason
+
+        self._recalculate_and_save()
 
     def record_exit(
         self,
@@ -296,14 +336,26 @@ class TradeJournal:
 
         lines.append("\n---")
         lines.append("## 📋 Historical Trade Ledger")
-        lines.append("| # | Entry Time | Exit Time | Duration | Setup | Entry Price | Exit Price | Gross PnL | Fees | Net PnL | Result | Exit Rationale |")
-        lines.append("| :-: | :--- | :--- | :---: | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |")
+        lines.append("| # | Lot 1 Entry Time | Lot 1 Price | Scale % | Scale-In Time | Lot 2 Price | Blended Entry | Exit Time | Duration | Exit Price | Target | Floor | Gross PnL | Net PnL | Result | Exit Reason / Rectification |")
+        lines.append("| :-: | :--- | :---: | :---: | :--- | :---: | :---: | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |")
 
         for t in self.data["trades"]:
+            lot_1_p = t.get("lot_1_entry", t.get("entry_price", 0))
+            lot_1_str = f"${lot_1_p:,.2f}" if lot_1_p else "—"
+            scale_pct = t.get("lot_1_scale_pct")
+            scale_pct_str = f"{scale_pct}%" if scale_pct is not None else "—"
+            lot_2_ts = t.get("scale_in_time") or "—"
+            lot_2_p = t.get("lot_2_entry")
+            lot_2_str = f"${lot_2_p:,.2f}" if lot_2_p else "—"
+            blended_p = t.get("blended_entry", t.get("entry_price", 0))
+            blended_str = f"${blended_p:,.2f}" if blended_p else "—"
+            target_str = f"${t.get('target_1', 0):,.2f}" if t.get('target_1') else "—"
+            floor_str = f"${t.get('stop_loss', 0):,.2f}" if t.get('stop_loss') else "—"
+
             if t.get("status") == "ACTIVE_OPEN":
                 lines.append(
-                    f"| **{t['id']}** | {t['entry_time']} | *OPEN* | *Holding* | `{t['setup']}` | "
-                    f"${t['entry_price']:,.2f} | — | — | -0.20% | — | 🟢 **ACTIVE** | Open Position |"
+                    f"| **{t['id']}** | {t['entry_time']} | {lot_1_str} | {scale_pct_str} | "
+                    f"{lot_2_ts} | {lot_2_str} | {blended_str} | *OPEN* | *Holding* | — | {target_str} | {floor_str} | — | — | 🟢 **ACTIVE** | Open Position |"
                 )
             else:
                 net_pnl = t.get("net_pnl_pct", 0.0)
@@ -311,9 +363,9 @@ class TradeJournal:
                 gross_str = f"+{t['gross_pnl_pct']:.2f}%" if t['gross_pnl_pct'] >= 0 else f"{t['gross_pnl_pct']:.2f}%"
                 net_str = f"+{net_pnl:.2f}%" if net_pnl >= 0 else f"{net_pnl:.2f}%"
                 lines.append(
-                    f"| **{t['id']}** | {t['entry_time']} | {t['exit_time']} | {t.get('duration', 'N/A')} | "
-                    f"`{t['setup']}` | ${t['entry_price']:,.2f} | ${t['exit_price']:,.2f} | "
-                    f"{gross_str} | -0.20% | **{net_str}** | {badge} | {t.get('exit_reason', 'N/A')} |"
+                    f"| **{t['id']}** | {t['entry_time']} | {lot_1_str} | {scale_pct_str} | "
+                    f"{lot_2_ts} | {lot_2_str} | {blended_str} | {t['exit_time']} | {t.get('duration', 'N/A')} | "
+                    f"${t['exit_price']:,.2f} | {target_str} | {floor_str} | {gross_str} | **{net_str}** | {badge} | {t.get('exit_reason', 'N/A')} |"
                 )
 
         lines.append("\n---\n*BTCTOOL 2.0 Autonomous Spot Execution Engine · Pure Event-Driven Architecture*")
@@ -333,19 +385,23 @@ class TradeJournal:
             "Status",
             "Type",
             "Setup",
-            "Entry Time",
+            "Lot 1 Entry Time",
+            "Lot 1 Entry Price ($)",
+            "Lot 1 Scale (%)",
+            "Lot 2 Scale-In Time",
+            "Lot 2 Entry Price ($)",
+            "Blended Entry Price ($)",
+            "Target 1 ($)",
+            "Invalidation Floor ($)",
             "Exit Time",
             "Hold Duration",
-            "Entry Price ($)",
             "Exit Price ($)",
-            "Target 1 ($)",
-            "Target 2 ($)",
-            "Stop Loss ($)",
             "Gross PnL (%)",
             "OKX Fee (%)",
             "Net PnL (%)",
             "Result",
-            "Exit Reason"
+            "Whale Thesis",
+            "Exit Reason / Rectification",
         ]
         rows = [headers]
         for t in self.data["trades"]:
@@ -366,24 +422,38 @@ class TradeJournal:
                 gross_str = f"{t.get('gross_pnl_pct', 0.0):+.2f}%" if t.get('gross_pnl_pct') is not None else ""
                 net_str = f"{net_pnl:+.2f}%" if net_pnl is not None else ""
 
+            lot_1_p = t.get("lot_1_entry", t.get("entry_price", 0))
+            lot_1_str = f"{lot_1_p:.2f}" if lot_1_p else ""
+            scale_pct = t.get("lot_1_scale_pct")
+            scale_pct_str = f"{scale_pct}%" if scale_pct is not None else ""
+            lot_2_ts = t.get("scale_in_time", "")
+            lot_2_p = t.get("lot_2_entry")
+            lot_2_str = f"{lot_2_p:.2f}" if lot_2_p is not None else ""
+            blended_p = t.get("blended_entry", t.get("entry_price", 0))
+            blended_str = f"{blended_p:.2f}" if blended_p else ""
+
             row = [
                 t.get("id"),
                 t.get("status"),
                 t.get("type", "SPOT_BUY"),
                 t.get("setup", ""),
                 t.get("entry_time", ""),
+                lot_1_str,
+                scale_pct_str,
+                lot_2_ts,
+                lot_2_str,
+                blended_str,
+                f"{t.get('target_1', 0):.2f}" if t.get('target_1') else "",
+                f"{t.get('stop_loss', 0):.2f}" if t.get('stop_loss') else "",
                 exit_time,
                 duration,
-                f"{t.get('entry_price', 0):.2f}",
                 exit_price,
-                f"{t.get('target_1', 0):.2f}" if t.get('target_1') else "",
-                f"{t.get('target_2', 0):.2f}" if t.get('target_2') else "",
-                f"{t.get('stop_loss', 0):.2f}" if t.get('stop_loss') else "",
                 gross_str,
                 f"{-OKX_ROUNDTRIP_FEE_PCT:.2f}%",
                 net_str,
                 result,
-                t.get("exit_reason", "")
+                t.get("rationale", ""),
+                t.get("exit_reason", ""),
             ]
             rows.append(row)
 

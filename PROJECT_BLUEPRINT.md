@@ -519,6 +519,18 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
      - Implemented Excel-lock fallback in `trade_logger.py`: if `trade_journal.csv` is locked open in Microsoft Excel during a trade close, the engine immediately writes to `trade_journal_latest.csv` and sets `pending_csv_update = True` to guarantee zero delayed or lost trade records.
      - Created standalone synchronizer client `sync_ledger.py` supporting both one-shot sync and persistent daemon polling (`--watch`) to keep local `trade_history.json` and `trade_journal.csv` continuously fresh for auditing. Hardened with defensive payload verification and local trade retention against deployment race conditions.
      - Synchronized trade ledger with authentic live execution alerts from Telegram (4 total closed trades: 1 win, 3 losses, -0.97% net PnL).
+   - **Version 3.4.2 Institutional Release (Multi-Tranche Execution Ledger & Telegram Fidelity Schema):**
+     - Expanded TradeJournal and execution_manager.py to support explicit multi-tranche tracking:
+       * Lot 1 Entry Time, Lot 1 Entry Price ($), and Lot 1 Scale (%) (stress clamp sizing percentage)
+       * Lot 2 Scale-In Time and Lot 2 Entry Price ($) (absorption dip addition)
+       * Blended Entry Price ($) (volume-weighted combined entry for net PnL accounting)
+       * Target 1 ($), Invalidation Floor ($), Exit Time, Hold Duration, Exit Price ($)
+       * Gross PnL (%), OKX Fee (%), Net PnL (%), Result
+       * Whale Thesis and Exit Reason / Rectification (capturing full verbatim Telegram push alert text)
+     - Added record_scale_in() method to TradeJournal to dynamically track Lot 2 additions with timestamps and recalculate blended entry in real-time.
+     - Updated _render_csv() and _render_markdown() in trade_logger.py to export the complete multi-entry schema across trade_journal.csv and trade_journal.md.
+     - Re-seeded trade_history.json, trade_journal.csv, and trade_journal.md with the 4 authentic live execution alerts from Telegram.
+     - Verified 26/26 unit tests passing in test_zebra.py.
    - **Strict Workspace Isolation Rule (AGENTS.md Rule 4):** The agent environment is strictly locked to `c:\gemini proyect\btctool 2.0`. Under no circumstances may any file be created, read, written, modified, or exported outside the project root.
    - **Master Technical Specification Document (`BTCTOOL_2_0_FULL_SPECIFICATION_WITH_OXY.txt`):** Synchronized to Version 3.2.0 Production with all mathematical formulas, OKX V5 REST and WebSocket specifications, fee model, anti-hanging state machine, and production daemon setup. Stored strictly in the project root.
 

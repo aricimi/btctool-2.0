@@ -359,6 +359,7 @@ class ZebraBotEngine:
                         target_price=target_p,
                         invalidation_floor=inval_p,
                         reason=reason,
+                        lot_1_scale_pct=round(size_factor * 100.0, 1),
                         feature_vector=f_vec,
                         trade_intent=intent.__dict__ if hasattr(intent, "__dict__") else dict(intent),
                         risk_decision=decision.__dict__ if hasattr(decision, "__dict__") else dict(decision),
