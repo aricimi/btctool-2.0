@@ -244,24 +244,32 @@ class FreeConvictionEngine:
                         telemetry={"scenario": scenario, "gain_pct": gain_pct},
                     )
 
-            # 1.2 CONTINUOUS PROPORTIONAL PROFIT-RETENTION RATCHET (CPPR)
+            # 1.2 CONTINUOUS PROPORTIONAL PROFIT-RETENTION RATCHET (CPPR v2: HIGH EXPECTANCY)
             updated_trailing_stop = trailing_stop
-            # Step 1: Once peak excursion reaches +0.50% gross (+0.30% net), lock continuous proportional profit retention:
-            # Floor = max(0.25% breakeven-fee floor, peak_gain * 0.60 retention)
-            if peak_gain_pct >= 0.0050:
-                locked_gain_pct = max(0.0025, peak_gain_pct * 0.60)
+            # Step 1: Delayed Activation - Under +1.20% gross (+120 bps), do NOT lock premature tight stop.
+            # Position breathes with structural invalidation floor to avoid sub-minute noise asphyxiation.
+            # Step 2: Peak excursion >= +1.20% gross: lock 50% of peak gain (min +0.35% gross, ensuring positive net profit)
+            if peak_gain_pct >= 0.0120:
+                locked_gain_pct = max(0.0035, peak_gain_pct * 0.50)
                 cppr_stop = round(entry * (1.0 + locked_gain_pct), 2)
                 if cppr_stop > updated_trailing_stop:
                     updated_trailing_stop = cppr_stop
-                    logger.info(f"[Brain] CPPR Ratchet: Peak +{peak_gain_pct*100:.2f}% gross -> trailing stop locked to ${updated_trailing_stop:,.2f} (+{locked_gain_pct*100:.2f}% gross)")
+                    logger.info(f"[Brain] CPPR v2 Ratchet Level 1: Peak +{peak_gain_pct*100:.2f}% gross -> trailing stop locked to ${updated_trailing_stop:,.2f} (+{locked_gain_pct*100:.2f}% gross)")
 
-            # Step 2: As price surges higher (peak gain >= +1.20%), ratchet stop behind the rising nearest support
-            # with minimum 0.8 * ATR breathing buffer, preventing sub-minute noise asphyxiation
-            if peak_gain_pct >= 0.0120 and nearest_support > entry:
-                ratchet_level = round(nearest_support - (0.8 * atr), 2)
-                if ratchet_level > updated_trailing_stop:
-                    updated_trailing_stop = ratchet_level
-                    logger.info(f"[Brain] Ratchet trailing stop higher behind rising support: ${updated_trailing_stop:,.2f}")
+                # If nearest support is above entry, ratchet stop behind support with ATR breathing buffer
+                if nearest_support > entry:
+                    support_stop = round(nearest_support - (0.8 * atr), 2)
+                    if support_stop > updated_trailing_stop:
+                        updated_trailing_stop = support_stop
+                        logger.info(f"[Brain] Ratchet trailing stop higher behind rising support: ${updated_trailing_stop:,.2f}")
+
+            # Step 3: Peak excursion >= +1.50% gross (structural target territory): lock 60% of peak gain
+            if peak_gain_pct >= 0.0150:
+                locked_gain_60 = peak_gain_pct * 0.60
+                cppr_stop_60 = round(entry * (1.0 + locked_gain_60), 2)
+                if cppr_stop_60 > updated_trailing_stop:
+                    updated_trailing_stop = cppr_stop_60
+                    logger.info(f"[Brain] CPPR v2 Ratchet Level 2: Peak +{peak_gain_pct*100:.2f}% gross -> trailing stop locked to ${updated_trailing_stop:,.2f} (+{locked_gain_60*100:.2f}% gross)")
 
             # 1.3 TARGET DECISION POINT (BANK OR RIDE MACRO BALLOON)
             if price >= target_price:
@@ -538,11 +546,11 @@ class FreeConvictionEngine:
             target_d = pooled_swing_high
             target_pct_d = ((target_d - price) / price) * 100.0 if price > 0 else 0.0
 
-            # MANDATORY PHYSICAL RUNWAY GATE (+50 bps hurdle)
-            if target_pct_d < 0.50:
+            # MANDATORY HIGH-EXPECTANCY PHYSICAL RUNWAY GATE (+150 bps hurdle)
+            if target_pct_d < 1.50:
                 return TradeIntent(
                     action="WAIT_IN_CASH",
-                    reason=f"REJECTED BY RUNWAY GATE: Pullback runway (+{target_pct_d:.2f}%) < +0.50% minimum physical clearance.",
+                    reason=f"REJECTED BY HIGH-EXPECTANCY RUNWAY GATE: Pullback runway (+{target_pct_d:.2f}%) < +1.50% minimum physical clearance.",
                     telemetry={**intent_telemetry, "rr_ratio": 0.0, "true_net_ev": 0.0},
                 )
             
@@ -588,11 +596,11 @@ class FreeConvictionEngine:
             target = macro_ceiling
             target_pct = ((target - price) / price) * 100.0 if price > 0 else 0.0
 
-            # MANDATORY PHYSICAL RUNWAY GATE (+50 bps hurdle)
-            if target_pct < 0.50:
+            # MANDATORY HIGH-EXPECTANCY PHYSICAL RUNWAY GATE (+150 bps hurdle)
+            if target_pct < 1.50:
                 return TradeIntent(
                     action="WAIT_IN_CASH",
-                    reason=f"REJECTED BY RUNWAY GATE: Breakout runway (+{target_pct:.2f}%) < +0.50% minimum physical clearance.",
+                    reason=f"REJECTED BY HIGH-EXPECTANCY RUNWAY GATE: Breakout runway (+{target_pct:.2f}%) < +1.50% minimum physical clearance.",
                     telemetry={**intent_telemetry, "rr_ratio": 0.0, "true_net_ev": 0.0},
                 )
 

@@ -170,19 +170,19 @@ class TestZebraBot(unittest.TestCase):
         # 3. RIDE UNCAPPED MACRO BREAKOUT: Target reached, balloon blowing open outward
         active_trade = {
             "entry": 81750.0,
-            "target_price": 82300.0,
+            "target_price": 82800.0,
             "invalidation_floor": 81650.0,
             "trailing_stop": 81650.0,
             "scenario": "DIP_ABSORPTION_TURN",
             "tranche_2_added": False,
         }
         uncapped_matrix = {
-            "latest_price": 82350.0,  # Hit initial target
+            "latest_price": 82850.0,  # Hit target (+1.35% gross, clears +1.20% CPPR v2)
             "tanh_imbalance": 0.35,
             "absorption_index": 18.0,
             "multi_screen_bounds": {
                 "nearest_support": 82100.0,     # Rising Middle Band support
-                "nearest_resistance": 82300.0,
+                "nearest_resistance": 82800.0,
                 "macro_ceiling": 83600.0,       # Wide open macro space
                 "immediate_runway_pct": 0.10,
                 "macro_runway_pct": 1.52,
@@ -565,7 +565,7 @@ class TestZebraBot(unittest.TestCase):
             "trailing_stop": 79500.0,
             "scenario": "TEST",
         }
-        # Price moved up +0.40% (should NOT move stop to breakeven yet; requires +0.60%)
+        # Price moved up +0.40% (should NOT move stop to breakeven yet; requires +1.20% CPPR v2 delayed activation)
         m_40 = {
             "latest_price": 80320.0,  # +0.40%
             "multi_screen_bounds": {"nearest_support": 80100.0, "nearest_resistance": 83000.0, "macro_ceiling": 85000.0, "immediate_runway_pct": 3.3, "macro_runway_pct": 5.8},
@@ -576,14 +576,21 @@ class TestZebraBot(unittest.TestCase):
         intent_40 = brain.evaluate(m_40, active_trade=active)
         self.assertEqual(intent_40.proposed_stop, 79500.0, "Must not ratchet to breakeven prematurely at +0.40%")
 
-        # Price moved up +0.70% (exceeds +0.50% CPPR requirement)
-        m_70 = dict(m_40)
-        m_70["latest_price"] = 80560.0  # +0.70%
-        intent_70 = brain.evaluate(m_70, active_trade=active)
-        # With CPPR: Stop must move to entry * (1.0 + max(0.0025, 0.0070 * 0.60)) = entry * 1.0042 (+0.42% gross = $80,336.0)
-        self.assertEqual(intent_70.proposed_stop, 80336.0, "Must ratchet stop via CPPR to entry * 1.0042 (+0.42%)")
-        # Net profit after OKX 0.20% fee is guaranteed positive (+0.22%)
-        net_at_cppr = ((80336.0 - 80000.0) / 80000.0) - 0.0020
+        # Price moved up +0.80% (still below +1.20% CPPR v2 threshold, breathes with initial stop to avoid noise asphyxiation)
+        m_80 = dict(m_40)
+        m_80["latest_price"] = 80640.0  # +0.80%
+        intent_80 = brain.evaluate(m_80, active_trade=active)
+        self.assertEqual(intent_80.proposed_stop, 79500.0, "Must maintain initial structural stop below +1.20% to avoid premature noise asphyxiation")
+
+        # Price expands to +1.25% (exceeds +1.20% CPPR v2 requirement)
+        m_125 = dict(m_40)
+        m_125["latest_price"] = 81000.0  # +1.25%
+        active_125 = dict(active)
+        active_125["highest_price"] = 81000.0
+        intent_125 = brain.evaluate(m_125, active_trade=active_125)
+        # With CPPR v2: Stop locks at entry * (1.0 + max(0.0035, 0.0125 * 0.50)) = entry * 1.00625 = $80,500.0 (+0.625% gross)
+        self.assertEqual(intent_125.proposed_stop, 80500.0, "Must ratchet stop via CPPR v2 Level 1 to entry * 1.00625 (+0.625%)")
+        net_at_cppr = ((80500.0 - 80000.0) / 80000.0) - 0.0020
         self.assertGreater(net_at_cppr, 0.0, "CPPR exit must guarantee net positive cash")
 
     def test_10_v31_classical_expectancy_and_hard_stop_primacy(self):
@@ -1334,7 +1341,7 @@ class TestZebraBot(unittest.TestCase):
         ema9 = 81520.0
         ema21 = 81420.0
         ema50 = 81200.0
-        pooled_swing_high = 82200.0  # +0.86% above (in mid-air)
+        pooled_swing_high = 82800.0  # +1.60% above (clears mandatory >= +1.50% high-expectancy runway gate)
         nearest_support = 80800.0    # Far below ($700 below, dist > 0.85*atr)
         atr = 150.0
 
@@ -1365,10 +1372,10 @@ class TestZebraBot(unittest.TestCase):
             },
             "multi_screen_bounds": {
                 "nearest_support": nearest_support,
-                "nearest_resistance": 81800.0,
-                "macro_ceiling": 82500.0,
-                "immediate_runway_pct": ((81800.0 - price) / price) * 100.0,
-                "macro_runway_pct": ((82500.0 - price) / price) * 100.0,
+                "nearest_resistance": 82800.0,
+                "macro_ceiling": 83500.0,
+                "immediate_runway_pct": ((82800.0 - price) / price) * 100.0,
+                "macro_runway_pct": ((83500.0 - price) / price) * 100.0,
                 "pooled_swing_high": pooled_swing_high,
             },
             "balloon_geometry": {
@@ -1385,7 +1392,7 @@ class TestZebraBot(unittest.TestCase):
         intent = engine.evaluate(trend_matrix)
         self.assertEqual(intent.action, "ENTER_CORE_LOT_1")
         self.assertEqual(intent.scenario, "TREND_PULLBACK_CONTINUATION")
-        self.assertGreaterEqual(intent.expected_runway_pct, 0.80)
+        self.assertGreaterEqual(intent.expected_runway_pct, 1.50)
         self.assertIn("TREND CONTINUATION", intent.reason)
         self.assertGreaterEqual(intent.telemetry["rr_ratio"], 1.50)
         self.assertGreater(intent.telemetry["true_net_ev"], 0.05)
@@ -1459,12 +1466,11 @@ class TestZebraBot(unittest.TestCase):
         self.assertNotIn("ANTI-CHURN ZONE GUARD", decision_cleared.reason)
 
     def test_26_continuous_proportional_profit_retention_ratchet(self):
-        """Verify CPPR (Continuous Proportional Profit-Retention Ratchet):
-        1. Below +0.50% gain, initial stop is maintained.
-        2. At +0.50% gain, stop ratchets to max(0.25%, 0.50% * 0.60) = +0.30% gross.
-        3. At +0.80% peak gain, stop ratchets to +0.48% gross (60% retention).
-        4. At +1.00% peak gain, stop ratchets to +0.60% gross.
-        5. When price falls back to the CPPR stop, BANK_PROFIT is triggered with positive net profit after fees.
+        """Verify CPPR v2 (Delayed Activation & High-Expectancy Ratchet):
+        1. Below +1.20% gain, initial stop is maintained (avoids premature noise exits).
+        2. At +1.20% gain, stop ratchets to max(0.35%, 1.20% * 0.50) = +0.60% gross.
+        3. At +1.50% peak gain, stop ratchets to +0.90% gross (60% retention).
+        4. When price falls back to the CPPR stop, BANK_PROFIT is triggered with positive net profit after fees.
         """
         entry_price = 80000.0
         active_trade = {
@@ -1477,7 +1483,7 @@ class TestZebraBot(unittest.TestCase):
             "tranche_2_added": False,
         }
         base_matrix = {
-            "latest_price": 80240.0,  # +0.30% gain (below +0.50% trigger)
+            "latest_price": 80640.0,  # +0.80% gain (below +1.20% trigger)
             "composite_atr": 150.0,
             "tanh_imbalance": 0.20,
             "absorption_index": 15.0,
@@ -1496,29 +1502,29 @@ class TestZebraBot(unittest.TestCase):
             "micro_turn": {"is_green_building": True, "velocity_slowing": False},
         }
 
-        # 1. Gain < +0.50%: stop unchanged
+        # 1. Gain < +1.20%: stop unchanged (noise tolerance)
         decision_1 = self.brain.evaluate(base_matrix, active_trade=active_trade)
         self.assertEqual(decision_1["action"], "HOLD_POSITION")
         self.assertEqual(decision_1["proposed_stop"], 79600.0)
 
-        # 2. Gain reaches +0.50% (price $80,400): stop locks at max(0.25%, 0.50% * 0.60) = +0.30% gross ($80,240.00)
-        base_matrix["latest_price"] = 80400.0
-        active_trade["highest_price"] = 80400.0
+        # 2. Gain reaches +1.20% (price $80,960): stop locks at max(0.35%, 1.20% * 0.50) = +0.60% gross ($80,480.00)
+        base_matrix["latest_price"] = 80960.0
+        active_trade["highest_price"] = 80960.0
         decision_2 = self.brain.evaluate(base_matrix, active_trade=active_trade)
         self.assertEqual(decision_2["action"], "HOLD_POSITION")
-        expected_stop_2 = round(entry_price * (1.0 + 0.0030), 2)  # $80,240.00
+        expected_stop_2 = round(entry_price * (1.0 + 0.0060), 2)  # $80,480.00
         self.assertEqual(decision_2["proposed_stop"], expected_stop_2)
         active_trade["trailing_stop"] = decision_2["proposed_stop"]
 
-        # 3. Peak expands to +0.80% (price $80,640): stop locks at 0.80% * 0.60 = +0.48% gross ($80,384.00)
-        base_matrix["latest_price"] = 80640.0
-        active_trade["highest_price"] = 80640.0
+        # 3. Peak expands to +1.50% (price $81,200): stop locks at 1.50% * 0.60 = +0.90% gross ($80,720.00)
+        base_matrix["latest_price"] = 81200.0
+        active_trade["highest_price"] = 81200.0
         decision_3 = self.brain.evaluate(base_matrix, active_trade=active_trade)
-        expected_stop_3 = round(entry_price * (1.0 + 0.0048), 2)  # $80,384.00
+        expected_stop_3 = round(entry_price * (1.0 + 0.0090), 2)  # $80,720.00
         self.assertEqual(decision_3["proposed_stop"], expected_stop_3)
         active_trade["trailing_stop"] = decision_3["proposed_stop"]
 
-        # 4. Pullback to CPPR stop ($80,384.00): triggers BANK_PROFIT with net positive return
+        # 4. Pullback to CPPR stop ($80,720.00): triggers BANK_PROFIT with net positive return
         base_matrix["latest_price"] = expected_stop_3
         decision_exit = self.brain.evaluate(base_matrix, active_trade=active_trade)
         self.assertEqual(decision_exit["action"], "BANK_PROFIT")
