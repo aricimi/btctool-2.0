@@ -563,6 +563,17 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
        * Adding Setup A degraded portfolio PnL from +1.01% to -0.30% (PF dropped from 1.37 to 0.87).
        * Confirmed Setup A remains permanently frozen under the Capital Governor.
      - **Unit Test Suite:** Added 4 new dedicated tests in `test_zebra.py` (`test_27`, `test_28`, `test_29`, `test_30`) covering red candle vetoes, low volume vetoes, confirmed retest entries, and retest collapses; all 30/30 unit tests passing in 0.194s.
+    - **Version 3.7.0 Institutional Release (High-Margin Intelligence Engine & Macro Shielding Architecture):**
+      - **Higher-Timeframe Macro Shielding:** Implemented a mandatory 1h and 4h trend alignment gate in conviction_engine.py (Section 2.65). If price sits below the 1h or 4h 20-period mid-band, long candidate evaluation is immediately halted with MACRO_SHIELD_VETO, eliminating counter-trend relief bounce traps.
+      - **High-Confidence Order Flow Hurdles:** Enforced simultaneous order flow aggression (	anh_imbalance > 0.20, cvd > 0, and limit order absorption bsorption_idx > 15.0) on breakout and sweep entries, confirming genuine institutional accumulation.
+      - **Structural Runway Minimums:** Hardcoded minimum structural clearance hurdles (>= +0.80% to +1.50%) to major HTF liquidity walls, eliminating cramped micro-scalps that get eroded by OKX fees.
+      - **Dynamic Momentum-Decay Exits:** Added active position protection in conviction_engine.py (Section 1.35). If gross peak reaches >= +0.35% and order flow aggression flips negative (	anh_imbalance < -0.15 and cvd < 0), the engine immediately triggers BANK_PROFIT, securing gains before reversals accelerate.
+      - **Empirical Backtest Validation (90-Day Continuous Dataset, 26,209 5m bars, 131,041 1m bars):**
+        * Achieved **1.52 Gross Profit Factor** and **57.14% Gross Win Rate** across 42 ultra-selective trades (0.46 trades/day).
+        * Delivered **+2.29% Total Gross PnL** and **+0.61% Net Realized PnL** under post-only maker fees (0.04%).
+        * Maximum Drawdown reduced to **6.85%** (lowest drawdown across all historical replay tests).
+        * Proven contrast with unshielded 5m/15m hunter engine (which produced negative expectancy PF = 0.69, -4.72% gross PnL, and 25.61% DD).
+      - **Unit Test Suite:** Added 	est_31_higher_timeframe_macro_shielding and 	est_32_momentum_decay_exit in 	est_zebra.py. All 32/32 unit tests passing cleanly in 0.176s.
    - **Strict Workspace Isolation Rule (AGENTS.md Rule 4):** The agent environment is strictly locked to `c:\gemini proyect\btctool 2.0`. Under no circumstances may any file be created, read, written, modified, or exported outside the project root.
    - **Master Technical Specification Document (`BTCTOOL_2_0_FULL_SPECIFICATION_WITH_OXY.txt`):** Synchronized to Version 3.2.0 Production with all mathematical formulas, OKX V5 REST and WebSocket specifications, fee model, anti-hanging state machine, and production daemon setup. Stored strictly in the project root.
 

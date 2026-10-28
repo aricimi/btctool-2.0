@@ -296,6 +296,17 @@ class FreeConvictionEngine:
                         telemetry={"scenario": scenario, "gain_pct": gain_pct},
                     )
 
+            # 1.35 DYNAMIC MOMENTUM-DECAY EXIT: Lock profit before reversal if order flow aggression collapses
+            if peak_gain_pct >= 0.0035 and tanh_imb < -0.15 and cvd < 0:
+                return TradeIntent(
+                    action="BANK_PROFIT",
+                    scenario=scenario,
+                    gain_pct=gain_pct,
+                    entry_price=price,
+                    reason=f"MOMENTUM DECAY EXIT: Peak +{peak_gain_pct*100:.2f}% gross reached, but order flow aggression reversed (CVD < 0, Imb={tanh_imb:+.2f}). Banking gains.",
+                    telemetry={"scenario": scenario, "gain_pct": gain_pct, "momentum_decay": True},
+                )
+
             # 1.4 SCALE-IN LOT 2 ON CONFIRMED STRUCTURAL ABSORPTION DISCOUNT
             dist_to_support = abs(price - nearest_support)
             is_at_support_zone = (dist_to_support <= (0.75 * atr)) and (price < entry)
@@ -485,6 +496,28 @@ class FreeConvictionEngine:
                 telemetry={**intent_telemetry, "scenario": "DIP_ABSORPTION_TURN", "governor_held": True, "target_price": target_a},
             )
 
+        # ------------------------------------------------------------------
+        # 2.65 MANDATORY HIGHER-TIMEFRAME MACRO SHIELDING (1h & 4h Alignment)
+        # ------------------------------------------------------------------
+        # Eliminates counter-trend breakout traps: If 1h or 4h macro trend is present
+        # and price is below its respective 20-period mid-band, reject all long entries.
+        tfs = matrix.get("timeframes", {})
+        tf_1h = tfs.get("1h", {})
+        tf_4h = tfs.get("4h", {})
+        bb_mid_1h = float(tf_1h.get("bb_mid", 0.0))
+        bb_mid_4h = float(tf_4h.get("bb_mid", 0.0))
+
+        is_1h_bull = (bb_mid_1h == 0.0) or (price >= bb_mid_1h)
+        is_4h_bull = (bb_mid_4h == 0.0) or (price >= bb_mid_4h)
+        is_macro_aligned = is_1h_bull and is_4h_bull
+
+        if not is_macro_aligned:
+            return TradeIntent(
+                action="WAIT_IN_CASH",
+                reason=f"MACRO_SHIELD_VETO: Price (${price:,.2f}) below 1h/4h macro mid-bands (1h: ${bb_mid_1h:,.2f}, 4h: ${bb_mid_4h:,.2f}). Counter-trend entries prohibited.",
+                telemetry={**intent_telemetry, "macro_shield_veto": True, "bb_mid_1h": bb_mid_1h, "bb_mid_4h": bb_mid_4h},
+            )
+
         # 2.7 SETUP C: VOLATILITY EXPANSION IMPULSE (Squeeze Firing Ignition)
         tfs = matrix.get("timeframes", {})
         tf_5m = tfs.get("5m", {})
@@ -522,11 +555,11 @@ class FreeConvictionEngine:
             target_exp = macro_ceiling
             target_pct_exp = macro_ceiling_dist_pct
 
-            # MANDATORY PHYSICAL RUNWAY GATE (+50 bps hurdle)
-            if target_pct_exp < 0.50:
+            # MANDATORY PHYSICAL RUNWAY GATE (+80 bps hurdle)
+            if target_pct_exp < 0.80:
                 return TradeIntent(
                     action="WAIT_IN_CASH",
-                    reason=f"REJECTED BY RUNWAY GATE: Squeeze runway (+{target_pct_exp:.2f}%) < +0.50% minimum physical clearance.",
+                    reason=f"REJECTED BY RUNWAY GATE: Squeeze runway (+{target_pct_exp:.2f}%) < +0.80% minimum physical clearance.",
                     telemetry={**intent_telemetry, "rr_ratio": 0.0, "true_net_ev": 0.0},
                 )
             dynamic_stop_exp = round(max(bb_mid, price - (0.80 * atr)), 2)
@@ -629,7 +662,13 @@ class FreeConvictionEngine:
         has_real_momentum = (effective_edge >= 0.15) and (effective_urgency >= 0.15) and (tuned_confidence >= regime_conf_hurdle)
         is_belief_aligned = belief.regime_belief in ("BULL_ACCELERATION", "NEUTRAL_WAIT")
 
-        if (is_clearing_high or is_balloon_expanding) and has_real_momentum and is_belief_aligned and (tanh_imb >= 0.0 or trade_vel > 6.0):
+        has_orderflow_backing = (
+            (tanh_imb > 0.20 and cvd > 0) or
+            (absorption_idx > 15.0) or
+            (trade_vel > 6.0 and tanh_imb >= 0.0 and cvd >= 0)
+        )
+
+        if (is_clearing_high or is_balloon_expanding) and has_real_momentum and is_belief_aligned and has_orderflow_backing:
             # Physical target strictly bound to macro ceiling (purged synthetic floors)
             target = macro_ceiling
             target_pct = ((target - price) / price) * 100.0 if price > 0 else 0.0

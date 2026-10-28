@@ -1719,6 +1719,75 @@ class TestZebraBot(unittest.TestCase):
         self.assertTrue(intent_t1.telemetry.get("acceptance_failed"))
         self.assertIsNone(brain.pending_acceptance)
 
+    def test_31_higher_timeframe_macro_shielding(self):
+        """
+        Verify v3.7.0 High-Margin Architecture:
+        When 1h or 4h macro mid-band sits above price, long entries are strictly vetoed with MACRO_SHIELD_VETO.
+        """
+        brain = FreeConvictionEngine()
+        price = 82000.0
+        matrix = {
+            "latest_price": price,
+            "tanh_imbalance": 0.30,
+            "trade_velocity": 8.0,
+            "cvd": 100.0,
+            "absorption_index": 18.0,
+            "composite_atr": 150.0,
+            "timeframes": {
+                "1h": {"bb_mid": 82500.0},  # Macro ceiling above price (bearish trend)
+                "4h": {"bb_mid": 83000.0},
+            },
+            "multi_screen_bounds": {
+                "nearest_support": 81500.0,
+                "nearest_resistance": 83500.0,
+                "macro_ceiling": 84500.0,
+                "pooled_swing_high": 82000.0,
+                "immediate_runway_pct": 1.83,
+                "macro_runway_pct": 3.05,
+            },
+            "balloon_geometry": {"is_balloon_expanding": True, "regime": "EXPANDING_BALLOON"},
+            "feature_vector": {"entropy": 0.35, "trend_strength": 0.001, "vol_regime": 1.0},
+        }
+        intent = brain.evaluate(matrix, active_trade=None)
+        self.assertEqual(intent.action, "WAIT_IN_CASH")
+        self.assertIn("MACRO_SHIELD_VETO", intent.reason)
+        self.assertTrue(intent.telemetry.get("macro_shield_veto"))
+
+    def test_32_momentum_decay_exit(self):
+        """
+        Verify v3.7.0 High-Margin Architecture:
+        When an active trade reaches >= +0.35% gross peak, but order flow aggression reverses
+        (tanh_imbalance < -0.15 and cvd < 0), BANK_PROFIT is triggered immediately before reversal.
+        """
+        brain = FreeConvictionEngine()
+        entry_price = 80000.0
+        active_trade = {
+            "entry": entry_price,
+            "highest_price": 80360.0,  # +0.45% peak excursion (exceeds +0.35% threshold)
+            "target_price": 81500.0,
+            "invalidation_floor": 79600.0,
+            "trailing_stop": 79600.0,
+            "scenario": "BOLLINGER_CONFLUENCE_BREAKOUT",
+            "tranche_2_added": False,
+        }
+        matrix = {
+            "latest_price": 80320.0,  # +0.40% current gain (still above stop)
+            "composite_atr": 150.0,
+            "tanh_imbalance": -0.25,  # Aggressive taker selling dumps
+            "cvd": -50.0,             # Negative CVD delta
+            "absorption_index": 5.0,
+            "multi_screen_bounds": {
+                "nearest_support": 79800.0,
+                "nearest_resistance": 81500.0,
+                "macro_ceiling": 82000.0,
+            },
+            "balloon_geometry": {"is_balloon_expanding": False, "is_slow_market": False},
+        }
+        intent = brain.evaluate(matrix, active_trade=active_trade)
+        self.assertEqual(intent.action, "BANK_PROFIT")
+        self.assertIn("MOMENTUM DECAY EXIT", intent.reason)
+        self.assertTrue(intent.telemetry.get("momentum_decay"))
+
 
 if __name__ == "__main__":
     unittest.main()
