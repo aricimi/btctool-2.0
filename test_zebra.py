@@ -236,10 +236,22 @@ class TestZebraBot(unittest.TestCase):
         # 7. CONTEXTUAL SCALE-IN LOT 2 AT STRUCTURAL SUPPORT DISCOUNT
         scale_trade = dict(active_trade)
         scale_trade["tranche_2_added"] = False
+        scale_trade["trailing_stop"] = 81400.0
+        scale_trade["invalidation_floor"] = 81400.0
+
+        # 7a. SPATIAL FIREWALL: Blocks micro-spacing ($40 drop = -0.049% < -0.20% zone hurdle)
         scale_matrix = dict(dip_matrix)
-        scale_matrix["latest_price"] = 81710.0  # Testing support floor ($81,720) at discount to entry ($81,750)
-        scale_matrix["tanh_imbalance"] = 0.30   # Institutional bids active
+        scale_matrix["latest_price"] = 81710.0  # Shallow pullback (-0.049% < -0.20%)
+        scale_matrix["tanh_imbalance"] = 0.30
         scale_matrix["absorption_index"] = 18.0
+        scale_matrix["cvd"] = 50.0
+        scale_matrix["trade_velocity"] = 6.0
+        held_intent = self.brain.evaluate(scale_matrix, active_trade=scale_trade)
+        self.assertEqual(held_intent.action, "HOLD_POSITION")
+        self.assertEqual(held_intent.telemetry.get("lot_2_state"), "SPATIAL_FIREWALL_HELD")
+
+        # 7b. VALIDATED SCALE-IN: Price enters structural pullback zone (-0.25% in [-0.20%, -0.30%]) with confirmed absorption & positive tape
+        scale_matrix["latest_price"] = 81545.0  # -0.25% pullback from $81,750
         scale_intent = self.brain.evaluate(scale_matrix, active_trade=scale_trade)
         scale_decision = self.risk_gate.evaluate(scale_intent, scale_matrix, active_trade=scale_trade)
         self.assertEqual(scale_decision["action"], "SCALE_IN_LOT_2")
@@ -1787,6 +1799,141 @@ class TestZebraBot(unittest.TestCase):
         self.assertEqual(intent.action, "BANK_PROFIT")
         self.assertIn("MOMENTUM DECAY EXIT", intent.reason)
         self.assertTrue(intent.telemetry.get("momentum_decay"))
+
+    def test_33_hierarchical_multi_timeframe_entry_gate(self):
+        """
+        Verify v3.8.0 Hierarchical Multi-Timeframe Entry Gate:
+        1. Veto long if price trading below 1H Bollinger midline.
+        2. Veto long if 1H/4H MACD histogram momentum is actively negative.
+        3. Veto long if 15M candle is an aggressive red dump (drop >= 0.30%).
+        4. Pass hierarchical gate when macro and 15m structure are aligned.
+        """
+        brain = FreeConvictionEngine()
+        price = 82000.0
+        base_matrix = {
+            "latest_price": price,
+            "tanh_imbalance": 0.30,
+            "trade_velocity": 8.0,
+            "cvd": 100.0,
+            "absorption_index": 18.0,
+            "composite_atr": 150.0,
+            "multi_screen_bounds": {
+                "nearest_support": 81500.0,
+                "nearest_resistance": 83500.0,
+                "macro_ceiling": 84500.0,
+                "pooled_swing_high": 82000.0,
+                "immediate_runway_pct": 1.83,
+                "macro_runway_pct": 3.05,
+            },
+            "balloon_geometry": {"is_balloon_expanding": True, "regime": "EXPANDING_BALLOON"},
+            "feature_vector": {"entropy": 0.35, "trend_strength": 0.001, "vol_regime": 1.0},
+        }
+
+        # Sub-test 1: Price below 1H mid-band -> Macro Gate VETO
+        matrix_1 = dict(base_matrix)
+        matrix_1["timeframes"] = {
+            "1h": {"bb_mid": 82500.0, "macd_hist": 10.0},
+            "4h": {"bb_mid": 81000.0, "macd_hist": 15.0},
+        }
+        intent_1 = brain.evaluate(matrix_1, active_trade=None)
+        self.assertEqual(intent_1.action, "WAIT_IN_CASH")
+        self.assertEqual(intent_1.telemetry.get("macro_gate_status"), "REJECT_MACRO_BELOW_MID")
+        self.assertFalse(intent_1.telemetry.get("hierarchical_gates_passed"))
+
+        # Sub-test 2: 1H MACD histogram actively negative -> Macro Gate VETO
+        matrix_2 = dict(base_matrix)
+        matrix_2["timeframes"] = {
+            "1h": {"bb_mid": 81000.0, "macd_hist": -5.50},  # Negative momentum!
+            "4h": {"bb_mid": 80000.0, "macd_hist": 10.0},
+        }
+        intent_2 = brain.evaluate(matrix_2, active_trade=None)
+        self.assertEqual(intent_2.action, "WAIT_IN_CASH")
+        self.assertEqual(intent_2.telemetry.get("macro_gate_status"), "REJECT_MACRO_MACD_NEG")
+        self.assertFalse(intent_2.telemetry.get("hierarchical_gates_passed"))
+
+        # Sub-test 3: 15M active red dump candle (-0.45% drop) -> 15M Structure Gate VETO
+        matrix_3 = dict(base_matrix)
+        matrix_3["timeframes"] = {
+            "1h": {"bb_mid": 81000.0, "macd_hist": 8.0},
+            "4h": {"bb_mid": 80000.0, "macd_hist": 12.0},
+            "15m": {"bb_pct_b": 0.40, "macd_hist": -2.0},
+        }
+        matrix_3["candles_15m"] = [
+            {"open": 82370.0, "high": 82400.0, "low": 81950.0, "close": 82000.0, "vol": 150.0}
+        ]  # -0.45% red dump candle
+        intent_3 = brain.evaluate(matrix_3, active_trade=None)
+        self.assertEqual(intent_3.action, "WAIT_IN_CASH")
+        self.assertEqual(intent_3.telemetry.get("structure_15m_status"), "REJECT_15M_RED_DUMP")
+        self.assertFalse(intent_3.telemetry.get("hierarchical_gates_passed"))
+
+        # Sub-test 4: Both Macro and 15M gates aligned -> PASS
+        matrix_4 = dict(base_matrix)
+        matrix_4["timeframes"] = {
+            "1h": {"bb_mid": 81000.0, "macd_hist": 8.0, "bb_width": 1.5},
+            "4h": {"bb_mid": 80000.0, "macd_hist": 12.0},
+            "15m": {"bb_pct_b": 0.70, "macd_hist": 3.0, "bb_width": 0.70},
+            "5m": {"bb_upper": 81900.0, "bb_mid": 81500.0, "bb_width": 0.50, "bb_pct_b": 0.96},
+        }
+        matrix_4["candles_15m"] = [
+            {"open": 81800.0, "high": 82100.0, "low": 81750.0, "close": 82000.0, "vol": 150.0}
+        ]  # Positive green structure
+        intent_4 = brain.evaluate(matrix_4, active_trade=None)
+        self.assertEqual(intent_4.telemetry.get("macro_gate_status"), "PASS")
+        self.assertEqual(intent_4.telemetry.get("structure_15m_status"), "PASS")
+        self.assertTrue(intent_4.telemetry.get("hierarchical_gates_passed"))
+
+    def test_34_state_managed_lot_2_firewall_breakdown(self):
+        """
+        Verify v3.8.0 State-Managed Lot 2 Scale-In Firewall:
+        1. When price drops > 0.35% without defense, Lot 2 state transitions to CANCELED_BREAKDOWN.
+        2. Once canceled, subsequent ticks in the scale zone remain canceled (no averaging down).
+        3. Re-verification required in [-0.20%, -0.30%] zone before Lot 2 fires.
+        """
+        brain = FreeConvictionEngine()
+        entry_price = 80000.0
+        active_trade = {
+            "entry": entry_price,
+            "lot_1_entry": entry_price,
+            "target_price": 81200.0,
+            "invalidation_floor": 79400.0,
+            "trailing_stop": 79400.0,
+            "scenario": "VOLATILITY_EXPANSION_IMPULSE",
+            "tranche_2_added": False,
+        }
+        base_matrix = {
+            "composite_atr": 150.0,
+            "multi_screen_bounds": {"nearest_support": 79600.0, "nearest_resistance": 81200.0, "macro_ceiling": 81500.0},
+            "balloon_geometry": {"is_balloon_expanding": False, "is_slow_market": False},
+        }
+
+        # 1. Price enters zone (-0.25% drop to $79,800), but tape is hollow (cvd < 0, absorption low)
+        m_unverified = dict(base_matrix)
+        m_unverified["latest_price"] = 79800.0  # -0.25% pullback
+        m_unverified["tanh_imbalance"] = 0.05
+        m_unverified["absorption_index"] = 5.0
+        m_unverified["cvd"] = -20.0
+        m_unverified["trade_velocity"] = 2.0
+        intent_unverified = brain.evaluate(m_unverified, active_trade=active_trade)
+        self.assertEqual(intent_unverified.action, "HOLD_POSITION")
+        self.assertEqual(intent_unverified.telemetry.get("lot_2_state"), "ZONE_PENDING_DEFENSE")
+
+        # 2. Price plunges straight through to -0.40% ($79,680) without absorption -> CANCELED_BREAKDOWN
+        m_breakdown = dict(base_matrix)
+        m_breakdown["latest_price"] = 79680.0  # -0.40% pullback (> 0.35% threshold)
+        intent_breakdown = brain.evaluate(m_breakdown, active_trade=active_trade)
+        self.assertEqual(intent_breakdown.action, "HOLD_POSITION")
+        self.assertEqual(active_trade.get("lot_2_state"), "CANCELED_BREAKDOWN")
+        self.assertEqual(intent_breakdown.telemetry.get("lot_2_state"), "CANCELED_BREAKDOWN")
+
+        # 3. Subsequent bounce back to $79,800 remains CANCELED_BREAKDOWN (no blind scale-in)
+        m_bounce = dict(base_matrix)
+        m_bounce["latest_price"] = 79800.0
+        m_bounce["tanh_imbalance"] = 0.30
+        m_bounce["absorption_index"] = 20.0
+        m_bounce["cvd"] = 50.0
+        intent_bounce = brain.evaluate(m_bounce, active_trade=active_trade)
+        self.assertEqual(intent_bounce.action, "HOLD_POSITION")
+        self.assertEqual(intent_bounce.telemetry.get("lot_2_state"), "CANCELED_BREAKDOWN")
 
 
 if __name__ == "__main__":

@@ -400,6 +400,7 @@ class MarketState:
         candles_3m = stream.get_candles("3m") or []
         matrix["micro_turn"] = MarketState.compute_micro_turn(candles_1m, candles_3m)
         matrix["candles_1m"] = candles_1m
+        matrix["candles_15m"] = stream.get_candles("15m") or []
 
         # 9. FeatureVector Belief Representation (Spec Section 2.2)
         p = float(stream.latest_price)

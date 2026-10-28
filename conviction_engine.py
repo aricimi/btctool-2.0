@@ -307,17 +307,52 @@ class FreeConvictionEngine:
                     telemetry={"scenario": scenario, "gain_pct": gain_pct, "momentum_decay": True},
                 )
 
-            # 1.4 SCALE-IN LOT 2 ON CONFIRMED STRUCTURAL ABSORPTION DISCOUNT
-            dist_to_support = abs(price - nearest_support)
-            is_at_support_zone = (dist_to_support <= (0.75 * atr)) and (price < entry)
-            if not tranche_2 and is_at_support_zone and (tanh_imb > 0.15 or absorption_idx > 15.0 or velocity_slowing):
-                return TradeIntent(
-                    action="SCALE_IN_LOT_2",
-                    scenario=scenario,
-                    entry_price=price,
-                    reason=f"STRUCTURAL DISCOUNT ABSORPTION: Pullback to support (${nearest_support:,.2f}) absorbed by resting bids. Proposing Lot 2 add.",
-                    telemetry={"scenario": scenario, "gain_pct": gain_pct},
-                )
+            # 1.4 STATE-MANAGED LOT 2 SCALE-IN FIREWALL (v3.8.0)
+            # Separate Lot 1 and Lot 2 into a strict state machine. Eliminates instant micro-spacing ($4 difference).
+            lot_1_entry = float(active_trade.get("lot_1_entry", entry))
+            pullback_pct = ((lot_1_entry - price) / lot_1_entry) * 100.0 if lot_1_entry > 0 else 0.0
+
+            if tranche_2:
+                lot_2_state = "COMPLETED"
+            elif active_trade.get("lot_2_state") == "CANCELED_BREAKDOWN":
+                lot_2_state = "CANCELED_BREAKDOWN"
+            elif price >= lot_1_entry:
+                lot_2_state = "PENDING_PULLBACK"
+            elif pullback_pct > 0.35:
+                # Breakdown Firewall: Price dropped straight through without defense past -0.35%.
+                # Permanently cancel Lot 2 to prevent blind averaging down.
+                active_trade["lot_2_state"] = "CANCELED_BREAKDOWN"
+                lot_2_state = "CANCELED_BREAKDOWN"
+            elif pullback_pct < 0.20:
+                # Spatial Firewall: Hard-barred unless price moves into structural pullback zone [-0.20%, -0.30%].
+                lot_2_state = "SPATIAL_FIREWALL_HELD"
+            else:
+                # Inside structural zone [0.20%, 0.35%]
+                # Temporal & Re-Verification Firewall:
+                # Re-verify resting limit bids actively absorb AND CVD tape turns positive.
+                is_bids_absorbing = (tanh_imb > 0.15 or absorption_idx > 15.0)
+                is_tape_positive = (cvd > 0 or trade_vel > 5.0)
+
+                if is_bids_absorbing and is_tape_positive:
+                    active_trade["lot_2_state"] = "SCALE_IN_EXECUTED"
+                    return TradeIntent(
+                        action="SCALE_IN_LOT_2",
+                        scenario=scenario,
+                        entry_price=price,
+                        reason=f"LOT_2_SCALE_IN_CONFIRMED: Pullback -{pullback_pct:.2f}% into structural zone [-0.20%, -0.30%] verified by absorption (tanh_imb={tanh_imb:+.2f}, Ai={absorption_idx:.1f}) and tape backing (cvd={cvd:+.1f}, vel={trade_vel:.1f}). Adding Lot 2.",
+                        telemetry={
+                            "scenario": scenario,
+                            "gain_pct": gain_pct,
+                            "lot_2_state": "SCALE_IN_LOT_2",
+                            "pullback_pct": round(pullback_pct, 3),
+                            "lot_2_reverified": True,
+                            "tanh_imbalance": round(tanh_imb, 3),
+                            "absorption_index": round(absorption_idx, 2),
+                            "cvd": round(cvd, 2),
+                        },
+                    )
+                else:
+                    lot_2_state = "ZONE_PENDING_DEFENSE"
 
             # 1.5 NOISE-IMMUNE HOLD
             return TradeIntent(
@@ -326,7 +361,13 @@ class FreeConvictionEngine:
                 gain_pct=gain_pct,
                 proposed_stop=updated_trailing_stop,
                 reason=f"HOLDING {scenario}: Toward target ${target_price:,.2f}. Current PnL: {gain_pct*100:+.2f}%. Trailing Stop: ${updated_trailing_stop:,.2f}.",
-                telemetry={"scenario": scenario, "gain_pct": gain_pct, "trailing_stop": updated_trailing_stop},
+                telemetry={
+                    "scenario": scenario,
+                    "gain_pct": gain_pct,
+                    "trailing_stop": updated_trailing_stop,
+                    "lot_2_state": lot_2_state,
+                    "pullback_pct": round(pullback_pct, 3),
+                },
             )
 
         # ==================================================================
@@ -496,26 +537,90 @@ class FreeConvictionEngine:
                 telemetry={**intent_telemetry, "scenario": "DIP_ABSORPTION_TURN", "governor_held": True, "target_price": target_a},
             )
 
-        # ------------------------------------------------------------------
-        # 2.65 MANDATORY HIGHER-TIMEFRAME MACRO SHIELDING (1h & 4h Alignment)
-        # ------------------------------------------------------------------
-        # Eliminates counter-trend breakout traps: If 1h or 4h macro trend is present
-        # and price is below its respective 20-period mid-band, reject all long entries.
+        # ==================================================================
+        # 2.65 HIERARCHICAL MULTI-TIMEFRAME ENTRY GATE (v3.8.0)
+        # ==================================================================
+        # Before evaluating ANY candidate setup or micro-structure trigger
+        # (tanh_imbalance, absorption_idx, velocity), the market must clear
+        # both Macro (1H/4H) and Structure (15M) gates.
         tfs = matrix.get("timeframes", {})
         tf_1h = tfs.get("1h", {})
         tf_4h = tfs.get("4h", {})
         bb_mid_1h = float(tf_1h.get("bb_mid", 0.0))
         bb_mid_4h = float(tf_4h.get("bb_mid", 0.0))
+        macd_hist_1h = float(tf_1h.get("macd_hist", 0.0))
+        macd_hist_4h = float(tf_4h.get("macd_hist", 0.0))
 
-        is_1h_bull = (bb_mid_1h == 0.0) or (price >= bb_mid_1h)
-        is_4h_bull = (bb_mid_4h == 0.0) or (price >= bb_mid_4h)
-        is_macro_aligned = is_1h_bull and is_4h_bull
+        macro_gate_status = "PASS"
+        macro_gate_reason = ""
 
-        if not is_macro_aligned:
+        # 1H & 4H Macro Check: Reject long entries if price < 1H Bollinger midline
+        # or if 1H/4H MACD histogram momentum is actively negative.
+        if bb_mid_1h > 0.0 and price < bb_mid_1h:
+            macro_gate_status = "REJECT_MACRO_BELOW_MID"
+            macro_gate_reason = f"Price (${price:,.2f}) trading below 1H Bollinger midline (${bb_mid_1h:,.2f})."
+        elif bb_mid_4h > 0.0 and price < bb_mid_4h:
+            macro_gate_status = "REJECT_MACRO_BELOW_MID"
+            macro_gate_reason = f"Price (${price:,.2f}) trading below 4H Bollinger midline (${bb_mid_4h:,.2f})."
+        elif (macd_hist_1h < 0.0 and tf_1h) or (macd_hist_4h < 0.0 and tf_4h):
+            macro_gate_status = "REJECT_MACRO_MACD_NEG"
+            macro_gate_reason = f"Macro MACD momentum actively negative (1H hist={macd_hist_1h:+.4f}, 4H hist={macd_hist_4h:+.4f})."
+
+        # 15M Structure Check: Reject entry occurring in the middle of an aggressive
+        # red impulse/dump candle. The 15m candle must show a completed base, defended
+        # retest, or positive structure.
+        tf_15m = tfs.get("15m", {})
+        candles_15m = matrix.get("candles_15m") or []
+        bb_pct_b_15m = float(tf_15m.get("bb_pct_b", 0.50))
+        macd_hist_15m = float(tf_15m.get("macd_hist", 0.0))
+
+        structure_15m_status = "PASS"
+        structure_15m_reason = ""
+        drop_15m_pct = 0.0
+
+        if candles_15m and len(candles_15m) > 0:
+            cur_15m = candles_15m[-1]
+            open_15m = float(cur_15m.get("open", price))
+            close_15m = float(cur_15m.get("close", price))
+            high_15m = float(cur_15m.get("high", max(open_15m, close_15m)))
+            low_15m = float(cur_15m.get("low", min(open_15m, close_15m)))
+            drop_15m_pct = ((open_15m - close_15m) / open_15m) * 100.0 if open_15m > 0 else 0.0
+
+            is_red_15m = close_15m < open_15m
+            candle_range_15m = high_15m - low_15m
+            lower_wick_ratio = (close_15m - low_15m) / candle_range_15m if candle_range_15m > 0 else 0.5
+
+            if is_red_15m:
+                if drop_15m_pct >= 0.30:
+                    structure_15m_status = "REJECT_15M_RED_DUMP"
+                    structure_15m_reason = f"Active 15M red dump candle (-{drop_15m_pct:.2f}% drop from ${open_15m:,.2f} to ${close_15m:,.2f})."
+                elif lower_wick_ratio < 0.25 and macd_hist_15m < 0.0:
+                    structure_15m_status = "REJECT_15M_BREAKDOWN"
+                    structure_15m_reason = f"15M candle closing near lows (lower_wick={lower_wick_ratio:.2f}) with negative MACD momentum ({macd_hist_15m:+.4f})."
+        elif tf_15m:
+            if bb_pct_b_15m < 0.20 and macd_hist_15m < 0.0:
+                structure_15m_status = "REJECT_15M_BREAKDOWN"
+                structure_15m_reason = f"15M band breakdown (%b={bb_pct_b_15m:.2f}) with negative momentum (hist={macd_hist_15m:+.4f})."
+
+        hierarchical_gates_passed = (macro_gate_status == "PASS") and (structure_15m_status == "PASS")
+
+        # Telemetry updates
+        intent_telemetry["macro_gate_status"] = macro_gate_status
+        intent_telemetry["structure_15m_status"] = structure_15m_status
+        intent_telemetry["hierarchical_gates_passed"] = hierarchical_gates_passed
+        intent_telemetry["macro_shield_veto"] = not hierarchical_gates_passed
+        intent_telemetry["bb_mid_1h"] = bb_mid_1h
+        intent_telemetry["bb_mid_4h"] = bb_mid_4h
+        intent_telemetry["macd_hist_1h"] = macd_hist_1h
+        intent_telemetry["macd_hist_4h"] = macd_hist_4h
+        intent_telemetry["drop_15m_pct"] = round(drop_15m_pct, 3)
+
+        if not hierarchical_gates_passed:
+            reject_reason = f"HIERARCHICAL_GATE_VETO (MACRO_SHIELD_VETO): {macro_gate_reason or structure_15m_reason}"
             return TradeIntent(
                 action="WAIT_IN_CASH",
-                reason=f"MACRO_SHIELD_VETO: Price (${price:,.2f}) below 1h/4h macro mid-bands (1h: ${bb_mid_1h:,.2f}, 4h: ${bb_mid_4h:,.2f}). Counter-trend entries prohibited.",
-                telemetry={**intent_telemetry, "macro_shield_veto": True, "bb_mid_1h": bb_mid_1h, "bb_mid_4h": bb_mid_4h},
+                reason=reject_reason,
+                telemetry=intent_telemetry,
             )
 
         # 2.7 SETUP C: VOLATILITY EXPANSION IMPULSE (Squeeze Firing Ignition)

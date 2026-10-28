@@ -563,6 +563,19 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
        * Adding Setup A degraded portfolio PnL from +1.01% to -0.30% (PF dropped from 1.37 to 0.87).
        * Confirmed Setup A remains permanently frozen under the Capital Governor.
      - **Unit Test Suite:** Added 4 new dedicated tests in `test_zebra.py` (`test_27`, `test_28`, `test_29`, `test_30`) covering red candle vetoes, low volume vetoes, confirmed retest entries, and retest collapses; all 30/30 unit tests passing in 0.194s.
+    - **Version 3.8.0 Institutional Release (Hierarchical Multi-Timeframe Entry Gate & State-Managed Lot 2 Scale-In Firewall):**
+      - **Hierarchical Multi-Timeframe Entry Gate (conviction_engine.py Section 2.65):**
+        * Enforced a mandatory two-stage structural gate before evaluating any microstructure signal (tanh_imbalance, absorption_idx, trade_vel) or setup candidate (Setups C, D, B).
+        * **1H & 4H Macro Gate:** Rejects all long candidates if price trades below the 1H Bollinger midline (price < bb_mid_1h) or 4H midline, or if 1H/4H MACD histogram momentum is actively negative (macd_hist < 0.0), returning HIERARCHICAL_GATE_VETO (MACRO_SHIELD_VETO).
+        * **15M Structure Gate:** Rejects entries during aggressive red dump candles (drop_15m_pct >= 0.30%) or candles breaking down near lows without absorption wick defense (lower_wick_ratio < 0.25 and macd_hist_15m < 0.0).
+        * **Micro-Signal Restriction:** Restricts microstructure and order book indicators to serving as the final trigger only after both 1H macro and 15M structure gates vote PASS.
+      - **State-Managed Lot 2 Scale-In Firewall (conviction_engine.py Section 1.4):**
+        * Replaced legacy single-tick support checks with a deterministic Lot 2 state machine (PENDING_PULLBACK, SPATIAL_FIREWALL_HELD, ZONE_PENDING_DEFENSE, SCALE_IN_EXECUTED, CANCELED_BREAKDOWN, COMPLETED).
+        * **Spatial Firewall:** Hard-bars Lot 2 unless price moves into a structural pullback zone exactly -0.20% to -0.30% below Lot 1 entry price (lot_1_entry), completely eliminating micro-spacing ( difference).
+        * **Temporal & Re-Verification Firewall:** In the pullback zone, requires simultaneous proof of limit bid absorption (tanh_imb > 0.15 or absorption_idx > 15.0) AND positive CVD tape backing (cvd > 0 or trade_vel > 5.0) before firing SCALE_IN_LOT_2.
+        * **Breakdown Firewall:** If price plunges straight through past -0.35% without defense, Lot 2 transitions to CANCELED_BREAKDOWN permanently, prohibiting blind averaging down.
+      - **Telemetry Contract Compliance:** Telemetry records macro_gate_status, structure_15m_status, hierarchical_gates_passed, drop_15m_pct, lot_2_state, and pullback_pct while strictly maintaining TradeIntent data contracts.
+      - **Unit Test Suite:** Updated test_04 step 7 and added test_33_hierarchical_multi_timeframe_entry_gate and test_34_state_managed_lot_2_firewall_breakdown in test_zebra.py; all 34/34 tests passing cleanly in 0.183s.
     - **Version 3.7.0 Institutional Release (High-Margin Intelligence Engine & Macro Shielding Architecture):**
       - **Higher-Timeframe Macro Shielding:** Implemented a mandatory 1h and 4h trend alignment gate in conviction_engine.py (Section 2.65). If price sits below the 1h or 4h 20-period mid-band, long candidate evaluation is immediately halted with MACRO_SHIELD_VETO, eliminating counter-trend relief bounce traps.
       - **High-Confidence Order Flow Hurdles:** Enforced simultaneous order flow aggression (	anh_imbalance > 0.20, cvd > 0, and limit order absorption bsorption_idx > 15.0) on breakout and sweep entries, confirming genuine institutional accumulation.
