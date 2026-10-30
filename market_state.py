@@ -5,6 +5,7 @@ and microstructure metrics across all 11 timeframes in <10ms using vectorized nu
 ZERO hardcoded single-timeframe proxies. All 11 screens pooled dynamically.
 """
 
+import datetime
 import time
 from typing import Dict, List, Optional, Tuple
 import numpy as np
@@ -401,6 +402,20 @@ class MarketState:
         matrix["micro_turn"] = MarketState.compute_micro_turn(candles_1m, candles_3m)
         matrix["candles_1m"] = candles_1m
         matrix["candles_15m"] = stream.get_candles("15m") or []
+
+        # 8B. Temporal & Forensic Macro Gating (v3.9.0)
+        matrix["utc_hour"] = datetime.datetime.now(datetime.timezone.utc).hour
+        vol_surge_ratio = 1.0
+        drop_60m_pct = 0.0
+        if len(candles_1m) >= 60:
+            v15 = np.mean([float(c.get("vol", 0.0)) for c in candles_1m[-15:]])
+            v60 = np.mean([float(c.get("vol", 0.0)) for c in candles_1m[-60:]])
+            vol_surge_ratio = float(v15 / v60) if v60 > 0 else 1.0
+            p_cur = float(stream.latest_price)
+            p_60 = float(candles_1m[-60].get("open", p_cur))
+            drop_60m_pct = float(((p_cur - p_60) / p_60) * 100.0) if p_60 > 0 else 0.0
+        matrix["vol_surge_ratio"] = vol_surge_ratio
+        matrix["drop_60m_pct"] = drop_60m_pct
 
         # 9. FeatureVector Belief Representation (Spec Section 2.2)
         p = float(stream.latest_price)

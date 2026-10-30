@@ -10,6 +10,7 @@ Architecture:
 - Stop-loss is mathematically guaranteed to sit below actual entry fill price.
 """
 
+import datetime
 import logging
 import time
 from dataclasses import dataclass, field
@@ -226,7 +227,7 @@ class FreeConvictionEngine:
 
             # 1.1 IN-SITU MEMORY SOFT STOP EVALUATION
             if price <= trailing_stop:
-                if gain_pct >= 0.0025:
+                if trailing_stop >= entry or gain_pct >= 0.0005:
                     return TradeIntent(
                         action="BANK_PROFIT",
                         scenario=scenario,
@@ -248,6 +249,23 @@ class FreeConvictionEngine:
 
             # 1.2 CONTINUOUS PROPORTIONAL PROFIT-RETENTION RATCHET (CPPR v2: HIGH EXPECTANCY)
             updated_trailing_stop = trailing_stop
+
+            # Step 1A: Graduated Breakeven Ratchet (v3.9.0 - Neutralizes Fakeout Reversals)
+            # For dip-turn & spatial mean-reversion setups, if price advances to cover >= 65% of the
+            # runway to the midline/target_1 or if explicit graduated breakeven is signaled, lock
+            # the stop to breakeven (+0.05% gross) to eliminate losing fakeout reversals.
+            mid_line = float(active_trade.get("mid_line", 0.0))
+            use_graduated = bool(active_trade.get("graduated_breakeven", False) or mid_line > 0.0)
+
+            target_distance = (mid_line - entry) if mid_line > entry else (target_price - entry)
+            dist_covered_ratio = ((highest_price - entry) / target_distance) if target_distance > 0 else 0.0
+
+            if use_graduated and (dist_covered_ratio >= 0.65 or (mid_line > 0 and highest_price >= mid_line)) and peak_gain_pct < 0.0120:
+                graduated_be_stop = round(entry * 1.0005, 2)
+                if graduated_be_stop > updated_trailing_stop:
+                    updated_trailing_stop = graduated_be_stop
+                    logger.info(f"[Brain] Stage 1 Graduated Ratchet: Peak +{peak_gain_pct*100:.2f}% (runway covered {dist_covered_ratio*100:.0f}%) -> Trailing stop locked to Breakeven (${updated_trailing_stop:,.2f})")
+
             # Step 1: Delayed Activation - Under +1.20% gross (+120 bps), do NOT lock premature tight stop.
             # Position breathes with structural invalidation floor to avoid sub-minute noise asphyxiation.
             # Step 2: Peak excursion >= +1.20% gross: lock 50% of peak gain (min +0.35% gross, ensuring positive net profit)
@@ -566,6 +584,24 @@ class FreeConvictionEngine:
             macro_gate_status = "REJECT_MACRO_MACD_NEG"
             macro_gate_reason = f"Macro MACD momentum actively negative (1H hist={macd_hist_1h:+.4f}, 4H hist={macd_hist_4h:+.4f})."
 
+        # Forensic Filter 1: Toxic Liquidity Session Gating (v3.9.0)
+        # Eliminates the 01:00 UTC settlement vacuum and 08:00-09:59 UTC London opening stop sweep traps.
+        utc_hour = matrix.get("utc_hour")
+        if utc_hour is not None:
+            if utc_hour == 1:
+                macro_gate_status = "REJECT_TOXIC_HOURS_SETTLEMENT"
+                macro_gate_reason = "Toxic liquidity dead zone: 01:00 UTC daily option/funding settlement & collateral rebalancing vacuum."
+            elif utc_hour in (8, 9):
+                macro_gate_status = "REJECT_TOXIC_HOURS_LONDON_SWEEP"
+                macro_gate_reason = f"Toxic liquidity dead zone: {utc_hour:02d}:00 UTC European cash open stop sweep trap."
+
+        # Forensic Filter 2: High-Velocity Macro Dump Gating (v3.9.0)
+        # Vetoes entries if price dropped deeper than -1.40% over the preceding 60 minutes.
+        drop_60m_pct = float(matrix.get("drop_60m_pct", 0.0))
+        if drop_60m_pct < -1.40:
+            macro_gate_status = "REJECT_HIGH_VELOCITY_FLUSH"
+            macro_gate_reason = f"High-velocity macro flush: 60m drop ({drop_60m_pct:.2f}% < -1.40% hurdle); absorption overwhelmed."
+
         # 15M Structure Check: Reject entry occurring in the middle of an aggressive
         # red impulse/dump candle. The 15m candle must show a completed base, defended
         # retest, or positive structure.
@@ -602,6 +638,20 @@ class FreeConvictionEngine:
                 structure_15m_status = "REJECT_15M_BREAKDOWN"
                 structure_15m_reason = f"15M band breakdown (%b={bb_pct_b_15m:.2f}) with negative momentum (hist={macd_hist_15m:+.4f})."
 
+        # Forensic Filter 3: Panic Liquidation Volume Surge Gating (v3.9.0)
+        # Vetoes entries if 15M rolling volume exceeds 2.20x the 60M rolling average.
+        vol_surge_ratio = float(matrix.get("vol_surge_ratio", 1.0))
+        if vol_surge_ratio > 2.20:
+            structure_15m_status = "REJECT_PANIC_LIQUIDATION_SURGE"
+            structure_15m_reason = f"Panic liquidation cascade detected: 15m/60m volume surge ({vol_surge_ratio:.2f}x > 2.20x ceiling)."
+
+        # Forensic Filter 4: LTF Micro-Turn Pseudo-Reversal Purification (v3.9.0)
+        # Rejects pseudo-reversal green bars that lack genuine lower-wick rejection defense.
+        micro_turn = matrix.get("micro_turn", {})
+        if isinstance(micro_turn, dict) and micro_turn.get("confirmation") == "1M_GREEN_REVERSAL":
+            structure_15m_status = "REJECT_PSEUDO_REVERSAL"
+            structure_15m_reason = "Pseudo-reversal candle detected (1M green close without genuine lower wick rejection >= 0.15)."
+
         hierarchical_gates_passed = (macro_gate_status == "PASS") and (structure_15m_status == "PASS")
 
         # Telemetry updates
@@ -614,6 +664,9 @@ class FreeConvictionEngine:
         intent_telemetry["macd_hist_1h"] = macd_hist_1h
         intent_telemetry["macd_hist_4h"] = macd_hist_4h
         intent_telemetry["drop_15m_pct"] = round(drop_15m_pct, 3)
+        intent_telemetry["utc_hour"] = utc_hour
+        intent_telemetry["vol_surge_ratio"] = round(vol_surge_ratio, 2)
+        intent_telemetry["drop_60m_pct"] = round(drop_60m_pct, 3)
 
         if not hierarchical_gates_passed:
             reject_reason = f"HIERARCHICAL_GATE_VETO (MACRO_SHIELD_VETO): {macro_gate_reason or structure_15m_reason}"

@@ -1935,6 +1935,167 @@ class TestZebraBot(unittest.TestCase):
         self.assertEqual(intent_bounce.action, "HOLD_POSITION")
         self.assertEqual(intent_bounce.telemetry.get("lot_2_state"), "CANCELED_BREAKDOWN")
 
+    def test_35_toxic_liquidity_session_gate(self):
+        """
+        Verify v3.9.0 Toxic Liquidity Session Gating:
+        1. Veto long entry if utc_hour == 1 (01:00 UTC settlement vacuum).
+        2. Veto long entry if utc_hour in (8, 9) (08:00-09:59 UTC London opening sweep trap).
+        3. Pass long entry during normal hours (e.g. 11:00 UTC, 14:00 UTC).
+        """
+        brain = FreeConvictionEngine()
+        price = 82000.0
+        base_matrix = {
+            "latest_price": price,
+            "tanh_imbalance": 0.30,
+            "trade_velocity": 8.0,
+            "cvd": 100.0,
+            "absorption_index": 18.0,
+            "composite_atr": 150.0,
+            "multi_screen_bounds": {
+                "nearest_support": 81500.0,
+                "nearest_resistance": 83500.0,
+                "macro_ceiling": 84500.0,
+                "pooled_swing_high": 82000.0,
+                "immediate_runway_pct": 1.83,
+                "macro_runway_pct": 3.05,
+            },
+            "balloon_geometry": {"is_balloon_expanding": True, "regime": "EXPANDING_BALLOON"},
+            "feature_vector": {"entropy": 0.35, "trend_strength": 0.001, "vol_regime": 1.0},
+            "timeframes": {
+                "1h": {"bb_mid": 81000.0, "macd_hist": 8.0, "bb_width": 1.5},
+                "4h": {"bb_mid": 80000.0, "macd_hist": 12.0},
+                "15m": {"bb_pct_b": 0.70, "macd_hist": 3.0, "bb_width": 0.70},
+                "5m": {"bb_upper": 81900.0, "bb_mid": 81500.0, "bb_width": 0.50, "bb_pct_b": 0.96},
+            },
+            "candles_15m": [{"open": 81800.0, "high": 82100.0, "low": 81750.0, "close": 82000.0, "vol": 150.0}],
+        }
+
+        # Sub-test 1: Hour 01:00 UTC -> VETO
+        m_1 = dict(base_matrix)
+        m_1["utc_hour"] = 1
+        intent_1 = brain.evaluate(m_1, active_trade=None)
+        self.assertEqual(intent_1.action, "WAIT_IN_CASH")
+        self.assertEqual(intent_1.telemetry.get("macro_gate_status"), "REJECT_TOXIC_HOURS_SETTLEMENT")
+
+        # Sub-test 2: Hour 08:00 UTC -> VETO
+        m_2 = dict(base_matrix)
+        m_2["utc_hour"] = 8
+        intent_2 = brain.evaluate(m_2, active_trade=None)
+        self.assertEqual(intent_2.action, "WAIT_IN_CASH")
+        self.assertEqual(intent_2.telemetry.get("macro_gate_status"), "REJECT_TOXIC_HOURS_LONDON_SWEEP")
+
+        # Sub-test 3: Hour 14:00 UTC -> PASS
+        m_3 = dict(base_matrix)
+        m_3["utc_hour"] = 14
+        intent_3 = brain.evaluate(m_3, active_trade=None)
+        self.assertEqual(intent_3.telemetry.get("macro_gate_status"), "PASS")
+        self.assertTrue(intent_3.telemetry.get("hierarchical_gates_passed"))
+
+    def test_36_panic_volume_surge_and_deep_drop_gate(self):
+        """
+        Verify v3.9.0 Panic Volume Surge & Deep Velocity Flush Gating:
+        1. Veto if 15m/60m volume surge ratio > 2.20x.
+        2. Veto if 60m price drop < -1.40%.
+        3. Veto if micro-turn is 1M_GREEN_REVERSAL without genuine wick rejection.
+        """
+        brain = FreeConvictionEngine()
+        price = 82000.0
+        base_matrix = {
+            "latest_price": price,
+            "tanh_imbalance": 0.30,
+            "trade_velocity": 8.0,
+            "cvd": 100.0,
+            "absorption_index": 18.0,
+            "composite_atr": 150.0,
+            "utc_hour": 14,
+            "multi_screen_bounds": {
+                "nearest_support": 81500.0,
+                "nearest_resistance": 83500.0,
+                "macro_ceiling": 84500.0,
+                "pooled_swing_high": 82000.0,
+                "immediate_runway_pct": 1.83,
+                "macro_runway_pct": 3.05,
+            },
+            "balloon_geometry": {"is_balloon_expanding": True, "regime": "EXPANDING_BALLOON"},
+            "feature_vector": {"entropy": 0.35, "trend_strength": 0.001, "vol_regime": 1.0},
+            "timeframes": {
+                "1h": {"bb_mid": 81000.0, "macd_hist": 8.0, "bb_width": 1.5},
+                "4h": {"bb_mid": 80000.0, "macd_hist": 12.0},
+                "15m": {"bb_pct_b": 0.70, "macd_hist": 3.0, "bb_width": 0.70},
+                "5m": {"bb_upper": 81900.0, "bb_mid": 81500.0, "bb_width": 0.50, "bb_pct_b": 0.96},
+            },
+            "candles_15m": [{"open": 81800.0, "high": 82100.0, "low": 81750.0, "close": 82000.0, "vol": 150.0}],
+        }
+
+        # Sub-test 1: Volume surge ratio = 2.45x (> 2.20x ceiling) -> VETO
+        m_surge = dict(base_matrix)
+        m_surge["vol_surge_ratio"] = 2.45
+        intent_surge = brain.evaluate(m_surge, active_trade=None)
+        self.assertEqual(intent_surge.action, "WAIT_IN_CASH")
+        self.assertEqual(intent_surge.telemetry.get("structure_15m_status"), "REJECT_PANIC_LIQUIDATION_SURGE")
+
+        # Sub-test 2: 60M drop = -1.85% (< -1.40% hurdle) -> VETO
+        m_drop = dict(base_matrix)
+        m_drop["drop_60m_pct"] = -1.85
+        intent_drop = brain.evaluate(m_drop, active_trade=None)
+        self.assertEqual(intent_drop.action, "WAIT_IN_CASH")
+        self.assertEqual(intent_drop.telemetry.get("macro_gate_status"), "REJECT_HIGH_VELOCITY_FLUSH")
+
+        # Sub-test 3: Pseudo-reversal confirmation -> VETO
+        m_pseudo = dict(base_matrix)
+        m_pseudo["micro_turn"] = {"confirmation": "1M_GREEN_REVERSAL"}
+        intent_pseudo = brain.evaluate(m_pseudo, active_trade=None)
+        self.assertEqual(intent_pseudo.action, "WAIT_IN_CASH")
+        self.assertEqual(intent_pseudo.telemetry.get("structure_15m_status"), "REJECT_PSEUDO_REVERSAL")
+
+    def test_37_graduated_breakeven_ratchet(self):
+        """
+        Verify v3.9.0 Stage 1 Graduated Breakeven Ratchet:
+        1. When a 15M dip trade (with mid_line) covers >= 65% of the distance to the midline,
+           the trailing stop immediately locks to breakeven (entry * 1.0005).
+        2. When price subsequently retraces, the position is protected at breakeven instead
+           of suffering a full stop-loss cut (neutralizing the Fakeout Reversal phenomenon).
+        """
+        brain = FreeConvictionEngine()
+        entry_price = 80000.0
+        active_trade = {
+            "entry": entry_price,
+            "highest_price": 80000.0,
+            "target_price": 81000.0,
+            "mid_line": 80500.0,  # Runway to midline is $500 (+0.625%)
+            "invalidation_floor": 79750.0,
+            "trailing_stop": 79750.0,
+            "scenario": "DIP_ABSORPTION_TURN",
+            "tranche_2_added": False,
+        }
+        base_matrix = {
+            "latest_price": 80350.0,  # Traveled $350 of $500 (70% of distance to midline >= 65%)
+            "composite_atr": 150.0,
+            "tanh_imbalance": 0.20,
+            "absorption_index": 15.0,
+            "multi_screen_bounds": {
+                "nearest_support": 79800.0,
+                "nearest_resistance": 81000.0,
+                "macro_ceiling": 82000.0,
+                "immediate_runway_pct": 1.0,
+                "macro_runway_pct": 2.0,
+            },
+            "balloon_geometry": {"regime": "BULL_ACCELERATION", "is_balloon_expanding": False, "is_slow_market": False},
+            "micro_turn": {"is_green_building": True, "velocity_slowing": False},
+        }
+
+        # 1. Price at 80,350 (70% to midline): stop locks to breakeven ($80,040.00)
+        decision_ratchet = brain.evaluate(base_matrix, active_trade=active_trade)
+        expected_be = round(entry_price * 1.0005, 2)  # $80,040.00
+        self.assertEqual(decision_ratchet["proposed_stop"], expected_be)
+        active_trade["trailing_stop"] = decision_ratchet["proposed_stop"]
+
+        # 2. Price falls back to breakeven ($80,040.00): exits via BANK_PROFIT instead of stop cut
+        base_matrix["latest_price"] = expected_be
+        decision_exit = brain.evaluate(base_matrix, active_trade=active_trade)
+        self.assertEqual(decision_exit["action"], "BANK_PROFIT")
+        self.assertIn("TRAILING STOP HIT", decision_exit["reason"])
+
 
 if __name__ == "__main__":
     unittest.main()
