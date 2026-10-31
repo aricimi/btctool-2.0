@@ -2594,6 +2594,114 @@ class TestZebraBot(unittest.TestCase):
         intent_stag = brain.evaluate(matrix_stagnant, active_trade=active_stagnant)
         self.assertEqual(intent_stag.telemetry.get("exit_reason"), "BREAKOUT_STAGNATION_CUT_4H")
 
+    def test_46_version_480_dual_lever_regime_hardening(self):
+        """
+        Verify Version 4.8.0 Dual-Lever Regime Hardening:
+        1. Lever 1: Breakout triggers (MACRO_BREAK_48H) require 4H EMA50 slope >= 0.00%.
+           If 4H EMA50 slope < 0.00%, breakout entry is vetoed.
+        2. Lever 2: RANGE_BOLLINGER_REVERSION requires 48H Range Compression <= 3.5%.
+           If 48H Range Compression > 3.5% (e.g. 4.0%), RBR entry is vetoed.
+        """
+        from conviction_engine import FreeConvictionEngine
+
+        brain = FreeConvictionEngine()
+        price = 80000.0
+
+        # Base 15M candles (25 bars) with 48H range = 2.75% (clears >= 2.0% hurdle)
+        candles = []
+        for i in range(25):
+            candles.append({
+                "open": 80000.0, "high": 80200.0, "low": 78000.0, "close": 80100.0, "vol": 100.0
+            })
+
+        # Test Lever 1: Breakout with declining 4H EMA50 slope
+        cur_breakout = {
+            "open": 80500.0, "high": 81750.0, "low": 80400.0, "close": 81700.0, "vol": 350.0
+        }
+        matrix_lever1_fail = {
+            "latest_price": 81700.0,
+            "candles_15m": candles + [cur_breakout],
+            "timeframes": {
+                "4h": {
+                    "ema_50": 80000.0,
+                    "ema_50_slope": -0.0010, # Declining 4H EMA50 (Bear regime!)
+                    "bb_mid": 80000.0
+                },
+                "1h": {
+                    "ema20_slope": 0.0030
+                }
+            },
+            "multi_screen_bounds": {"nearest_support": 80500.0, "nearest_resistance": 83000.0, "macro_ceiling": 85000.0, "macro_runway_pct": 4.0},
+            "tanh_imbalance": 0.25, "cvd": 120.0, "absorption_index": 18.0, "composite_atr": 250.0,
+            "utc_dow": 2,
+        }
+        # In declining 4H trend, breakout must be vetoed (action != ENTER_CORE_LOT_1 with MACRO_BREAK_48H)
+        intent_l1_fail = brain.evaluate(matrix_lever1_fail)
+        self.assertNotEqual(intent_l1_fail.scenario, "MACRO_BREAK_48H")
+
+        # Now test with positive 4H EMA50 slope
+        matrix_lever1_pass = {
+            "latest_price": 81700.0,
+            "candles_15m": candles + [cur_breakout],
+            "timeframes": {
+                "4h": {
+                    "ema_50": 80000.0,
+                    "ema_50_slope": +0.0010, # Rising 4H EMA50 (Bull trend clearance!)
+                    "bb_mid": 80000.0
+                },
+                "1h": {
+                    "ema20_slope": 0.0030
+                }
+            },
+            "multi_screen_bounds": {"nearest_support": 80500.0, "nearest_resistance": 83000.0, "macro_ceiling": 85000.0, "macro_runway_pct": 4.0},
+            "tanh_imbalance": 0.25, "cvd": 120.0, "absorption_index": 18.0, "composite_atr": 250.0,
+            "utc_dow": 2,
+        }
+        intent_l1_pass = brain.evaluate(matrix_lever1_pass)
+        self.assertEqual(intent_l1_pass.action, "ENTER_CORE_LOT_1")
+        self.assertEqual(intent_l1_pass.scenario, "MACRO_BREAK_48H")
+
+        # Test Lever 2: RBR Range Compression threshold (<= 3.5%)
+        # Base RBR candles oscillating around 80,000.0 (std ~500.0, lower band ~79,000.0, mid ~80,000.0)
+        # Case A: Range 48H = 4.0% (high 81500, low 78300, range = 3200 / 79200 = 4.04% > 3.5% hurdle -> VETOED)
+        candles_wide = []
+        for i in range(25):
+            candles_wide.append({
+                "open": 80000.0, "high": 81500.0, "low": 78300.0, "close": (80500.0 if i % 2 == 0 else 79500.0), "vol": 100.0
+            })
+        cur_rbr = {
+            "open": 78950.0, "high": 79300.0, "low": 78800.0, "close": 79200.0, "vol": 250.0
+        }
+        matrix_rbr_wide = {
+            "latest_price": 79200.0,
+            "candles_15m": candles_wide + [cur_rbr],
+            "timeframes": {"4h": {"ema_50": 79000.0, "bb_mid": 79000.0}, "1h": {"ema_20": 80000.0, "ema20_slope": 0.0020}},
+            "multi_screen_bounds": {"nearest_support": 78800.0, "nearest_resistance": 81000.0},
+            "utc_hour": 16, "utc_minute": 0,
+            "rsi_15m": 35.0,
+        }
+        intent_rbr_wide = brain.evaluate(matrix_rbr_wide)
+        # Range 4.04% > 3.5% threshold -> Must be vetoed
+        self.assertNotEqual(intent_rbr_wide.scenario, "RANGE_BOLLINGER_REVERSION")
+
+        # Case B: Range 48H = 2.78% (high 80700, low 78500, range = 2200 / 79200 = 2.78% <= 3.5% hurdle -> ALLOWED!)
+        candles_tight = []
+        for i in range(25):
+            candles_tight.append({
+                "open": 80000.0, "high": 80700.0, "low": 78500.0, "close": (80500.0 if i % 2 == 0 else 79500.0), "vol": 100.0
+            })
+        matrix_rbr_tight = {
+            "latest_price": 79200.0,
+            "candles_15m": candles_tight + [cur_rbr],
+            "timeframes": {"4h": {"ema_50": 79000.0, "bb_mid": 79000.0}, "1h": {"ema_20": 80000.0, "ema20_slope": 0.0005}},
+            "multi_screen_bounds": {"nearest_support": 78800.0, "nearest_resistance": 81000.0},
+            "utc_hour": 16, "utc_minute": 0,
+            "rsi_15m": 35.0,
+        }
+        intent_rbr_tight = brain.evaluate(matrix_rbr_tight)
+        self.assertEqual(intent_rbr_tight.scenario, "RANGE_BOLLINGER_REVERSION")
+        self.assertEqual(intent_rbr_tight.action, "ENTER_CORE_LOT_1")
+
 
 if __name__ == "__main__":
     unittest.main()

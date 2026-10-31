@@ -339,7 +339,10 @@ class MarketState:
             # EMAs
             ema_9 = float(MarketState.compute_ema(closes, 9)[-1]) if len(closes) >= 9 else closes[-1]
             ema_21 = float(MarketState.compute_ema(closes, 21)[-1]) if len(closes) >= 21 else closes[-1]
-            ema_50 = float(MarketState.compute_ema(closes, 50)[-1]) if len(closes) >= 50 else closes[-1]
+            ema_50_arr = MarketState.compute_ema(closes, 50)
+            ema_50 = float(ema_50_arr[-1]) if len(closes) >= 50 else closes[-1]
+            ema_50_prev = float(ema_50_arr[-4]) if len(ema_50_arr) >= 4 else ema_50
+            ema_50_slope = (ema_50 - ema_50_prev) / ema_50_prev if ema_50_prev > 0 else 0.0
 
             # Oscillators
             rsi = MarketState.compute_rsi(closes, 14)
@@ -353,6 +356,7 @@ class MarketState:
                 "ema_9": ema_9,
                 "ema_21": ema_21,
                 "ema_50": ema_50,
+                "ema_50_slope": ema_50_slope,
                 "rsi": rsi,
                 "macd_dif": dif,
                 "macd_dea": dea,

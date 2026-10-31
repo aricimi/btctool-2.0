@@ -312,6 +312,10 @@ def run_simulation():
             prev_h1_idx = max(0, h1_idx - 6)
             ema20_1h_slope = (ema20_1h[h1_idx] - ema20_1h[prev_h1_idx]) / ema20_1h[prev_h1_idx]
 
+            # 4H EMA50 slope (v4.8.0 Lever 1)
+            prev_h4_idx = max(0, h4_idx - 3)
+            ema50_4h_slope = (ema50_4h[h4_idx] - ema50_4h[prev_h4_idx]) / ema50_4h[prev_h4_idx]
+
             entry_minutes = dt_obj.hour * 60 + dt_obj.minute
             
             sh_48h = max(highs[i-192:i])
@@ -373,8 +377,8 @@ def run_simulation():
             res_4h = max(highs_4h[start_4h:h4_idx+1]) if h4_idx > start_4h else b['close'] * 1.05
             headroom = (res_4h - b['close']) / b['close'] * 100.0
             
-            # Multi-Horizon Breakouts (v4.4.0 Range Compression, Turnover & Overhead Gates)
-            if is_bull_4h and clv >= min_clv:
+            # Multi-Horizon Breakouts (v4.8.0 Lever 1: Gated by ema50_4h_slope >= 0.0)
+            if is_bull_4h and clv >= min_clv and (ema50_4h_slope >= 0.0):
                 # 48H Breakout
                 is_48h_break = b['close'] > sh_48h and closes[i-1] <= sh_48h
                 if is_48h_break:
@@ -424,10 +428,10 @@ def run_simulation():
                             }
                             continue
 
-            # TRIGGER 4: Secondary Alpha Sub-Engine - RANGE_BOLLINGER_REVERSION (v4.6.0)
+            # TRIGGER 4: Secondary Alpha Sub-Engine - RANGE_BOLLINGER_REVERSION (v4.8.0 Lever 2)
             # Fallthrough Secondary Slot: Evaluated ONLY when Core Tier-1 produces no signal
             is_flat_slope = abs(ema20_1h_slope) <= 0.0015
-            is_compressed_48h = range_48h_pct <= 4.5
+            is_compressed_48h = range_48h_pct <= 3.5
             macro_ok = b['close'] > ema50_4h[h4_idx] * 0.97
 
             # Gate 1: US Open Liquidity Flush Gate (Reject 12:30-15:00 UTC unless 1H EMA20 slope >= 0.00%)

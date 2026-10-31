@@ -725,6 +725,7 @@ class FreeConvictionEngine:
         tf_4h = tfs.get("4h", {})
         bb_mid_4h = float(tf_4h.get("bb_mid", 0.0))
         ema50_4h = float(tf_4h.get("ema_50", bb_mid_4h))
+        ema50_4h_slope = float(tf_4h.get("ema_50_slope", tf_4h.get("ema50_slope", 0.0010)))
         is_bull_macro_sweep = (price >= ema50_4h) or (bb_mid_4h > 0 and price >= bb_mid_4h)
 
         if candles_15m_all and len(candles_15m_all) >= 20:
@@ -885,7 +886,8 @@ class FreeConvictionEngine:
 
         utc_dow = matrix.get("utc_dow")  # 5, 6 is weekend
         is_weekend = (utc_dow in (5, 6)) if utc_dow is not None else False
-        if candles_15m_all and len(candles_15m_all) >= 20 and is_bull_macro_sweep and not is_weekend and not in_breakout_cooldown:
+        # v4.8.0 Lever 1: Require non-negative 4H EMA50 slope (ema50_4h_slope >= 0.0) to eliminate false bear breakouts
+        if candles_15m_all and len(candles_15m_all) >= 20 and is_bull_macro_sweep and not is_weekend and not in_breakout_cooldown and (ema50_4h_slope >= 0.0):
             cur_15m = candles_15m_all[-1]
             c_high = float(cur_15m.get("high", price))
             c_close = float(cur_15m.get("close", price))
@@ -1006,7 +1008,8 @@ class FreeConvictionEngine:
             ema20_1h_slope = float(tf_1h.get("ema20_slope", tf_1h.get("slope", 0.0)))
 
             is_flat_slope = abs(ema20_1h_slope) <= 0.0015
-            is_compressed_48h = range_48h_pct_rbr <= 4.5
+            # v4.8.0 Lever 2: Tightened 48H Range Compression (<= 3.5% down from 4.5%) to prevent band-walking
+            is_compressed_48h = range_48h_pct_rbr <= 3.5
             macro_ok = price > (ema50_4h * 0.97) if ema50_4h > 0 else True
 
             cur_ts = float(matrix.get("timestamp", time.time()))
