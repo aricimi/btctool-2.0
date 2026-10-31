@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>btctool 2.0 - Integrated Dual-Engine Trade Visualizer (45 Trades)</title>
+    <style>
+        body {
+            margin: 0; padding: 0; background-color: #0A0E17; color: #E2E8F0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace;
+        }
+        .header {
+            padding: 12px 24px; background-color: #131B2E; border-bottom: 1px solid #1E293B;
+            display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 15px;
+        }
+        .title { font-size: 18px; font-weight: 700; color: #00FFA3; }
+        .controls { display: flex; align-items: center; gap: 10px; }
+        select, button {
+            background-color: #0F172A; color: #00FFA3; border: 1px solid #334155;
+            padding: 8px 14px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer;
+        }
+        button:hover { background-color: #1E293B; border-color: #00FFA3; }
+        iframe { width: 100%; height: calc(100vh - 65px); border: none; display: block; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="title">⚡ btctool 2.0 · Integrated Dual-Engine Visualizer (45 Trades · 180 Days Live BTC)</div>
+        <div class="controls">
+            <button onclick="prevTrade()">◀ Previous</button>
+            <select id="tradeSelect" onchange="loadTrade(this.value)">
+                <option value="trade_01.html">Trade #01: MACRO_BREAK_48H (-0.31%) - 2026-05-06</option>
+<option value="trade_02.html">Trade #02: SWEEP_24H_RECLAIM (+0.34%) - 2026-05-07</option>
+<option value="trade_03.html">Trade #03: SWEEP_24H_RECLAIM (+0.54%) - 2026-05-10</option>
+<option value="trade_04.html">Trade #04: BREAK_24H (-0.54%) - 2026-05-14</option>
+<option value="trade_05.html">Trade #05: CAPITULATION_SWEEP_48H (-0.81%) - 2026-05-15</option>
+<option value="trade_06.html">Trade #06: CAPITULATION_SWEEP_48H (-1.02%) - 2026-05-16</option>
+<option value="trade_07.html">Trade #07: CAPITULATION_SWEEP_48H (-0.25%) - 2026-05-28</option>
+<option value="trade_08.html">Trade #08: CAPITULATION_SWEEP_48H (+0.02%) - 2026-06-04</option>
+<option value="trade_09.html">Trade #09: CAPITULATION_SWEEP_48H (-1.70%) - 2026-06-05</option>
+<option value="trade_10.html">Trade #10: SWEEP_24H_RECLAIM (+0.59%) - 2026-06-16</option>
+<option value="trade_11.html">Trade #11: SWEEP_24H_RECLAIM (+0.12%) - 2026-06-17</option>
+<option value="trade_12.html">Trade #12: MACRO_BREAK_48H (-0.34%) - 2026-06-22</option>
+<option value="trade_13.html">Trade #13: MACRO_BREAK_48H (-1.11%) - 2026-07-01</option>
+<option value="trade_14.html">Trade #14: MACRO_BREAK_48H (+0.13%) - 2026-07-03</option>
+<option value="trade_15.html">Trade #15: CAPITULATION_SWEEP_48H (+2.85%) - 2026-07-06</option>
+<option value="trade_16.html">Trade #16: SWEEP_24H_RECLAIM (-1.70%) - 2026-07-08</option>
+<option value="trade_17.html">Trade #17: BREAK_24H (+0.61%) - 2026-07-09</option>
+<option value="trade_18.html">Trade #18: SWEEP_24H_RECLAIM (+0.22%) - 2026-07-11</option>
+<option value="trade_19.html">Trade #19: BREAK_24H (+1.43%) - 2026-07-14</option>
+<option value="trade_20.html">Trade #20: SWEEP_24H_RECLAIM (+0.54%) - 2026-07-16</option>
+<option value="trade_21.html">Trade #21: MACRO_BREAK_48H (-1.15%) - 2026-07-20</option>
+<option value="trade_22.html">Trade #22: MACRO_BREAK_48H (-0.76%) - 2026-08-03</option>
+<option value="trade_23.html">Trade #23: MACRO_BREAK_48H (-0.05%) - 2026-08-17</option>
+<option value="trade_24.html">Trade #24: MACRO_BREAK_48H (+3.16%) - 2026-08-19</option>
+<option value="trade_25.html">Trade #25: MACRO_BREAK_48H (+7.68%) - 2026-08-20</option>
+<option value="trade_26.html">Trade #26: SWEEP_24H_RECLAIM (+0.52%) - 2026-08-23</option>
+<option value="trade_27.html">Trade #27: MACRO_BREAK_48H (+1.13%) - 2026-08-24</option>
+<option value="trade_28.html">Trade #28: SWEEP_24H_RECLAIM (+0.67%) - 2026-08-25</option>
+<option value="trade_29.html">Trade #29: BREAK_24H (-0.58%) - 2026-08-27</option>
+<option value="trade_30.html">Trade #30: MACRO_BREAK_48H (-0.64%) - 2026-08-27</option>
+<option value="trade_31.html">Trade #31: CAPITULATION_SWEEP_48H (-0.07%) - 2026-08-30</option>
+<option value="trade_32.html">Trade #32: BREAK_24H (+3.00%) - 2026-09-03</option>
+<option value="trade_33.html">Trade #33: SWEEP_24H_RECLAIM (+0.00%) - 2026-09-06</option>
+<option value="trade_34.html">Trade #34: CAPITULATION_SWEEP_48H (+0.01%) - 2026-09-11</option>
+<option value="trade_35.html">Trade #35: CAPITULATION_SWEEP_48H (-0.74%) - 2026-09-15</option>
+<option value="trade_36.html">Trade #36: MACRO_BREAK_48H (+2.30%) - 2026-09-18</option>
+<option value="trade_37.html">Trade #37: MACRO_BREAK_48H (+0.15%) - 2026-09-21</option>
+<option value="trade_38.html">Trade #38: MACRO_BREAK_48H (+1.51%) - 2026-09-21</option>
+<option value="trade_39.html">Trade #39: CAPITULATION_SWEEP_48H (-0.89%) - 2026-09-23</option>
+<option value="trade_40.html">Trade #40: BREAK_24H (-1.40%) - 2026-09-25</option>
+<option value="trade_41.html">Trade #41: SWEEP_24H_RECLAIM (-1.37%) - 2026-09-28</option>
+<option value="trade_42.html">Trade #42: MACRO_BREAK_48H (-0.86%) - 2026-09-30</option>
+<option value="trade_43.html">Trade #43: CAPITULATION_SWEEP_48H (+1.03%) - 2026-10-15</option>
+<option value="trade_44.html">Trade #44: MACRO_BREAK_48H (+0.83%) - 2026-10-20</option>
+<option value="trade_45.html">Trade #45: MACRO_BREAK_48H (-0.52%) - 2026-10-28</option>
+
+            </select>
+            <button onclick="nextTrade()">Next ▶</button>
+        </div>
+    </div>
+    <iframe id="chartFrame" src="trade_charts/trade_01.html"></iframe>
+    <script>
+        function loadTrade(filename) {
+            document.getElementById('chartFrame').src = 'trade_charts/' + filename;
+        }
+        function prevTrade() {
+            const sel = document.getElementById('tradeSelect');
+            if (sel.selectedIndex > 0) { sel.selectedIndex--; loadTrade(sel.value); }
+        }
+        function nextTrade() {
+            const sel = document.getElementById('tradeSelect');
+            if (sel.selectedIndex < sel.options.length - 1) { sel.selectedIndex++; loadTrade(sel.value); }
+        }
+        window.addEventListener('keydown', function(e) {
+            if (e.key === 'ArrowLeft') prevTrade();
+            else if (e.key === 'ArrowRight') nextTrade();
+        });
+    </script>
+</body>
+</html>

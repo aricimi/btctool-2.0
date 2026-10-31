@@ -225,6 +225,50 @@ class FreeConvictionEngine:
             tranche_2 = bool(active_trade.get("tranche_2_added", False))
             scenario = active_trade.get("scenario", "TRADE")
 
+            # 1.05 DEDICATED MEAN-REVERSION EXIT (For SWEEP_24H_RECLAIM)
+            if scenario == "SWEEP_24H_RECLAIM":
+                # Break-Even Ratchet: Once excursion >= 2.0 ATR, lock stop to Break-Even (+0.20% fee cover)
+                if (highest_price - entry) >= (2.0 * atr):
+                    be_stop = round(entry * 1.0020, 2)
+                    if be_stop > trailing_stop:
+                        trailing_stop = be_stop
+
+                # Take Profit Target: 2.5 ATR
+                tp_target = float(active_trade.get("target_price", entry + (2.5 * atr)))
+                if price >= tp_target:
+                    return TradeIntent(
+                        action="BANK_PROFIT",
+                        scenario=scenario,
+                        gain_pct=gain_pct,
+                        entry_price=price,
+                        reason=f"SWEEP_24H TAKE PROFIT HIT (+{gain_pct*100:.2f}% gross, +{(gain_pct-0.0020)*100:.2f}% net). Locking in banked profit at ${price:,.2f}.",
+                        telemetry={"scenario": scenario, "gain_pct": gain_pct},
+                    )
+
+                # Time Stop: 8 Hours (32 15m bars or 28,800 seconds)
+                bars_held = int(active_trade.get("bars_held", 0))
+                time_in_trade = (time.time() - float(active_trade.get("entry_time", 0.0))) if active_trade.get("entry_time") else 0
+                if bars_held >= 32 or time_in_trade >= 28800:
+                    if gain_pct > 0.0020:
+                        return TradeIntent(
+                            action="BANK_PROFIT",
+                            scenario=scenario,
+                            gain_pct=gain_pct,
+                            entry_price=price,
+                            reason=f"SWEEP_24H TIME STOP (8H) PROFIT: +{gain_pct*100:.2f}% gross. Securing profit at ${price:,.2f}.",
+                            telemetry={"scenario": scenario, "gain_pct": gain_pct},
+                        )
+                    else:
+                        return TradeIntent(
+                            action="CUT_THESIS_INVALIDATED",
+                            scenario=scenario,
+                            gain_pct=gain_pct,
+                            entry_price=price,
+                            proposed_stop=price,
+                            reason=f"SWEEP_24H TIME STOP EXPIRED (8H): Momentum failed to reach target. Releasing capital at ${price:,.2f}.",
+                            telemetry={"scenario": scenario, "gain_pct": gain_pct},
+                        )
+
             # 1.1 IN-SITU MEMORY SOFT STOP EVALUATION
             if price <= trailing_stop:
                 if trailing_stop >= entry or gain_pct >= 0.0005:
@@ -523,14 +567,69 @@ class FreeConvictionEngine:
         intent_telemetry["intuition_mod"] = round(intuition_mod, 3)
         intent_telemetry["tuned_confidence"] = round(tuned_confidence, 3)
 
-        # 2.6 SETUP A: BOTTOM / DIP TURN PREDICTION (FROZEN CAPITAL GOVERNOR)
+        # 2.6 SETUP A: 24H LIQUIDITY SWEEP & RECLAIM (Validated Dip-Absorption Alpha)
+        # Unfreezes dip-buying strictly for high-conviction 24H liquidity flushes in Bull Macro regimes.
+        candles_15m_all = matrix.get("candles_15m") or []
+        tfs = matrix.get("timeframes", {})
+        tf_4h = tfs.get("4h", {})
+        bb_mid_4h = float(tf_4h.get("bb_mid", 0.0))
+        ema50_4h = float(tf_4h.get("ema_50", bb_mid_4h))
+        is_bull_macro_sweep = (price >= ema50_4h) or (bb_mid_4h > 0 and price >= bb_mid_4h)
+
+        if candles_15m_all and len(candles_15m_all) >= 20 and is_bull_macro_sweep:
+            cur_15m = candles_15m_all[-1]
+            c_low = float(cur_15m.get("low", price))
+            c_high = float(cur_15m.get("high", price))
+            c_close = float(cur_15m.get("close", price))
+            c_open = float(cur_15m.get("open", price))
+
+            # 24-hour lookback calculation
+            lookback_bars = min(len(candles_15m_all) - 1, 96)
+            if lookback_bars >= 12:
+                recent_lows = [float(c.get("low", price)) for c in candles_15m_all[-(lookback_bars + 1):-1]]
+                sl_24h = min(recent_lows) if recent_lows else c_low
+
+                # Sweep & Reclaim check: pierced below 24h low, closed back ABOVE 24h low
+                is_sweep_reclaimed = (c_low < sl_24h) and (c_close > sl_24h)
+                c_rng = c_high - c_low
+                clv = (c_close - c_low) / c_rng if c_rng > 0 else 0.5
+                body_pct = ((c_close - c_open) / c_open * 100.0) if c_open > 0 else 0.0
+
+                # 20-bar rolling 15M volume SMA
+                v_recent = [float(c.get("vol", 0.0)) for c in candles_15m_all[-min(len(candles_15m_all), 21):-1]]
+                v_sma20 = float(np.mean(v_recent)) if v_recent else 1.0
+                c_vol = float(cur_15m.get("vol", 0.0))
+                vr = c_vol / v_sma20 if v_sma20 > 0 else 1.0
+
+                if is_sweep_reclaimed and vr >= 2.2 and clv >= 0.80 and body_pct >= -0.10:
+                    tp_price = round(price + (2.5 * atr), 2)
+                    stop_price = round(min(c_low * 0.998, price * 0.985), 2)
+                    return TradeIntent(
+                        action="ENTER_CORE_LOT_1",
+                        scenario="SWEEP_24H_RECLAIM",
+                        entry_price=price,
+                        target_price=tp_price,
+                        proposed_stop=stop_price,
+                        expected_runway_pct=round(2.5 * (atr / price) * 100.0, 2),
+                        confidence=0.82,
+                        reason=f"SWEEP_24H_RECLAIM: 24H low (${sl_24h:,.2f}) swept and reclaimed with pin-bar absorption (CLV={clv:.2f}, VR={vr:.1f}x) at ${price:,.2f}. Target: ${tp_price:,.2f} (+2.5 ATR), Stop: ${stop_price:,.2f}.",
+                        telemetry={
+                            **intent_telemetry,
+                            "scenario": "SWEEP_24H_RECLAIM",
+                            "sl_24h": round(sl_24h, 2),
+                            "clv": round(clv, 2),
+                            "vr": round(vr, 2),
+                            "body_pct": round(body_pct, 2),
+                            "target_price": tp_price,
+                            "proposed_stop": stop_price,
+                        },
+                    )
+
+        # 2.6B SETUP A FALLBACK: GENERIC DIP TURN (FROZEN CAPITAL GOVERNOR)
         dist_to_support = abs(price - nearest_support)
         is_at_support_floor = dist_to_support <= (0.85 * atr)
-
-        # Physical structural target only (purged synthetic floors)
         target_a = nearest_resistance
         target_pct_a = ((target_a - price) / price) * 100.0 if price > 0 else 0.0
-
         is_absorption_confirmed = (
             (tanh_imb > 0.10 or absorption_idx > 12.0)
             and tanh_imb >= 0.0
@@ -538,7 +637,6 @@ class FreeConvictionEngine:
         )
 
         if is_at_support_floor and is_absorption_confirmed:
-            # MANDATORY PHYSICAL RUNWAY GATE (+50 bps hurdle)
             if target_pct_a < 0.50:
                 return TradeIntent(
                     action="WAIT_IN_CASH",
@@ -547,7 +645,6 @@ class FreeConvictionEngine:
                     telemetry={**intent_telemetry, "scenario": "DIP_ABSORPTION_TURN", "runway_pct": target_pct_a},
                 )
 
-            # SETUP A FROZEN (BTCTOOL 3.0 Mandate): Disables order dispatch while governing capital cascade
             return TradeIntent(
                 action="WAIT_IN_CASH",
                 scenario="DIP_ABSORPTION_TURN",
@@ -827,6 +924,18 @@ class FreeConvictionEngine:
         )
 
         if (is_clearing_high or is_balloon_expanding) and has_real_momentum and is_belief_aligned and has_orderflow_backing:
+            # Bollinger Upper Band Exhaustion Shield:
+            # Prevents buying into local range ceiling exhaustion above +2.0 Upper BB
+            tf_15m_dict = tfs.get("15m", {})
+            bb_upper_15m = float(tf_15m_dict.get("bb_upper", price * 1.05))
+            if price > bb_upper_15m:
+                return TradeIntent(
+                    action="WAIT_IN_CASH",
+                    scenario="MACRO_BALLOON_BREAKOUT",
+                    reason=f"VETO UPPER BB EXHAUSTION: Price (${price:,.2f}) stretched above 15M Upper Bollinger Band (${bb_upper_15m:,.2f}). Vetoing local range ceiling chase.",
+                    telemetry={**intent_telemetry, "upper_bb_exhaustion_veto": True, "bb_upper_15m": bb_upper_15m},
+                )
+
             # Physical target strictly bound to macro ceiling (purged synthetic floors)
             target = macro_ceiling
             target_pct = ((target - price) / price) * 100.0 if price > 0 else 0.0

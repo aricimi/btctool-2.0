@@ -2096,6 +2096,92 @@ class TestZebraBot(unittest.TestCase):
         self.assertEqual(decision_exit["action"], "BANK_PROFIT")
         self.assertIn("TRAILING STOP HIT", decision_exit["reason"])
 
+    def test_38_sweep_24h_reclaim_and_exhaustion_shield(self):
+        """Verify Version 4.0.0 Dual-Engine:
+        1. SWEEP_24H_RECLAIM: Captures 24H liquidity sweep pin-bar absorption with +2.5 ATR target.
+        2. Mean-Reversion Exit: Locks break-even at +2.0 ATR and banks profit at +2.5 ATR.
+        3. Bollinger Upper Band Exhaustion Shield: Vetoes breakout chasing when stretched above 15M Upper BB.
+        """
+        brain = FreeConvictionEngine()
+        price = 80734.88
+        atr = 250.0
+
+        # Construct 15M candle buffer with 24H low = $80,500.00
+        candles_15m = []
+        for i in range(30):
+            candles_15m.append({"open": 81000.0, "high": 81200.0, "low": 80500.0, "close": 80800.0, "vol": 100.0})
+        # Current bar sweeps below 80,500 down to 80,279.77 and reclaims to 80,734.88 with 4.2x volume
+        candles_15m.append({
+            "open": 80800.0, "high": 80800.0, "low": 80279.77, "close": 80734.88, "vol": 420.0
+        })
+
+        sweep_matrix = {
+            "latest_price": price,
+            "composite_atr": atr,
+            "candles_15m": candles_15m,
+            "timeframes": {
+                "4h": {"bb_mid": 80300.0, "ema_50": 80300.0, "macd_hist": 0.5},
+                "15m": {"bb_upper": 81500.0, "bb_mid": 80900.0, "bb_lower": 80300.0, "atr": atr}
+            },
+            "multi_screen_bounds": {
+                "nearest_support": 80300.0, "nearest_resistance": 81500.0,
+                "macro_ceiling": 82500.0, "immediate_runway_pct": 1.0, "macro_runway_pct": 2.2
+            },
+            "balloon_geometry": {"regime": "BULL_ACCELERATION", "is_balloon_expanding": False, "is_slow_market": False},
+            "micro_turn": {"is_green_building": True, "velocity_slowing": False},
+        }
+
+        # 1. Trigger SWEEP_24H_RECLAIM
+        intent = brain.evaluate(sweep_matrix)
+        self.assertEqual(intent.action, "ENTER_CORE_LOT_1")
+        self.assertEqual(intent.scenario, "SWEEP_24H_RECLAIM")
+        self.assertAlmostEqual(intent.target_price, round(price + (2.5 * atr), 2))
+
+        # 2. Mean-Reversion Exit: Test Break-Even ratchet at +2.0 ATR and TP at +2.5 ATR
+        active_sweep = {
+            "entry": price,
+            "highest_price": price + (2.0 * atr),
+            "target_price": price + (2.5 * atr),
+            "trailing_stop": price * 0.985,
+            "scenario": "SWEEP_24H_RECLAIM"
+        }
+        # Once price reaches +2.5 ATR, triggers BANK_PROFIT
+        tp_matrix = dict(sweep_matrix)
+        tp_matrix["latest_price"] = price + (2.5 * atr)
+        intent_tp = brain.evaluate(tp_matrix, active_trade=active_sweep)
+        self.assertEqual(intent_tp.action, "BANK_PROFIT")
+        self.assertIn("SWEEP_24H TAKE PROFIT HIT", intent_tp.reason)
+
+        # 3. Bollinger Upper Band Exhaustion Shield on Breakouts
+        breakout_matrix = {
+            "latest_price": 81786.73,
+            "composite_atr": 250.0,
+            "candles_1m": [
+                {"open": 81400.0, "high": 81786.73, "low": 81350.0, "close": 81786.73, "vol": 20.0} for _ in range(6)
+            ],
+            "timeframes": {
+                "4h": {"bb_mid": 80300.0, "ema_50": 80300.0, "macd_hist": 0.5},
+                "15m": {"bb_upper": 81500.0, "bb_mid": 80900.0, "bb_lower": 80300.0, "atr": 250.0}
+            },
+            "tanh_imbalance": 0.50,
+            "trade_velocity": 10.0,
+            "cvd": 200.0,
+            "absorption_index": 20.0,
+            "spread_pct": 0.02,
+            "multi_screen_bounds": {
+                "nearest_support": 80300.0, "nearest_resistance": 83000.0,
+                "macro_ceiling": 84000.0, "pooled_swing_high": 81400.0,
+                "immediate_runway_pct": 1.5, "macro_runway_pct": 2.7
+            },
+            "balloon_geometry": {"is_balloon_expanding": True, "regime": "EXPANDING_BALLOON"},
+            "micro_turn": {"is_green_building": True, "velocity_slowing": False},
+            "feature_vector": {"entropy": 0.30, "trend_strength": 0.002, "vol_regime": 1.0, "liquidity": 20.0},
+        }
+        for _ in range(6):
+            intent_break = brain.evaluate(breakout_matrix)
+        self.assertEqual(intent_break.action, "WAIT_IN_CASH")
+        self.assertIn("VETO UPPER BB EXHAUSTION", intent_break.reason)
+
 
 if __name__ == "__main__":
     unittest.main()
