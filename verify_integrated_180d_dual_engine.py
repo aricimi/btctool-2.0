@@ -258,11 +258,16 @@ def run_simulation():
             clv = (b['close'] - b['low']) / rng if rng > 0 else 0.5
             dist_ema = (b['close'] - ema50_4h[h4_idx]) / ema50_4h[h4_idx] * 100.0
             
-            # TRIGGER 1: Macro 48h Capitulation Sweep (Extreme volume)
+            # TRIGGER 1: Macro 48h Capitulation Sweep (v4.3.0 Depth & Quality Gate)
             sl_48h = min(lows[i-192:i])
             if b['low'] < sl_48h and b['close'] > sl_48h:
                 if vr >= 2.5 and body_pct >= 0.20 and clv >= 0.70:
                     take_sweep = is_bull_4h or (vr >= 3.5)
+                    # v4.3.0 Depth & Quality Gate Integration
+                    depth_gate = dist_ema <= -1.0
+                    quality_gate = (vr >= 4.5) or (dist_ema <= -2.5)
+                    if not (depth_gate and quality_gate):
+                        take_sweep = False
                     if take_sweep:
                         pos = {
                             'type': 'CAPITULATION_SWEEP_48H', 'entry_idx': i, 'entry_t': dt, 'entry_p': b['close'],

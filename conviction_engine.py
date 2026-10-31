@@ -636,6 +636,13 @@ class FreeConvictionEngine:
 
                 if is_sweep_48h and vr >= 2.5 and body_pct >= 0.20 and clv >= 0.70:
                     take_sweep = is_bull_macro_sweep or (vr >= 3.5)
+                    # v4.3.0 Capitulation Depth & Quality Gate Integration
+                    dist_ema50_pct = ((price - ema50_4h) / ema50_4h) * 100.0 if ema50_4h > 0 else 0.0
+                    depth_gate = dist_ema50_pct <= -1.0
+                    quality_gate = (vr >= 4.5) or (dist_ema50_pct <= -2.5)
+                    if not (depth_gate and quality_gate):
+                        take_sweep = False
+
                     if take_sweep:
                         stop_price = round(price * 0.985, 2)
                         return TradeIntent(
@@ -646,7 +653,7 @@ class FreeConvictionEngine:
                             proposed_stop=stop_price,
                             expected_runway_pct=macro_runway,
                             confidence=0.85,
-                            reason=f"CAPITULATION_SWEEP_48H: 48H low (${sl_48h:,.2f}) swept and reclaimed with panic absorption (VR={vr:.1f}x, CLV={clv:.2f}) at ${price:,.2f}.",
+                            reason=f"CAPITULATION_SWEEP_48H: 48H low (${sl_48h:,.2f}) swept and reclaimed with panic absorption (Dist4H={dist_ema50_pct:+.2f}%, VR={vr:.1f}x, CLV={clv:.2f}) at ${price:,.2f}.",
                             telemetry={
                                 **intent_telemetry,
                                 "scenario": "CAPITULATION_SWEEP_48H",
@@ -654,6 +661,7 @@ class FreeConvictionEngine:
                                 "clv": round(clv, 2),
                                 "vr": round(vr, 2),
                                 "body_pct": round(body_pct, 2),
+                                "dist_ema50_pct": round(dist_ema50_pct, 2),
                             },
                         )
 

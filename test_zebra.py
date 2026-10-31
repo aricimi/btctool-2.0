@@ -2304,6 +2304,66 @@ class TestZebraBot(unittest.TestCase):
         self.assertEqual(intent_accept.scenario, "MACRO_BREAK_48H")
         self.assertIn("MACRO_BREAK_48H", intent_accept.reason)
 
+    def test_41_capitulation_sweep_48h_depth_and_quality_gate(self):
+        """
+        Verify Version 4.3.0 Capitulation Depth & Quality Gate for CAPITULATION_SWEEP_48H:
+        1. Sweep above -1.0% distance from 4H EMA50 (e.g. -0.625%) is vetoed.
+        2. Sweep at -1.5% distance with volume multiplier 3.0x (< 4.5x) is vetoed.
+        3. Sweep at <= -1.0% with volume multiplier >= 4.5x triggers ENTER_CORE_LOT_1.
+        """
+        brain = FreeConvictionEngine()
+        ema50_4h = 80000.0
+
+        # Construct 25 dummy 15M candles with 48h low at 79000.0
+        candles = []
+        for i in range(25):
+            candles.append({
+                "open": 79200.0, "high": 79500.0, "low": 79000.0, "close": 79300.0, "vol": 100.0
+            })
+
+        # Case A: Shallow sweep above -1.0% depth gate (price 79500 vs EMA50 80000 = -0.625%)
+        cur_shallow = {
+            "open": 79300.0, "high": 79600.0, "low": 78800.0, "close": 79500.0, "vol": 500.0
+        }
+        matrix_shallow = {
+            "latest_price": 79500.0,
+            "candles_15m": candles + [cur_shallow],
+            "timeframes": {"4h": {"ema_50": ema50_4h, "bb_mid": ema50_4h}},
+            "multi_screen_bounds": {"nearest_support": 79000.0, "nearest_resistance": 81000.0, "macro_ceiling": 82000.0, "macro_runway_pct": 2.0},
+            "tanh_imbalance": 0.20, "cvd": 100.0, "absorption_index": 15.0, "composite_atr": 200.0,
+        }
+        intent_shallow = brain.evaluate(matrix_shallow)
+        self.assertNotEqual(intent_shallow.scenario, "CAPITULATION_SWEEP_48H")
+
+        # Case B: Sufficient depth (-1.5%) but low quality volume (VR = 3.0x < 4.5x)
+        cur_low_vol = {
+            "open": 78600.0, "high": 78900.0, "low": 78400.0, "close": 78800.0, "vol": 300.0
+        }
+        matrix_low_vol = {
+            "latest_price": 78800.0,
+            "candles_15m": candles + [cur_low_vol],
+            "timeframes": {"4h": {"ema_50": ema50_4h, "bb_mid": ema50_4h}},
+            "multi_screen_bounds": {"nearest_support": 78000.0, "nearest_resistance": 80000.0, "macro_ceiling": 81000.0, "macro_runway_pct": 2.5},
+            "tanh_imbalance": 0.20, "cvd": 100.0, "absorption_index": 15.0, "composite_atr": 200.0,
+        }
+        intent_low_vol = brain.evaluate(matrix_low_vol)
+        self.assertNotEqual(intent_low_vol.scenario, "CAPITULATION_SWEEP_48H")
+
+        # Case C: Valid Capitulation: Depth -1.06% and extreme volume VR >= 4.5x (CLV >= 0.70)
+        cur_valid = {
+            "open": 78900.0, "high": 79200.0, "low": 78800.0, "close": 79150.0, "vol": 500.0
+        }
+        matrix_valid = {
+            "latest_price": 79150.0,
+            "candles_15m": candles + [cur_valid],
+            "timeframes": {"4h": {"ema_50": ema50_4h, "bb_mid": ema50_4h}},
+            "multi_screen_bounds": {"nearest_support": 78000.0, "nearest_resistance": 80000.0, "macro_ceiling": 81000.0, "macro_runway_pct": 2.5},
+            "tanh_imbalance": 0.25, "cvd": 150.0, "absorption_index": 18.0, "composite_atr": 200.0,
+        }
+        intent_valid = brain.evaluate(matrix_valid)
+        self.assertEqual(intent_valid.action, "ENTER_CORE_LOT_1")
+        self.assertEqual(intent_valid.scenario, "CAPITULATION_SWEEP_48H")
+
 
 if __name__ == "__main__":
     unittest.main()
