@@ -185,6 +185,26 @@ def run_simulation():
                         exit_reason = "TRAILING_ATR"
                         exited = True
 
+            # 4. RANGE BOLLINGER REVERSION DEDICATED EXITS (v4.6.0)
+            elif pos['type'] == 'RANGE_BOLLINGER_REVERSION':
+                target_p = bb_mid[i]
+                if b['high'] >= target_p:
+                    exit_p = target_p
+                    exit_reason = "BOLLINGER_MID_TARGET"
+                    exited = True
+                elif b['low'] <= pos['hard_stop']:
+                    exit_p = pos['hard_stop']
+                    exit_reason = "STRUCTURAL_BAND_STOP"
+                    exited = True
+                elif bars_held >= 8 and (b['close'] - entry_p) / entry_p < 0.0025:
+                    exit_p = b['close']
+                    exit_reason = "EARLY_VELOCITY_STOP_2H"
+                    exited = True
+                elif bars_held >= 16:
+                    exit_p = b['close']
+                    exit_reason = "TIME_STOP_4H"
+                    exited = True
+
             # 3. BREAKOUT RUNNERS: 1H EMA20 TREND SHIELD (v4.1.0)
             else:
                 if peak_gain_pct >= 2.5:
@@ -228,6 +248,7 @@ def run_simulation():
                     last_failed_breakout_bar = i
                 trades.append({
                     'id': len(trades) + 1,
+                    'silo': pos.get('silo', 'CORE_v450'),
                     'type': pos['type'],
                     'entry_idx': pos['entry_idx'],
                     'exit_idx': i,
@@ -380,6 +401,46 @@ def run_simulation():
                             }
                             continue
 
+            # TRIGGER 4: Secondary Alpha Sub-Engine - RANGE_BOLLINGER_REVERSION (v4.6.0)
+            # Fallthrough Secondary Slot: Evaluated ONLY when Core Tier-1 produces no signal
+            is_flat_slope = abs(ema20_1h_slope) <= 0.0015
+            is_compressed_48h = range_48h_pct <= 4.5
+            macro_ok = b['close'] > ema50_4h[h4_idx] * 0.97
+
+            # Gate 1: US Open Liquidity Flush Gate (Reject 12:30-15:00 UTC unless 1H EMA20 slope >= 0.00%)
+            in_us_open = (750 <= entry_minutes <= 900)
+            us_open_pass = not in_us_open or (ema20_1h_slope >= 0.0)
+
+            # Gate 2: Asian Dead-Zone Exclusion Gate (Reject 01:00-03:30 UTC)
+            in_asian_dead_zone = (60 <= entry_minutes <= 210)
+
+            if (is_flat_slope or is_compressed_48h) and macro_ok and us_open_pass and not in_asian_dead_zone:
+                pierced_lower = (b['low'] <= bb_lower[i])
+                closed_inside = (b['close'] > bb_lower[i])
+                rng_bar = b['high'] - b['low']
+                clv_bar = (b['close'] - b['low']) / rng_bar if rng_bar > 0 else 0.5
+                runway_to_mid = (bb_mid[i] - b['close']) / b['close'] * 100.0
+
+                # Gate 3: Minimum Reward Runway Hurdle (>= 0.85%)
+                if pierced_lower and closed_inside and (clv_bar >= 0.50) and (rsi[i] <= 42.0) and (runway_to_mid >= 0.85):
+                    struct_stop = min(b['low'] * 0.998, b['close'] * 0.985)
+                    struct_stop = max(struct_stop, b['close'] * 0.988)
+
+                    pos = {
+                        'type': 'RANGE_BOLLINGER_REVERSION',
+                        'silo': 'SECONDARY_RBR',
+                        'entry_idx': i,
+                        'entry_t': dt,
+                        'entry_p': b['close'],
+                        'hard_stop': struct_stop,
+                        'trail_floor': struct_stop,
+                        'rsi_entry': rsi[i],
+                        'vr_entry': vr,
+                        'dist_ema50': dist_ema,
+                        'peak_p': b['close']
+                    }
+                    continue
+
     wins = [t for t in trades if t['net_pct'] > 0]
     losses = [t for t in trades if t['net_pct'] <= 0]
     wr = len(wins)/len(trades)*100.0 if trades else 0.0
@@ -400,7 +461,7 @@ def run_simulation():
     # Export to Trade_Log.csv
     csv_file = 'Trade_Log.csv'
     fieldnames = [
-        'Trade_ID', 'Horizon_Type', 'Entry_Timestamp_UTC', 'Exit_Timestamp_UTC',
+        'Trade_ID', 'Silo', 'Horizon_Type', 'Entry_Timestamp_UTC', 'Exit_Timestamp_UTC',
         'Entry_Price', 'Exit_Price', 'Hold_Duration_Bars', 'Hold_Duration_Minutes',
         'RSI_15M_At_Entry', 'Volume_Multiplier_At_Entry', 'Dist_From_4H_EMA50_Pct_At_Entry',
         'Gross_PnL_Pct', 'Net_PnL_Pct', 'PnL_EUR', 'Exit_Reason', 'Capital_After_Trade_EUR'
@@ -411,6 +472,7 @@ def run_simulation():
         for t in trades:
             writer.writerow({
                 'Trade_ID': f"TRADE_{t['id']:02d}",
+                'Silo': t.get('silo', 'CORE_v450'),
                 'Horizon_Type': t['type'],
                 'Entry_Timestamp_UTC': t['entry_t'],
                 'Exit_Timestamp_UTC': t['exit_t'],
@@ -462,7 +524,7 @@ def run_simulation():
         ), row=1, col=1)
         
         fig.add_trace(go.Scatter(x=dts, y=sub_ema50, mode='lines', line=dict(color='#38bdf8', width=2), name='4H EMA50 Shield'), row=1, col=1)
-        if t['type'] != 'SWEEP_24H_RECLAIM':
+        if t['type'] not in ['SWEEP_24H_RECLAIM', 'RANGE_BOLLINGER_REVERSION']:
             fig.add_trace(go.Scatter(x=dts, y=sub_trail, mode='lines', line=dict(color='#fbbf24', width=2, dash='dot'), name='Trailing ATR Floor'), row=1, col=1)
             
         color_res = '#00FFA3' if t['net_pct'] > 0 else '#FF4B4B'
@@ -483,7 +545,7 @@ def run_simulation():
         fig.add_trace(go.Bar(x=dts, y=sub_vols, marker_color=vol_colors, name='Volume', opacity=0.8), row=2, col=1)
         
         fig.update_layout(
-            title=f"<b>Trade #{t['id']:02d}: {t['type']}</b> | Net PnL: <b style='color:{color_res}'>{t['net_pct']:+.2f}% (€{t['pnl']:+.2f})</b> | Hold: {t['bars']} bars ({t['minutes']}m) | Exit: {t['reason']}",
+            title=f"<b>Trade #{t['id']:02d} [{t.get('silo', 'CORE')}]: {t['type']}</b> | Net PnL: <b style='color:{color_res}'>{t['net_pct']:+.2f}% (€{t['pnl']:+.2f})</b> | Hold: {t['bars']} bars ({t['minutes']}m) | Exit: {t['reason']}",
             template='plotly_dark', paper_bgcolor='#0A0E17', plot_bgcolor='#0F172A',
             xaxis_rangeslider_visible=False, height=650, margin=dict(l=50, r=50, t=70, b=40),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
@@ -498,13 +560,14 @@ def run_simulation():
     for t in trades:
         res_str = f"+{t['net_pct']:.2f}%" if t['net_pct'] > 0 else f"{t['net_pct']:.2f}%"
         color = "#00FFA3" if t['net_pct'] > 0 else "#FF4B4B"
-        options_html += f'<option value="trade_{t["id"]:02d}.html">Trade #{t["id"]:02d}: {t["type"]} ({res_str}) - {t["entry_t"][:10]}</option>\n'
+        silo_lbl = "CORE" if t.get('silo') == 'CORE_v450' else "RBR"
+        options_html += f'<option value="trade_{t["id"]:02d}.html">Trade #{t["id"]:02d} [{silo_lbl}]: {t["type"]} ({res_str}) - {t["entry_t"][:10]}</option>\n'
 
     master_html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>btctool 2.0 - Integrated Dual-Engine Trade Visualizer (45 Trades)</title>
+    <title>btctool 2.0 - Integrated Dual-Engine Trade Visualizer ({len(trades)} Trades)</title>
     <style>
         body {{
             margin: 0; padding: 0; background-color: #0A0E17; color: #E2E8F0;

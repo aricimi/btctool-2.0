@@ -2465,6 +2465,79 @@ class TestZebraBot(unittest.TestCase):
         intent_after = brain.evaluate(matrix_after_cooldown)
         self.assertEqual(intent_after.scenario, "MACRO_BREAK_48H")
 
+    def test_44_version_460_range_bollinger_reversion(self):
+        """
+        Verify Version 4.6.0 Range Bollinger Reversion Secondary Sub-Engine:
+        1. Entry Gate: 15M lower band pierced & reclaimed with CLV >= 0.50, RSI <= 42, Runway >= 0.85%.
+        2. Anti-Loss Gates: US Open flush veto (12:30-15:00 UTC if slope < 0) and Asian Dead-Zone veto (01:00-03:30 UTC).
+        3. Dedicated Exit: Middle band target profit banking and 2-Hour velocity stop.
+        """
+        brain = FreeConvictionEngine()
+
+        # Construct 25 15M candles with oscillating close around 80,000.0 (std ~500.0, lower band ~79,000.0)
+        candles = []
+        for i in range(25):
+            candles.append({
+                "open": 80000.0, "high": 80700.0, "low": 79300.0, "close": (80500.0 if i % 2 == 0 else 79500.0), "vol": 100.0
+            })
+
+        # Pierce lower band (low 78800 <= 79000) and reclaim inside (close 79200 > 79000)
+        cur_rbr = {
+            "open": 78950.0, "high": 79300.0, "low": 78800.0, "close": 79200.0, "vol": 250.0
+        }
+        matrix_valid = {
+            "latest_price": 79200.0,
+            "candles_15m": candles + [cur_rbr],
+            "timeframes": {"4h": {"ema_50": 79000.0, "bb_mid": 79000.0}, "1h": {"ema_20": 80000.0, "ema20_slope": 0.0005}},
+            "multi_screen_bounds": {"nearest_support": 78800.0, "nearest_resistance": 81000.0},
+            "utc_hour": 16, "utc_minute": 0,
+            "rsi_15m": 35.0,
+        }
+        intent_entry = brain.evaluate(matrix_valid)
+        self.assertEqual(intent_entry.scenario, "RANGE_BOLLINGER_REVERSION")
+        self.assertEqual(intent_entry.action, "ENTER_CORE_LOT_1")
+        self.assertGreaterEqual(intent_entry.expected_runway_pct, 0.85)
+
+        # Test US Open Flush Gate: same candles at 13:30 UTC with negative 1H slope
+        matrix_us_open_flush = dict(matrix_valid)
+        matrix_us_open_flush["utc_hour"] = 13
+        matrix_us_open_flush["utc_minute"] = 30
+        matrix_us_open_flush["timeframes"] = {"4h": {"ema_50": 79000.0}, "1h": {"ema_20": 80000.0, "ema20_slope": -0.0010}}
+        intent_flush = brain.evaluate(matrix_us_open_flush)
+        self.assertNotEqual(intent_flush.scenario, "RANGE_BOLLINGER_REVERSION")
+
+        # Test Dedicated Exit: Reached Middle Band Target
+        active_rbr = {
+            "scenario": "RANGE_BOLLINGER_REVERSION",
+            "entry": 79250.0,
+            "target_price": 80000.0,
+            "proposed_stop": 78800.0,
+            "bars_held": 4,
+        }
+        matrix_exit_target = {
+            "latest_price": 80050.0,
+            "candles_15m": candles + [cur_rbr],
+        }
+        intent_exit = brain.evaluate(matrix_exit_target, active_trade=active_rbr)
+        self.assertEqual(intent_exit.action, "BANK_PROFIT")
+        self.assertEqual(intent_exit.telemetry.get("exit_reason"), "BOLLINGER_MID_TARGET")
+
+        # Test Dedicated Exit: 2-Hour Velocity Stop (stagnant gain < +0.25% at 8 bars)
+        active_rbr_stagnant = {
+            "scenario": "RANGE_BOLLINGER_REVERSION",
+            "entry": 79250.0,
+            "target_price": 80000.0,
+            "proposed_stop": 78800.0,
+            "bars_held": 8,
+        }
+        matrix_stagnant = {
+            "latest_price": 79300.0,
+            "candles_15m": candles + [cur_rbr],
+        }
+        intent_vel_stop = brain.evaluate(matrix_stagnant, active_trade=active_rbr_stagnant)
+        self.assertEqual(intent_vel_stop.action, "CUT_THESIS_INVALIDATED")
+        self.assertEqual(intent_vel_stop.telemetry.get("exit_reason"), "EARLY_VELOCITY_STOP_2H")
+
 
 if __name__ == "__main__":
     unittest.main()

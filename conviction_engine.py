@@ -208,6 +208,8 @@ class FreeConvictionEngine:
         trade_vel = float(matrix.get("trade_velocity", 0.0))
 
         atr = float(matrix.get("composite_atr", 250.0))
+        candles_15m_all = matrix.get("candles_15m") or []
+        tfs = matrix.get("timeframes", {})
 
         # Dynamic Volatility Invalidation: anchored behind nearest support with ATR buffer
         raw_risk = max(price - nearest_support, 0.0) + (0.5 * atr)
@@ -226,6 +228,64 @@ class FreeConvictionEngine:
             trailing_stop = float(active_trade.get("trailing_stop", active_trade.get("invalidation_floor", entry * 0.997)))
             tranche_2 = bool(active_trade.get("tranche_2_added", False))
             scenario = active_trade.get("scenario", "TRADE")
+
+            # 1.04 DEDICATED SECONDARY EXIT MODEL: RANGE_BOLLINGER_REVERSION (v4.6.0)
+            if scenario in ("RANGE_BOLLINGER_REVERSION", "SEC_RANGE_BOLLINGER_REVERSION"):
+                bars_held = int(active_trade.get("bars_held", 0))
+                time_in_trade = (time.time() - float(active_trade.get("entry_time", 0.0))) if active_trade.get("entry_time") else 0
+                target_mid = float(active_trade.get("target_price", 0.0))
+                if candles_15m_all and len(candles_15m_all) >= 20:
+                    c_closes_20 = [float(c.get("close", price)) for c in candles_15m_all[-20:]]
+                    target_mid = float(np.mean(c_closes_20))
+
+                # Exit 1: Bollinger Mid Target Reversion
+                if price >= target_mid and target_mid > 0:
+                    return TradeIntent(
+                        action="BANK_PROFIT",
+                        scenario=scenario,
+                        gain_pct=gain_pct,
+                        entry_price=price,
+                        reason=f"RBR TARGET HIT: Reached Bollinger Mid (${target_mid:,.2f}) at +{gain_pct*100:.2f}% gross (+{(gain_pct-0.0020)*100:.2f}% net). Securing profit.",
+                        telemetry={"scenario": scenario, "gain_pct": gain_pct, "exit_reason": "BOLLINGER_MID_TARGET"},
+                    )
+
+                # Exit 2: Hard Structural Band Stop
+                rbr_stop = float(active_trade.get("proposed_stop", active_trade.get("stop_p", trailing_stop)))
+                if price <= rbr_stop:
+                    return TradeIntent(
+                        action="CUT_THESIS_INVALIDATED",
+                        scenario=scenario,
+                        gain_pct=gain_pct,
+                        entry_price=price,
+                        proposed_stop=rbr_stop,
+                        reason=f"RBR STRUCTURAL STOP HIT: Price (${price:,.2f}) breached structural stop (${rbr_stop:,.2f}).",
+                        telemetry={"scenario": scenario, "gain_pct": gain_pct, "exit_reason": "STRUCTURAL_BAND_STOP"},
+                    )
+
+                # Exit 3: Early Velocity Invalidation (2 Hours = 8 bars or 7,200 seconds)
+                if (bars_held >= 8 or time_in_trade >= 7200) and gain_pct < 0.0025:
+                    return TradeIntent(
+                        action="CUT_THESIS_INVALIDATED",
+                        scenario=scenario,
+                        gain_pct=gain_pct,
+                        entry_price=price,
+                        proposed_stop=price,
+                        reason=f"RBR EARLY VELOCITY STOP (2H): Stagnant velocity (gain +{gain_pct*100:.2f}% < +0.25%). Cutting capital drag at ${price:,.2f}.",
+                        telemetry={"scenario": scenario, "gain_pct": gain_pct, "exit_reason": "EARLY_VELOCITY_STOP_2H"},
+                    )
+
+                # Exit 4: Max Time Stop (4 Hours = 16 bars or 14,400 seconds)
+                if bars_held >= 16 or time_in_trade >= 14400:
+                    action_type = "BANK_PROFIT" if gain_pct >= 0.0020 else "CUT_THESIS_INVALIDATED"
+                    return TradeIntent(
+                        action=action_type,
+                        scenario=scenario,
+                        gain_pct=gain_pct,
+                        entry_price=price,
+                        proposed_stop=price,
+                        reason=f"RBR MAX TIME STOP (4H): Max holding horizon reached at ${price:,.2f} ({gain_pct*100:+.2f}% gross).",
+                        telemetry={"scenario": scenario, "gain_pct": gain_pct, "exit_reason": "TIME_STOP_4H"},
+                    )
 
             # 1.05 DEDICATED MEAN-REVERSION EXIT (For SWEEP_24H_RECLAIM)
             if scenario == "SWEEP_24H_RECLAIM":
@@ -871,6 +931,81 @@ class FreeConvictionEngine:
                             "sh_24h": round(sh_24h, 2),
                             "dist_ema50_pct": round(dist_ema50_pct, 2),
                             "vr": round(vr, 2),
+                        },
+                    )
+
+        # 2.625 SECONDARY ALPHA SUB-ENGINE: RANGE BOLLINGER REVERSION (v4.6.0)
+        # Fallthrough Secondary Slot: Evaluated ONLY when Core Tier-1 produces no signal.
+        if candles_15m_all and len(candles_15m_all) >= 20:
+            cur_15m = candles_15m_all[-1]
+            c_close = float(cur_15m.get("close", price))
+            c_low = float(cur_15m.get("low", price))
+            c_high = float(cur_15m.get("high", price))
+            c_rng = c_high - c_low
+            clv = (c_close - c_low) / c_rng if c_rng > 0 else 0.5
+
+            c_closes_20 = [float(c.get("close", price)) for c in candles_15m_all[-20:]]
+            bb_mid_val = float(np.mean(c_closes_20))
+            bb_std_val = float(np.std(c_closes_20))
+            bb_lower_val = bb_mid_val - 2.0 * bb_std_val
+
+            rsi_val = float(matrix.get("rsi_15m", matrix.get("rsi", 50.0)))
+
+            lookback_192 = min(len(candles_15m_all) - 1, 192)
+            recent_highs_48h = [float(c.get("high", price)) for c in candles_15m_all[-(lookback_192 + 1):-1]]
+            recent_lows_48h = [float(c.get("low", price)) for c in candles_15m_all[-(lookback_192 + 1):-1]]
+            sh_48h_rbr = max(recent_highs_48h) if recent_highs_48h else price
+            sl_48h_rbr = min(recent_lows_48h) if recent_lows_48h else price * 0.98
+            range_48h_pct_rbr = ((sh_48h_rbr - sl_48h_rbr) / price * 100.0) if price > 0 else 0.0
+
+            tf_1h = tfs.get("1h", {})
+            ema20_1h_slope = float(tf_1h.get("ema20_slope", tf_1h.get("slope", 0.0)))
+
+            is_flat_slope = abs(ema20_1h_slope) <= 0.0015
+            is_compressed_48h = range_48h_pct_rbr <= 4.5
+            macro_ok = price > (ema50_4h * 0.97) if ema50_4h > 0 else True
+
+            cur_ts = float(matrix.get("timestamp", time.time()))
+            utc_hour = matrix.get("utc_hour", datetime.datetime.fromtimestamp(cur_ts, tz=datetime.timezone.utc).hour)
+            utc_minute = matrix.get("utc_minute", datetime.datetime.fromtimestamp(cur_ts, tz=datetime.timezone.utc).minute)
+            entry_minutes = utc_hour * 60 + utc_minute
+
+            # Gate 1: US Open Liquidity Flush Gate (Reject 12:30-15:00 UTC unless 1H EMA20 slope >= 0.00%)
+            in_us_open = (750 <= entry_minutes <= 900)
+            us_open_pass = not in_us_open or (ema20_1h_slope >= 0.0)
+
+            # Gate 2: Asian Dead-Zone Exclusion Gate (Reject 01:00-03:30 UTC)
+            in_asian_dead_zone = (60 <= entry_minutes <= 210)
+
+            # Gate 3: Minimum Reward Runway Hurdle (>= 0.85% to Middle Band)
+            runway_to_mid = ((bb_mid_val - price) / price * 100.0) if price > 0 else 0.0
+
+            pierced_lower = (c_low <= bb_lower_val)
+            closed_inside = (c_close > bb_lower_val)
+
+            if (is_flat_slope or is_compressed_48h) and macro_ok and us_open_pass and not in_asian_dead_zone:
+                if pierced_lower and closed_inside and (clv >= 0.50) and (rsi_val <= 42.0) and (runway_to_mid >= 0.85):
+                    struct_stop = min(c_low * 0.998, price * 0.985)
+                    struct_stop = round(max(struct_stop, price * 0.988), 2)
+                    tp_target = round(bb_mid_val, 2)
+                    return TradeIntent(
+                        action="ENTER_CORE_LOT_1",
+                        scenario="RANGE_BOLLINGER_REVERSION",
+                        entry_price=price,
+                        target_price=tp_target,
+                        proposed_stop=struct_stop,
+                        expected_runway_pct=round(runway_to_mid, 2),
+                        confidence=0.78,
+                        reason=f"RANGE_BOLLINGER_REVERSION: 15M lower band pierced and reclaimed (CLV={clv:.2f}, RSI={rsi_val:.1f}, Runway={runway_to_mid:.2f}% >= +0.85%).",
+                        telemetry={
+                            **intent_telemetry,
+                            "scenario": "RANGE_BOLLINGER_REVERSION",
+                            "silo": "SECONDARY_RBR",
+                            "bb_mid": round(bb_mid_val, 2),
+                            "bb_lower": round(bb_lower_val, 2),
+                            "runway_pct": round(runway_to_mid, 2),
+                            "target_price": tp_target,
+                            "proposed_stop": struct_stop,
                         },
                     )
 

@@ -789,6 +789,46 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
         * `trades_visualizer.html`: Master visualizer dashboard updated for all 27 trades.
         * `trade_charts/`: Standalone interactive Plotly HTML charts updated (trade_01.html through trade_27.html).
         * Unit Test Suite: Added `test_43_version_450_failed_breakout_cooldown` to `test_zebra.py`. All **43/43 unit tests passing cleanly in 0.264s**.
+    - **Version 4.6.0 Institutional Release (Dual-Engine Multi-Horizon + Secondary Range Bollinger Reversion Architecture):**
+      - **Architectural Motivation & Chop Cycle Monetization:**
+        * While Core Version 4.5.0 maximizes trend and capitulation expectancy with a 77.8% win rate and 5.23 profit factor across 27 trades, extensive range-bound consolidation phases (such as the Aug 27 - Sep 02 chop cycle highlighted in user telemetry) lack sufficient directional momentum for breakout expansion.
+        * Implementing an isolated Secondary Alpha Sub-Engine dedicated to Bollinger Band lower-pierce reclaims (`RANGE_BOLLINGER_REVERSION`) captures mean-reverting chop swings without compromising Core trend capture or capitulation sweep execution.
+      - **Silo Isolation & Hierarchy Protocol:**
+        * **Tier-1 Priority (Core Engine):** Macro Breakouts (`MACRO_BREAK_48H`, `BREAK_24H`, `BREAK_12H`) and Structural Sweeps (`SWEEP_24H_RECLAIM`, `CAPITULATION_SWEEP_48H`) always evaluate first.
+        * **Tier-2 Fallthrough (Secondary Engine):** `RANGE_BOLLINGER_REVERSION` is evaluated ONLY when no Core signal triggers.
+        * **Zero Contradiction / Collision:** If an active trade is open in either silo, the entire engine is locked from opening conflicting positions.
+      - **Secondary Sub-Engine Formulation & Quality Gates:**
+        * **Regime Gate:** Requires flat 1H EMA20 slope ($|\text{Slope}_{\text{EMA20\_1H}}| \le 0.0015$ / 0.15%) OR compressed 48H range ($\text{Range}_{48\text{H}} \le 4.5\%$).
+        * **Macro Bull Floor:** BTC Close $> 0.97 \times \text{EMA50}_{\text{4H}}$ (rejects deep bear breakdown regimes).
+        * **US Open Flush Gate:** Rejects entries between 12:30 and 15:00 UTC unless 1H EMA20 slope is non-negative ($\ge 0.00\%$) to prevent false reclaims during Wall Street opening liquidity cascades.
+        * **Asian Dead-Zone Exclusion Gate:** Rejects low-volatility drift entries between 01:00 and 03:30 UTC.
+        * **Signal Piercing & Reclaim:** Candle Low $\le \text{BB}_{\text{Lower}}$ (20, 2.0) and Candle Close $> \text{BB}_{\text{Lower}}$.
+        * **Close Location Value (CLV):** $\text{CLV} = \frac{\text{Close} - \text{Low}}{\text{High} - \text{Low}} \ge 0.50$ (ensures bullish upper-half candle close).
+        * **Oversold RSI(14):** $\text{RSI}_{15\text{M}} \le 42.0$.
+        * **Reward Runway Hurdle:** $\frac{\text{BB}_{\text{Mid}} - \text{Close}}{\text{Close}} \ge 0.85\%$ (guarantees sufficient headroom to cover 0.20% round-trip taker fees with positive mathematical expectancy).
+        * **Dedicated Exits:**
+          - Take Profit: Exit at Bollinger Midline ($\text{BB}_{\text{Mid}}$ / SMA20).
+          - Structural Stop Loss: Below sweep low ($\min(\text{Low} \times 0.998, \text{Close} \times 0.985)$ bounded to $\max(\dots, \text{Close} \times 0.988)$).
+          - Early Velocity Stop: Exit at Close if held $\ge 8$ bars (2 hours) and net gain $< +0.25\%$.
+          - Time Stop: Exit at Close if held $\ge 16$ bars (4 hours).
+      - **180-Day Continuous Live BTC Empirical Validation (259,200 1-Minute Bars, May 3 to Oct 30, 2026):**
+        * Static 0.20% round-trip taker fees strictly deducted on every trade with compounding €1,000 capital.
+        * **Total Trades Executed:** **37 trades** (27 Core v4.5.0 + 10 Secondary RBR).
+          - Core v4.5.0: 13 MACRO_BREAK_48H, 10 SWEEP_24H_RECLAIM, 2 BREAK_24H, 2 CAPITULATION_SWEEP_48H.
+          - Secondary RBR: 10 RANGE_BOLLINGER_REVERSION (6 wins, 4 scratches/micro-stops).
+        * **Overall Win Rate:** **73.0%** (27 Wins, 10 Losses).
+        * **Profit Factor:** **4.68**.
+        * **Maximum Portfolio Drawdown:** **-2.44%**.
+        * **Final Compounded Capital:** Climbs from €1,280.40 to **€1,290.90** (+29.09% net return, **+€10.50 pure gain** over v4.5.0).
+        * **Return-to-Drawdown Ratio:** Reaches **11.9x**.
+        * **Chop Cycle Telemetry:** In the user-specified August 27 to September 02 consolidation, the Dual Engine captured:
+          - Core Trade #24 (Aug 30): +€5.83 (+0.48% net)
+          - Secondary Trade #25 (Sep 01): +€3.05 (+0.25% net)
+      - **Synchronized Artifacts & Deliverables:**
+        * `Trade_Log.csv`: Synchronized 17-metric ledger (with `Silo` column) for all 37 trades.
+        * `trades_visualizer.html`: Master visualizer dashboard updated for all 37 trades.
+        * `trade_charts/`: Standalone interactive Plotly HTML charts updated (trade_01.html through trade_37.html).
+        * Unit Test Suite: Added `test_44_version_460_range_bollinger_reversion` to `test_zebra.py`. All **44/44 unit tests passing cleanly in 0.183s**.
    - **Strict Workspace Isolation Rule (AGENTS.md Rule 4):** The agent environment is strictly locked to `c:\gemini proyect\btctool 2.0`. Under no circumstances may any file be created, read, written, modified, or exported outside the project root.
    - **Master Technical Specification Document (`BTCTOOL_2_0_FULL_SPECIFICATION_WITH_OXY.txt`):** Synchronized to Version 3.2.0 Production with all mathematical formulas, OKX V5 REST and WebSocket specifications, fee model, anti-hanging state machine, and production daemon setup. Stored strictly in the project root.
 
