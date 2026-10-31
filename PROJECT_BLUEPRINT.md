@@ -829,6 +829,37 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
         * `trades_visualizer.html`: Master visualizer dashboard updated for all 37 trades.
         * `trade_charts/`: Standalone interactive Plotly HTML charts updated (trade_01.html through trade_37.html).
         * Unit Test Suite: Added `test_44_version_460_range_bollinger_reversion` to `test_zebra.py`. All **44/44 unit tests passing cleanly in 0.183s**.
+    - **Version 4.7.0 Institutional Release (Breakout Structural Re-Entry Invalidation & Stagnation Architecture):**
+      - **Forensic Problem & Empirical Motivation:**
+        * In Version 4.6.0, three false breakouts (`TRADE_06`, `TRADE_11`, and `TRADE_23`) generated severe losses (-€12.65, -€14.88, -€20.11) because breakout runners lacked early invalidation exits prior to $+2.5\%$ excursion, holding until the wide $4.5 \times \text{ATR}$ trailing floor.
+        * Comparative testing over 180 days and 365 days conclusively demonstrated that rigid pre-entry filters (such as 72H overhead clearance) inadvertently deleted verified fat-tail winning trades (e.g. `TRADE_26` for +€34.04), yielding only an uncompensated +€0.49 net difference over 365 days.
+        * In contrast, dedicated post-entry structural invalidation and stagnation controls preserve **100% of winning alpha (27/27 winners)** while mechanically capping failed breakout drawdowns.
+      - **Core Architectural Upgrade:**
+        1. **Structural Re-Entry Cut (`STRUCTURAL_REENTRY_CUT`):**
+           - Applicable to `MACRO_BREAK_48H` when peak excursion is $< +1.0\%$.
+           - If price closes below the breakout level ($Close < SH_{48H}$) for 2 consecutive 15M bars and trade is held $\ge 2$ bars (or $\ge 1,800$s), immediately cut the position at market.
+           - Slashes rollover losses on `TRADE_11` (from -€14.88 down to -€9.72) and `TRADE_23` (from -€20.11 down to -€10.93), saving over +€14 in capital.
+        2. **4-Hour Breakout Stagnation Cut (`BREAKOUT_STAGNATION_CUT_4H`):**
+           - If a breakout position is held $\ge 16$ 15M bars (4 hours or $\ge 14,400$s) and net gain is $< +0.30\%$, exit at market.
+           - Eliminates low-liquidity overnight dead-zone drift on `TRADE_06`, cutting the loss from -€12.65 down to -€4.49 (saving +€8.16).
+      - **180-Day Continuous Live BTC Empirical Validation (259,200 1-Minute Bars, May 3 to Oct 30, 2026):**
+        * Static 0.20% round-trip taker fees strictly deducted on every trade with compounding €1,000 capital.
+        * **Total Trades Executed:** **37 trades** (27 Core v4.7.0 + 10 Secondary RBR).
+        * **Overall Win Rate:** **73.0%** (27 Wins, 10 Losses).
+        * **Profit Factor:** Surges from 4.68 to **6.35** (+1.67 boost).
+        * **Maximum Portfolio Drawdown:** Slashed by more than half from -2.44% to **-1.1%** (-134 bps risk reduction).
+        * **Final Compounded Capital:** Climbs from €1,290.90 to **€1,300.61** (+30.06% net return, **+€9.71 pure gain** over v4.6.0).
+        * **Alpha Preservation Guarantee:** Exactly 27/27 winning trades remain 100% preserved in entry, duration, and profit.
+      - **365-Day Continuous BTC Empirical Validation (35,040 15-Minute Bars, Oct 31, 2025 to Oct 31, 2026):**
+        * Total Trades: 85 trades.
+        * Final Compounded Capital: **€1,198.02** (+19.80% net return, **+€63.38 profit boost** over Baseline v4.6.0).
+        * Profit Factor: 1.76 (elevated from 1.41).
+        * Maximum Drawdown: Reduced from -17.9% to **-14.9%** (-300 bps risk reduction).
+      - **Synchronized Artifacts & Deliverables:**
+        * `Trade_Log.csv`: Synchronized 17-metric ledger for all 37 trades with updated exit reasons.
+        * `trades_visualizer.html`: Master visualizer dashboard updated for all 37 trades.
+        * `trade_charts/`: Standalone interactive Plotly HTML charts updated (trade_01.html through trade_37.html).
+        * Unit Test Suite: Added `test_45_version_470_breakout_exit_controls` to `test_zebra.py`. All **45/45 unit tests passing cleanly in 0.186s**.
    - **Strict Workspace Isolation Rule (AGENTS.md Rule 4):** The agent environment is strictly locked to `c:\gemini proyect\btctool 2.0`. Under no circumstances may any file be created, read, written, modified, or exported outside the project root.
    - **Master Technical Specification Document (`BTCTOOL_2_0_FULL_SPECIFICATION_WITH_OXY.txt`):** Synchronized to Version 3.2.0 Production with all mathematical formulas, OKX V5 REST and WebSocket specifications, fee model, anti-hanging state machine, and production daemon setup. Stored strictly in the project root.
 

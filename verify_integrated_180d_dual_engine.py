@@ -205,34 +205,56 @@ def run_simulation():
                     exit_reason = "TIME_STOP_4H"
                     exited = True
 
-            # 3. BREAKOUT RUNNERS: 1H EMA20 TREND SHIELD (v4.1.0)
+            # 3. BREAKOUT RUNNERS: 1H EMA20 TREND SHIELD (v4.1.0) & EXIT CONTROLS (v4.7.0)
             else:
-                if peak_gain_pct >= 2.5:
-                    # Guaranteed profit floor (+1.5% profit protection)
-                    pos['hard_stop'] = max(pos['hard_stop'], entry_p * 1.015)
-                    h1_idx = map_15m_to_1h[i]
-                    is_1h_close = (i % 4 == 3)
-                    if is_1h_close and (bars_1h[h1_idx]['close'] < ema20_1h[h1_idx]):
+                # Version 4.7.0 Exit Controls for MACRO_BREAK_48H
+                if pos['type'] == 'MACRO_BREAK_48H':
+                    sh_level = pos.get('breakout_level', entry_p)
+                    # Control A: Structural Re-Entry Cut (If peak gain < 1.0% and 2 consecutive bars close below breakout level)
+                    if peak_gain_pct < 1.0:
+                        if b['close'] < sh_level:
+                            pos['consec_below'] = pos.get('consec_below', 0) + 1
+                        else:
+                            pos['consec_below'] = 0
+
+                        if pos.get('consec_below', 0) >= 2 and bars_held >= 2:
+                            exit_p = b['close']
+                            exit_reason = "STRUCTURAL_REENTRY_CUT"
+                            exited = True
+
+                    # Control B: Stagnation Cut (Held >= 16 bars / 4 hours with net gain < +0.30%)
+                    if not exited and bars_held >= 16 and ((b['close'] - entry_p) / entry_p < 0.0030):
                         exit_p = b['close']
-                        exit_reason = "1H_EMA20_TREND_EXIT"
+                        exit_reason = "BREAKOUT_STAGNATION_CUT_4H"
                         exited = True
-                    elif b['low'] <= pos['hard_stop']:
-                        exit_p = pos['hard_stop']
-                        exit_reason = "PROFIT_PROTECTION_STOP"
-                        exited = True
-                else:
-                    new_floor = b['high'] - (trail_atr * atr_val)
-                    if new_floor > pos['trail_floor']:
-                        pos['trail_floor'] = new_floor
-                    if bars_held >= 1:
-                        if b['low'] <= pos['trail_floor']:
-                            exit_p = pos['trail_floor']
-                            exit_reason = "TRAILING_ATR"
+
+                if not exited:
+                    if peak_gain_pct >= 2.5:
+                        # Guaranteed profit floor (+1.5% profit protection)
+                        pos['hard_stop'] = max(pos['hard_stop'], entry_p * 1.015)
+                        h1_idx = map_15m_to_1h[i]
+                        is_1h_close = (i % 4 == 3)
+                        if is_1h_close and (bars_1h[h1_idx]['close'] < ema20_1h[h1_idx]):
+                            exit_p = b['close']
+                            exit_reason = "1H_EMA20_TREND_EXIT"
                             exited = True
                         elif b['low'] <= pos['hard_stop']:
                             exit_p = pos['hard_stop']
-                            exit_reason = "HARD_STOP"
+                            exit_reason = "PROFIT_PROTECTION_STOP"
                             exited = True
+                    else:
+                        new_floor = b['high'] - (trail_atr * atr_val)
+                        if new_floor > pos['trail_floor']:
+                            pos['trail_floor'] = new_floor
+                        if bars_held >= 1:
+                            if b['low'] <= pos['trail_floor']:
+                                exit_p = pos['trail_floor']
+                                exit_reason = "TRAILING_ATR"
+                                exited = True
+                            elif b['low'] <= pos['hard_stop']:
+                                exit_p = pos['hard_stop']
+                                exit_reason = "HARD_STOP"
+                                exited = True
                         
             if exited:
                 gross = (exit_p - entry_p) / entry_p
@@ -367,7 +389,8 @@ def run_simulation():
                         pos = {
                             'type': 'MACRO_BREAK_48H', 'entry_idx': i, 'entry_t': dt, 'entry_p': b['close'],
                             'hard_stop': b['close'] * (1.0 - stop_pct), 'trail_floor': b['close'] - (trail_atr * atr_val),
-                            'rsi_entry': rsi[i], 'vr_entry': vr, 'dist_ema50': dist_ema, 'peak_p': b['close']
+                            'rsi_entry': rsi[i], 'vr_entry': vr, 'dist_ema50': dist_ema, 'peak_p': b['close'],
+                            'breakout_level': sh_48h
                         }
                         continue
 

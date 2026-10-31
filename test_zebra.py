@@ -2538,6 +2538,62 @@ class TestZebraBot(unittest.TestCase):
         self.assertEqual(intent_vel_stop.action, "CUT_THESIS_INVALIDATED")
         self.assertEqual(intent_vel_stop.telemetry.get("exit_reason"), "EARLY_VELOCITY_STOP_2H")
 
+    def test_45_version_470_breakout_exit_controls(self):
+        """
+        Verify Version 4.7.0 Exit Controls for MACRO_BREAK_48H:
+        1. Structural Re-Entry Cut: If peak gain < +1.0% and price closes below breakout level for 2 consecutive bars.
+        2. 4-Hour Stagnation Cut: If held >= 16 bars (4 hours) with net gain < +0.30%.
+        """
+        from conviction_engine import FreeConvictionEngine
+
+        brain = FreeConvictionEngine()
+
+        # Part 1: Structural Re-Entry Cut
+        active_breakout = {
+            "scenario": "MACRO_BREAK_48H",
+            "entry": 80000.0,
+            "breakout_level": 79900.0,
+            "highest_price": 80300.0, # peak gain = +0.375% (< 1.0%)
+            "trailing_stop": 78800.0,
+            "bars_held": 1,
+            "consec_below_breakout": 0
+        }
+        matrix_bar1 = {
+            "latest_price": 79850.0, # below breakout level (79900)
+            "candles_15m": [{"open": 79900.0, "high": 79950.0, "low": 79800.0, "close": 79850.0, "volume": 100.0}],
+        }
+        # First bar below: should record 1, still hold
+        intent_1 = brain.evaluate(matrix_bar1, active_trade=active_breakout)
+        self.assertEqual(intent_1.action, "HOLD_POSITION")
+        self.assertEqual(active_breakout.get("consec_below_breakout"), 1)
+
+        # Second bar below: should trigger Structural Re-Entry Cut
+        active_breakout["bars_held"] = 2
+        matrix_bar2 = {
+            "latest_price": 79820.0,
+            "candles_15m": [{"open": 79850.0, "high": 79870.0, "low": 79800.0, "close": 79820.0, "volume": 100.0}],
+        }
+        intent_2 = brain.evaluate(matrix_bar2, active_trade=active_breakout)
+        self.assertEqual(intent_2.action, "CUT_THESIS_INVALIDATED")
+        self.assertEqual(intent_2.telemetry.get("exit_reason"), "STRUCTURAL_REENTRY_CUT")
+
+        # Part 2: 4-Hour Stagnation Cut
+        active_stagnant = {
+            "scenario": "MACRO_BREAK_48H",
+            "entry": 80000.0,
+            "breakout_level": 79900.0,
+            "highest_price": 80400.0,
+            "trailing_stop": 78800.0,
+            "bars_held": 16, # 4 hours
+            "consec_below_breakout": 0
+        }
+        matrix_stagnant = {
+            "latest_price": 80100.0, # gain +0.125% (< +0.30%)
+            "candles_15m": [{"open": 80080.0, "high": 80120.0, "low": 80050.0, "close": 80100.0, "volume": 100.0}],
+        }
+        intent_stag = brain.evaluate(matrix_stagnant, active_trade=active_stagnant)
+        self.assertEqual(intent_stag.telemetry.get("exit_reason"), "BREAKOUT_STAGNATION_CUT_4H")
+
 
 if __name__ == "__main__":
     unittest.main()

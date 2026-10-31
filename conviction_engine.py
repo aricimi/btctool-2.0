@@ -370,6 +370,49 @@ class FreeConvictionEngine:
                         telemetry={"scenario": scenario, "gain_pct": gain_pct, "1h_ema20_exit": True},
                     )
 
+            # 1.08 DEDICATED BREAKOUT RUNNER EXIT CONTROLS (v4.7.0: Structural Re-Entry Cut & 4H Stagnation Cut)
+            if scenario in ("MACRO_BREAK_48H", "MACRO_BALLOON_BREAKOUT"):
+                bars_held = int(active_trade.get("bars_held", 0))
+                time_in_trade = (time.time() - float(active_trade.get("entry_time", 0.0))) if active_trade.get("entry_time") else 0
+                breakout_level = float(active_trade.get("breakout_level", active_trade.get("sh_48h", entry)))
+
+                # Control A: Structural Re-Entry Cut (If peak gain < +1.0% and price closes below breakout level for 2 consecutive bars)
+                if peak_gain_pct < 0.010:
+                    if price < breakout_level:
+                        consec_below = int(active_trade.get("consec_below_breakout", 0)) + 1
+                    else:
+                        consec_below = 0
+                    active_trade["consec_below_breakout"] = consec_below
+
+                    if consec_below >= 2 and (bars_held >= 2 or time_in_trade >= 1800):
+                        cur_ts = float(matrix.get("timestamp", time.time()))
+                        self.last_failed_breakout_ts = cur_ts
+                        return TradeIntent(
+                            action="CUT_THESIS_INVALIDATED",
+                            scenario=scenario,
+                            gain_pct=gain_pct,
+                            entry_price=price,
+                            proposed_stop=price,
+                            reason=f"STRUCTURAL RE-ENTRY CUT: Price (${price:,.2f}) closed below breakout level (${breakout_level:,.2f}) for 2 consecutive bars with no traction (peak +{peak_gain_pct*100:.2f}% < +1.0%). Cutting failed breakout.",
+                            telemetry={"scenario": scenario, "gain_pct": gain_pct, "exit_reason": "STRUCTURAL_REENTRY_CUT"},
+                        )
+
+                # Control B: 4-Hour Stagnation Cut (If held >= 16 bars / 4 hours with net gain < +0.30%)
+                if (bars_held >= 16 or time_in_trade >= 14400) and gain_pct < 0.0030:
+                    cur_ts = float(matrix.get("timestamp", time.time()))
+                    if gain_pct < -0.0005:
+                        self.last_failed_breakout_ts = cur_ts
+                    action_type = "BANK_PROFIT" if gain_pct >= 0.0020 else "CUT_THESIS_INVALIDATED"
+                    return TradeIntent(
+                        action=action_type,
+                        scenario=scenario,
+                        gain_pct=gain_pct,
+                        entry_price=price,
+                        proposed_stop=price,
+                        reason=f"BREAKOUT STAGNATION CUT (4H): Breakout stagnant after 4 hours (gain {gain_pct*100:+.2f}% < +0.30%). Releasing capital.",
+                        telemetry={"scenario": scenario, "gain_pct": gain_pct, "exit_reason": "BREAKOUT_STAGNATION_CUT_4H"},
+                    )
+
             # 1.1 IN-SITU MEMORY SOFT STOP EVALUATION
             if price <= trailing_stop:
                 if trailing_stop >= entry or gain_pct >= 0.0005:
@@ -897,6 +940,7 @@ class FreeConvictionEngine:
                             telemetry={
                                 **intent_telemetry,
                                 "scenario": "MACRO_BREAK_48H",
+                                "breakout_level": round(sh_48h, 2),
                                 "sh_48h": round(sh_48h, 2),
                                 "dist_ema50_pct": round(dist_ema50_pct, 2),
                                 "vr": round(vr, 2),
