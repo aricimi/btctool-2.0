@@ -638,6 +638,33 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
         * 	rades_visualizer.html: Interactive master visualizer dashboard with dropdown selector, previous/next controls, and keyboard navigation (Left/Right arrow keys) for all 45 trades.
         * 	rade_charts/: 45 standalone interactive Plotly HTML charts (	rade_01.html through 	rade_45.html).
         * Unit Test Suite: Added 	est_38_sweep_24h_reclaim_and_exhaustion_shield to 	est_zebra.py. All **38/38 unit tests passing cleanly in 0.116s**.
+    - **Version 4.1.0 Institutional Release (Multi-Timeframe 1H Trend Shield & Sweep Ratchets):**
+      - **Architectural Motivation & Forensic Resolution:**
+        * Forensically resolved premature shakeouts during explosive breakout expansions:
+          1. Captured the continuous August 19–22, 2026 macro wave as a single unbroken position: Trade 24 entered at $65,407.43 and held for 63 continuous hours, exiting at $77,380.75 on the first 1H candle close below 1H EMA20 for **+18.11% net profit (€+174.50)**, eliminating the previous $3,697 re-entry penalty.
+          2. Eliminated profit bleed on `CAPITULATION_SWEEP_48H` (Trade 33 on Sept 11): Locked in **+0.80% net (€+9.34)** via graduated ratchet instead of bleeding back to +0.01% scratch.
+      - **Core Architectural Upgrades:**
+        * **1. 1H EMA20 Multi-Timeframe Trend Shield (`1H_EMA20_TREND_SHIELD`):**
+          - For breakout runners (`MACRO_BALLOON_BREAKOUT`, `MACRO_BREAK_48H`, `BREAK_24H`, `BREAK_12H`), once peak excursion crosses $+2.50\%$:
+            a) Stop automatically ratchets to guaranteed profit floor: $Entry \times 1.0150$ (+1.50% profit protection).
+            b) Trailing logic shifts from 15M ATR noise to the **1-Hour Timeframe**: position is held as long as completed 1H candles close above the 1H 20 EMA.
+            c) Position exits only if a completed 1H candle closes below 1H EMA20 (`Close_1H < EMA20_1H`) or if price touches the locked +1.50% profit floor.
+        * **2. Graduated Profit Ratchet on Capitulation Sweeps (`CAPITULATION_SWEEP_48H`):**
+          - At $+2.00\%$ peak excursion: stop ratchets to $Entry \times 1.010$ (locks +1.0% profit against range ceilings).
+          - At $+3.00\%$ peak excursion: stop ratchets to $Entry \times 1.020$ (locks +2.0% profit).
+          - At $+1.00\%$ peak excursion: stop ratchets to $Entry \times 1.002$ (locks fee cover).
+      - **180-Day Continuous Live BTC Empirical Validation (259,200 1-Minute Bars, May 3 to Oct 30, 2026):**
+        * Static 0.20% round-trip taker fees (0.10% buy + 0.10% sell) strictly deducted on every trade with €1,000 compounding capital.
+        * **Total Trades Executed:** **44 trades** (Breakdown: 16 MACRO_BREAK_48H, 11 SWEEP_24H_RECLAIM, 6 BREAK_24H, 11 CAPITULATION_SWEEP_48H).
+        * **Profit Factor:** Elevated from 1.73 to **2.07**.
+        * **Win Rate:** **52.3%** (23 wins, 21 losses).
+        * **Maximum Drawdown:** Reduced to **-4.8%** (lowest in system history).
+        * **Final Compounded Capital:** Reaches **€1,172.46** (+17.25% net realized return after taker fees).
+      - **Synchronized Artifacts & Deliverables:**
+        * `Trade_Log.csv`: Synchronized 16-metric ledger for all 44 trades.
+        * `trades_visualizer.html`: Master visualizer dashboard updated for all 44 trades.
+        * `trade_charts/`: Standalone interactive Plotly HTML charts updated (trade_01.html through trade_44.html).
+        * Unit Test Suite: Added `test_39_1h_ema20_trend_shield_and_sweep_ratchet` to `test_zebra.py`. All **39/39 unit tests passing cleanly in 0.126s**.
    - **Strict Workspace Isolation Rule (AGENTS.md Rule 4):** The agent environment is strictly locked to `c:\gemini proyect\btctool 2.0`. Under no circumstances may any file be created, read, written, modified, or exported outside the project root.
    - **Master Technical Specification Document (`BTCTOOL_2_0_FULL_SPECIFICATION_WITH_OXY.txt`):** Synchronized to Version 3.2.0 Production with all mathematical formulas, OKX V5 REST and WebSocket specifications, fee model, anti-hanging state machine, and production daemon setup. Stored strictly in the project root.
 

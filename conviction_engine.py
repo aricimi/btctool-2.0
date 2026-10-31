@@ -269,6 +269,45 @@ class FreeConvictionEngine:
                             telemetry={"scenario": scenario, "gain_pct": gain_pct},
                         )
 
+            # 1.06 GRADUATED PROFIT RATCHET (For CAPITULATION_SWEEP_48H - Eliminates Profit Bleed)
+            if scenario == "CAPITULATION_SWEEP_48H":
+                if peak_gain_pct >= 0.030:
+                    ratchet_stop = round(entry * 1.020, 2)
+                    if ratchet_stop > trailing_stop:
+                        trailing_stop = ratchet_stop
+                elif peak_gain_pct >= 0.020:
+                    ratchet_stop = round(entry * 1.010, 2)
+                    if ratchet_stop > trailing_stop:
+                        trailing_stop = ratchet_stop
+                elif peak_gain_pct >= 0.010:
+                    ratchet_stop = round(entry * 1.002, 2)
+                    if ratchet_stop > trailing_stop:
+                        trailing_stop = ratchet_stop
+
+            # 1.07 MULTI-TIMEFRAME TREND SHIELD (For Breakout Runners: v4.1.0)
+            is_breakout_runner = scenario in ("MACRO_BALLOON_BREAKOUT", "MACRO_BREAK_48H", "BREAK_24H", "BREAK_12H")
+            if is_breakout_runner and peak_gain_pct >= 0.025:
+                # Guaranteed profit floor (+1.5% profit protection)
+                prot_stop = round(entry * 1.0150, 2)
+                if prot_stop > trailing_stop:
+                    trailing_stop = prot_stop
+
+                tfs = matrix.get("timeframes", {})
+                tf_1h = tfs.get("1h", {})
+                ema20_1h = float(tf_1h.get("ema_20", tf_1h.get("bb_mid", 0.0)))
+                close_1h = float(tf_1h.get("close", price))
+                is_1h_close = bool(matrix.get("is_1h_bar_close", True))
+
+                if ema20_1h > 0.0 and is_1h_close and close_1h < ema20_1h:
+                    return TradeIntent(
+                        action="BANK_PROFIT",
+                        scenario=scenario,
+                        gain_pct=gain_pct,
+                        entry_price=price,
+                        reason=f"1H_EMA20_TREND_EXIT: 1-Hour candle closed below 1H EMA20 (${close_1h:,.2f} < ${ema20_1h:,.2f}) after peak +{peak_gain_pct*100:.2f}% gross. Securing profit at ${price:,.2f}.",
+                        telemetry={"scenario": scenario, "gain_pct": gain_pct, "1h_ema20_exit": True},
+                    )
+
             # 1.1 IN-SITU MEMORY SOFT STOP EVALUATION
             if price <= trailing_stop:
                 if trailing_stop >= entry or gain_pct >= 0.0005:
@@ -313,7 +352,8 @@ class FreeConvictionEngine:
             # Step 1: Delayed Activation - Under +1.20% gross (+120 bps), do NOT lock premature tight stop.
             # Position breathes with structural invalidation floor to avoid sub-minute noise asphyxiation.
             # Step 2: Peak excursion >= +1.20% gross: lock 50% of peak gain (min +0.35% gross, ensuring positive net profit)
-            if peak_gain_pct >= 0.0120:
+            # Exception: Breakout runners with peak >= +2.5% are governed by 1H EMA20 Trend Shield (+1.50% profit floor).
+            if peak_gain_pct >= 0.0120 and not (is_breakout_runner and peak_gain_pct >= 0.025):
                 locked_gain_pct = max(0.0035, peak_gain_pct * 0.50)
                 cppr_stop = round(entry * (1.0 + locked_gain_pct), 2)
                 if cppr_stop > updated_trailing_stop:
@@ -328,7 +368,7 @@ class FreeConvictionEngine:
                         logger.info(f"[Brain] Ratchet trailing stop higher behind rising support: ${updated_trailing_stop:,.2f}")
 
             # Step 3: Peak excursion >= +1.50% gross (structural target territory): lock 60% of peak gain
-            if peak_gain_pct >= 0.0150:
+            if peak_gain_pct >= 0.0150 and not (is_breakout_runner and peak_gain_pct >= 0.025):
                 locked_gain_60 = peak_gain_pct * 0.60
                 cppr_stop_60 = round(entry * (1.0 + locked_gain_60), 2)
                 if cppr_stop_60 > updated_trailing_stop:

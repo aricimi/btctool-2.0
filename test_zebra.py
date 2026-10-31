@@ -2182,6 +2182,76 @@ class TestZebraBot(unittest.TestCase):
         self.assertEqual(intent_break.action, "WAIT_IN_CASH")
         self.assertIn("VETO UPPER BB EXHAUSTION", intent_break.reason)
 
+    def test_39_1h_ema20_trend_shield_and_sweep_ratchet(self):
+        """
+        Verify Version 4.1.0 Multi-Timeframe Trend Shield & Capitulation Sweep Ratchets:
+        1. CAPITULATION_SWEEP_48H locks +1.0% profit at +2.0% peak and +2.0% profit at +3.0% peak.
+        2. Breakout runner with excursion >= +2.5% shifts to 1H EMA20 Trend Shield (+1.5% profit floor).
+        3. Runner holds when 1H close > 1H EMA20, and banks profit when 1H close < 1H EMA20.
+        """
+        brain = FreeConvictionEngine()
+        entry_p = 65000.0
+
+        # 1. Test CAPITULATION_SWEEP_48H Graduated Ratchet
+        active_sweep = {
+            "entry": entry_p,
+            "highest_price": entry_p * 1.025, # +2.5% peak
+            "target_price": entry_p * 1.050,
+            "trailing_stop": entry_p * 0.985,
+            "scenario": "CAPITULATION_SWEEP_48H"
+        }
+        # Price pulls back to entry * 1.009 (below the +1.0% locked floor at 65650.0)
+        matrix_sweep_pullback = {
+            "latest_price": entry_p * 1.009,
+            "composite_atr": 150.0,
+            "multi_screen_bounds": {"nearest_support": 64000.0, "nearest_resistance": 68000.0, "macro_ceiling": 70000.0, "macro_runway_pct": 5.0},
+            "balloon_geometry": {"is_balloon_expanding": True, "regime": "EXPANDING_BALLOON"},
+            "tanh_imbalance": 0.10, "cvd": 50.0, "absorption_index": 10.0, "spread_pct": 0.02,
+        }
+        intent_sweep = brain.evaluate(matrix_sweep_pullback, active_trade=active_sweep)
+        self.assertEqual(intent_sweep.action, "BANK_PROFIT")
+        self.assertIn("TRAILING STOP HIT", intent_sweep.reason)
+
+        # 2. Test 1H EMA20 Trend Shield for Breakout Runner
+        active_breakout = {
+            "entry": entry_p,
+            "highest_price": entry_p * 1.040, # +4.0% peak excursion
+            "target_price": entry_p * 1.100,
+            "trailing_stop": entry_p * 0.985,
+            "scenario": "MACRO_BALLOON_BREAKOUT"
+        }
+
+        # Case A: 1H candle closed ABOVE 1H EMA20 -> HOLDS position
+        matrix_hold_1h = {
+            "latest_price": entry_p * 1.028, # pulls back to +2.8%
+            "composite_atr": 200.0,
+            "is_1h_bar_close": True,
+            "timeframes": {
+                "1h": {"ema_20": 66000.0, "close": 66800.0} # 1H close > 1H EMA20
+            },
+            "multi_screen_bounds": {"nearest_support": 64500.0, "nearest_resistance": 70000.0, "macro_ceiling": 72000.0, "macro_runway_pct": 5.0},
+            "balloon_geometry": {"is_balloon_expanding": True, "regime": "EXPANDING_BALLOON"},
+            "tanh_imbalance": 0.20, "cvd": 80.0, "trade_velocity": 6.0, "spread_pct": 0.02,
+        }
+        intent_hold = brain.evaluate(matrix_hold_1h, active_trade=active_breakout)
+        self.assertEqual(intent_hold.action, "HOLD_POSITION")
+
+        # Case B: 1H candle closed BELOW 1H EMA20 -> BANKS PROFIT
+        matrix_exit_1h = {
+            "latest_price": entry_p * 1.020,
+            "composite_atr": 200.0,
+            "is_1h_bar_close": True,
+            "timeframes": {
+                "1h": {"ema_20": 66500.0, "close": 66200.0} # 1H close < 1H EMA20
+            },
+            "multi_screen_bounds": {"nearest_support": 64500.0, "nearest_resistance": 70000.0, "macro_ceiling": 72000.0, "macro_runway_pct": 5.0},
+            "balloon_geometry": {"is_balloon_expanding": True, "regime": "EXPANDING_BALLOON"},
+            "tanh_imbalance": -0.10, "cvd": -50.0, "trade_velocity": 4.0, "spread_pct": 0.02,
+        }
+        intent_exit = brain.evaluate(matrix_exit_1h, active_trade=active_breakout)
+        self.assertEqual(intent_exit.action, "BANK_PROFIT")
+        self.assertIn("1H_EMA20_TREND_EXIT", intent_exit.reason)
+
 
 if __name__ == "__main__":
     unittest.main()

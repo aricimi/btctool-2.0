@@ -56,6 +56,22 @@ for b in bars_15m:
         curr_4h_idx += 1
     map_15m_to_4h.append(curr_4h_idx)
 
+# 1H Timeframe for Multi-Timeframe Trend Shield (v4.1.0)
+bars_1h = resample_bars(bars_1m, 3600)
+closes_1h = [b['close'] for b in bars_1h]
+n_1h = len(bars_1h)
+ema20_1h = [0.0] * n_1h
+for i in range(n_1h):
+    if i == 0: ema20_1h[i] = closes_1h[i]
+    else: ema20_1h[i] = closes_1h[i] * (2/21) + ema20_1h[i-1] * (19/21)
+
+map_15m_to_1h = []
+curr_1h_idx = 0
+for b in bars_15m:
+    while curr_1h_idx < len(bars_1h) - 1 and bars_1h[curr_1h_idx + 1]['ts'] <= b['ts']:
+        curr_1h_idx += 1
+    map_15m_to_1h.append(curr_1h_idx)
+
 # 15M Bollinger Bands (20, 2)
 bb_mid = [0.0] * n
 bb_upper = [0.0] * n
@@ -124,7 +140,11 @@ def run_simulation():
             exit_p = None
             exit_reason = None
             
-            # MEAN REVERSION EXIT (For 24H Sweep Reclaims)
+            if b['high'] > pos['peak_p']:
+                pos['peak_p'] = b['high']
+            peak_gain_pct = (pos['peak_p'] - entry_p) / entry_p * 100.0
+            
+            # 1. MEAN REVERSION EXIT (For 24H Sweep Reclaims)
             if pos['type'] == 'SWEEP_24H_RECLAIM':
                 if (b['high'] - entry_p) >= (2.0 * atr_val):
                     pos['hard_stop'] = max(pos['hard_stop'], entry_p * 1.002) # lock in fee
@@ -141,21 +161,57 @@ def run_simulation():
                     exit_p = b['close']
                     exit_reason = "TIME_STOP_8H"
                     exited = True
-            else:
-                # TREND FOLLOWING EXIT (Trailing 4.5 ATR Floor)
+
+            # 2. CAPITULATION SWEEP GRADUATED RATCHET (For 48H Sweeps: v4.1.0)
+            elif pos['type'] == 'CAPITULATION_SWEEP_48H':
+                if peak_gain_pct >= 3.0:
+                    pos['hard_stop'] = max(pos['hard_stop'], entry_p * 1.020) # lock +2.0%
+                elif peak_gain_pct >= 2.0:
+                    pos['hard_stop'] = max(pos['hard_stop'], entry_p * 1.010) # lock +1.0%
+                elif peak_gain_pct >= 1.0:
+                    pos['hard_stop'] = max(pos['hard_stop'], entry_p * 1.002) # lock fee cover
+
                 new_floor = b['high'] - (trail_atr * atr_val)
                 if new_floor > pos['trail_floor']:
                     pos['trail_floor'] = new_floor
-                    
                 if bars_held >= 1:
-                    if b['low'] <= pos['trail_floor']:
+                    if b['low'] <= pos['hard_stop']:
+                        exit_p = pos['hard_stop']
+                        exit_reason = "SWEEP_RATCHET_STOP" if pos['hard_stop'] > entry_p else "HARD_STOP"
+                        exited = True
+                    elif b['low'] <= pos['trail_floor']:
                         exit_p = pos['trail_floor']
                         exit_reason = "TRAILING_ATR"
                         exited = True
+
+            # 3. BREAKOUT RUNNERS: 1H EMA20 TREND SHIELD (v4.1.0)
+            else:
+                if peak_gain_pct >= 2.5:
+                    # Guaranteed profit floor (+1.5% profit protection)
+                    pos['hard_stop'] = max(pos['hard_stop'], entry_p * 1.015)
+                    h1_idx = map_15m_to_1h[i]
+                    is_1h_close = (i % 4 == 3)
+                    if is_1h_close and (bars_1h[h1_idx]['close'] < ema20_1h[h1_idx]):
+                        exit_p = b['close']
+                        exit_reason = "1H_EMA20_TREND_EXIT"
+                        exited = True
                     elif b['low'] <= pos['hard_stop']:
                         exit_p = pos['hard_stop']
-                        exit_reason = "HARD_STOP"
+                        exit_reason = "PROFIT_PROTECTION_STOP"
                         exited = True
+                else:
+                    new_floor = b['high'] - (trail_atr * atr_val)
+                    if new_floor > pos['trail_floor']:
+                        pos['trail_floor'] = new_floor
+                    if bars_held >= 1:
+                        if b['low'] <= pos['trail_floor']:
+                            exit_p = pos['trail_floor']
+                            exit_reason = "TRAILING_ATR"
+                            exited = True
+                        elif b['low'] <= pos['hard_stop']:
+                            exit_p = pos['hard_stop']
+                            exit_reason = "HARD_STOP"
+                            exited = True
                         
             if exited:
                 gross = (exit_p - entry_p) / entry_p
@@ -211,7 +267,7 @@ def run_simulation():
                         pos = {
                             'type': 'CAPITULATION_SWEEP_48H', 'entry_idx': i, 'entry_t': dt, 'entry_p': b['close'],
                             'hard_stop': b['close'] * (1.0 - stop_pct), 'trail_floor': b['close'] - (trail_atr * atr_val),
-                            'rsi_entry': rsi[i], 'vr_entry': vr, 'dist_ema50': dist_ema
+                            'rsi_entry': rsi[i], 'vr_entry': vr, 'dist_ema50': dist_ema, 'peak_p': b['close']
                         }
                         continue
 
@@ -224,7 +280,7 @@ def run_simulation():
                             'type': 'SWEEP_24H_RECLAIM', 'entry_idx': i, 'entry_t': dt, 'entry_p': b['close'],
                             'hard_stop': min(b['low'] * 0.998, b['close'] * (1.0 - stop_pct)),
                             'trail_floor': b['close'] - (trail_atr * atr_val),
-                            'rsi_entry': rsi[i], 'vr_entry': vr, 'dist_ema50': dist_ema
+                            'rsi_entry': rsi[i], 'vr_entry': vr, 'dist_ema50': dist_ema, 'peak_p': b['close']
                         }
                         continue
 
@@ -244,7 +300,7 @@ def run_simulation():
                         pos = {
                             'type': 'MACRO_BREAK_48H', 'entry_idx': i, 'entry_t': dt, 'entry_p': b['close'],
                             'hard_stop': b['close'] * (1.0 - stop_pct), 'trail_floor': b['close'] - (trail_atr * atr_val),
-                            'rsi_entry': rsi[i], 'vr_entry': vr, 'dist_ema50': dist_ema
+                            'rsi_entry': rsi[i], 'vr_entry': vr, 'dist_ema50': dist_ema, 'peak_p': b['close']
                         }
                         continue
 
@@ -254,7 +310,7 @@ def run_simulation():
                         pos = {
                             'type': 'BREAK_24H', 'entry_idx': i, 'entry_t': dt, 'entry_p': b['close'],
                             'hard_stop': b['close'] * (1.0 - stop_pct), 'trail_floor': b['close'] - (trail_atr * atr_val),
-                            'rsi_entry': rsi[i], 'vr_entry': vr, 'dist_ema50': dist_ema
+                            'rsi_entry': rsi[i], 'vr_entry': vr, 'dist_ema50': dist_ema, 'peak_p': b['close']
                         }
                         continue
 
@@ -266,7 +322,7 @@ def run_simulation():
                             pos = {
                                 'type': 'BREAK_12H', 'entry_idx': i, 'entry_t': dt, 'entry_p': b['close'],
                                 'hard_stop': b['close'] * (1.0 - stop_pct), 'trail_floor': b['close'] - (trail_atr * atr_val),
-                                'rsi_entry': rsi[i], 'vr_entry': vr, 'dist_ema50': dist_ema
+                                'rsi_entry': rsi[i], 'vr_entry': vr, 'dist_ema50': dist_ema, 'peak_p': b['close']
                             }
                             continue
 
