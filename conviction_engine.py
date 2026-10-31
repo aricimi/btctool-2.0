@@ -413,49 +413,6 @@ class FreeConvictionEngine:
                         telemetry={"scenario": scenario, "gain_pct": gain_pct, "exit_reason": "BREAKOUT_STAGNATION_CUT_4H"},
                     )
 
-            # 1.09 DEDICATED ASYMMETRIC EXIT CONTROLLER: BEAR_SWEEP_HARVESTER (v4.9.0)
-            if scenario == "BEAR_SWEEP_HARVESTER":
-                bars_held = int(active_trade.get("bars_held", 0))
-                time_in_trade = (time.time() - float(active_trade.get("entry_time", 0.0))) if active_trade.get("entry_time") else 0
-
-                # Exit 1: Primary Fixed Target (+1.5% Gross / +1.3% Net)
-                tp_target = float(active_trade.get("target_price", round(entry * 1.015, 2)))
-                if price >= tp_target:
-                    return TradeIntent(
-                        action="BANK_PROFIT",
-                        scenario=scenario,
-                        gain_pct=gain_pct,
-                        entry_price=price,
-                        reason=f"BEAR_SWEEP_HARVESTER TARGET HIT: Reached +1.5% relief rally target (${tp_target:,.2f}) at +{gain_pct*100:.2f}% gross (+{(gain_pct-0.0020)*100:.2f}% net). Locking in profit at ${price:,.2f}.",
-                        telemetry={"scenario": scenario, "gain_pct": gain_pct, "exit_reason": "TP_FIXED_1.5%"},
-                    )
-
-                # Exit 2: Hard Stop Loss (0.5% below sweep candle's lower wick)
-                hard_stop = float(active_trade.get("proposed_stop", active_trade.get("hard_stop", trailing_stop)))
-                if price <= hard_stop:
-                    return TradeIntent(
-                        action="CUT_THESIS_INVALIDATED",
-                        scenario=scenario,
-                        gain_pct=gain_pct,
-                        entry_price=price,
-                        proposed_stop=hard_stop,
-                        reason=f"BEAR_SWEEP_HARVESTER HARD STOP: Price (${price:,.2f}) breached 0.5% wick buffer (${hard_stop:,.2f}). Cutting immediately.",
-                        telemetry={"scenario": scenario, "gain_pct": gain_pct, "exit_reason": "HARD_STOP_0.5%"},
-                    )
-
-                # Exit 3: Dedicated Time Stop (8 bars = 2 Hours or 7,200 seconds)
-                if bars_held >= 8 or time_in_trade >= 7200:
-                    action_type = "BANK_PROFIT" if gain_pct >= 0.0020 else "CUT_THESIS_INVALIDATED"
-                    return TradeIntent(
-                        action=action_type,
-                        scenario=scenario,
-                        gain_pct=gain_pct,
-                        entry_price=price,
-                        proposed_stop=price,
-                        reason=f"BEAR_SWEEP_HARVESTER TIME STOP (2H): Short squeeze failed to ignite within 2 hours at ${price:,.2f} ({gain_pct*100:+.2f}% gross). Exiting flat.",
-                        telemetry={"scenario": scenario, "gain_pct": gain_pct, "exit_reason": "TIME_STOP_120M"},
-                    )
-
             # 1.1 IN-SITU MEMORY SOFT STOP EVALUATION
             if price <= trailing_stop:
                 if trailing_stop >= entry or gain_pct >= 0.0005:
@@ -1098,54 +1055,6 @@ class FreeConvictionEngine:
                             "proposed_stop": struct_stop,
                         },
                     )
-
-        # 2.64 SETUP: TIER-2 BEAR LIQUIDITY SWEEP HARVESTER (BEAR_SWEEP_HARVESTER - v4.9.0)
-        # Dedicated counter-trend relief rally harvester activating exclusively during confirmed 4H Bear Regimes.
-        # Strict isolation: Evaluates ONLY when v4.8.0 primary setups (Breakouts, RBR, Core Sweeps) produce no intent.
-        if candles_15m_all and len(candles_15m_all) >= 20:
-            dist_from_4h_ema50 = ((price - ema50_4h) / ema50_4h) * 100.0 if ema50_4h > 0 else 0.0
-            is_confirmed_bear_regime = (not is_bull_macro_sweep) and (ema50_4h_slope < 0.0) and (dist_from_4h_ema50 <= -1.50)
-            if is_confirmed_bear_regime:
-                lookback_96 = min(len(candles_15m_all) - 1, 96)
-                if lookback_96 >= 12:
-                    recent_lows = [float(c.get("low", price)) for c in candles_15m_all[-(lookback_96 + 1):-1] if c.get("low")]
-                    sl_24h = min(recent_lows) if recent_lows else c_low
-
-                    # Asian Dead-Zone Exclusion Gate (Reject 00:00-04:00 UTC / 0 <= entry_minutes <= 240)
-                    is_asian_zone = (0 <= entry_minutes <= 240)
-                    swept_24h = (c_low < sl_24h)
-
-                    # Compute volume ratio
-                    v_recent = [float(c.get("vol", 0.0)) for c in candles_15m_all[-min(len(candles_15m_all), 21):-1]]
-                    v_sma20 = float(np.mean(v_recent)) if v_recent else 1.0
-                    c_vol = float(cur_15m.get("vol", 0.0))
-                    vr_sweep = c_vol / v_sma20 if v_sma20 > 0 else 1.0
-
-                    if swept_24h and not is_asian_zone and (vr_sweep >= 3.0) and (clv >= 0.75):
-                        hard_stop = round(c_low * 0.995, 2)  # 0.5% below sweep lower wick
-                        tp_target = round(price * 1.015, 2)  # Fixed +1.5% relief target
-                        return TradeIntent(
-                            action="ENTER_CORE_LOT_1",
-                            scenario="BEAR_SWEEP_HARVESTER",
-                            entry_price=price,
-                            target_price=tp_target,
-                            proposed_stop=hard_stop,
-                            expected_runway_pct=1.50,
-                            confidence=0.80,
-                            reason=f"BEAR_SWEEP_HARVESTER: 24H low (${sl_24h:,.2f}) swept in 4H bear cascade (Dist={dist_from_4h_ema50:.2f}%) with volume absorption (VR={vr_sweep:.1f}x, CLV={clv:.2f}) at ${price:,.2f}. Target: ${tp_target:,.2f} (+1.5%), Stop: ${hard_stop:,.2f} (0.5% buffer).",
-                            telemetry={
-                                **intent_telemetry,
-                                "scenario": "BEAR_SWEEP_HARVESTER",
-                                "silo": "TIER2_BEAR_HARVESTER",
-                                "sl_24h": round(sl_24h, 2),
-                                "clv": round(clv, 2),
-                                "vr": round(vr_sweep, 2),
-                                "dist_ema50": round(dist_from_4h_ema50, 2),
-                                "ema50_4h_slope": round(ema50_4h_slope, 6),
-                                "target_price": tp_target,
-                                "proposed_stop": hard_stop,
-                            },
-                        )
 
         # 2.6B SETUP A FALLBACK: GENERIC DIP TURN (FROZEN CAPITAL GOVERNOR)
         dist_to_support = abs(price - nearest_support)

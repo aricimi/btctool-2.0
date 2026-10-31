@@ -896,47 +896,6 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
         * `trades_visualizer.html`: Master visualizer dashboard updated for all 78 trades across the 365-day cycle.
         * `trade_charts/`: Standalone interactive Plotly HTML charts updated (trade_01.html through trade_78.html).
         * Unit Test Suite: Added `test_46_version_480_dual_lever_regime_hardening` to `test_zebra.py`. All **46/46 unit tests passing cleanly in 0.307s**.
-    - **Version 4.9.0 Institutional Release (Tier-2 Bear Liquidity Sweep Harvester & Asymmetric Relief Controller):**
-      - **Forensic Problem & Empirical Motivation:**
-        * While Version 4.8.0 achieved robust profitability (+€138.90 across 365 days, 1.59 PF, -12.7% MaxDD) and an exceptional 180-day bull benchmark (74.3% WR, 6.63 PF, €1,298.20 capital), it remained predominantly dormant during multi-month macro bear cascades (H1: Nov 2025 to Apr 2026), sitting in cash while severe liquidity flash crashes occurred.
-        * To monetize institutional panic absorption without altering or destabilizing the sovereign Tier-1 primary engine, an isolated Tier-2 setup was architected: `BEAR_SWEEP_HARVESTER`.
-        * Designed to activate exclusively when Tier-1 setups (Breakouts, RBR, Core Sweeps) produce no intent, this setup exploits high-volume retail capitulation sweeps below trailing 24H lows during confirmed 4H bear regimes to harvest fast mean-reverting relief bounces.
-      - **Core Architectural Upgrade:**
-        1. **Tier-2 Gating Architecture (`BEAR_SWEEP_HARVESTER`):**
-           - **Sovereign Execution Isolation:** Evaluated strictly as a secondary candidate only after Tier-1 Primary Engine (Breakouts, Capitulation 48H, 24H Reclaim, Secondary RBR) produces zero intent.
-           - **Confirmed 4H Bear Regime Gate:**
-             $$\text{Close} < \text{EMA50}_{4\text{H}} \quad \text{AND} \quad \text{EMA50\_slope}_{4\text{H}} < 0.00\% \quad \text{AND} \quad \frac{\text{Close} - \text{EMA50}_{4\text{H}}}{\text{EMA50}_{4\text{H}}} \times 100.0 \le -1.50\%$$
-           - **24H Low Liquidity Sweep Hurdle:** The 15M bar low must sweep below the absolute lowest low of the preceding 24 hours (96 bars):
-             $$\text{Low} < \min(\text{Low}_{t-96 \dots t-1})$$
-           - **Institutional Volume Spike Confluence:** 15M candle volume must surge to $\ge 3.0\times$ its 20-bar SMA, confirming genuine panic absorption:
-             $$\text{Volume}_{15\text{M}} \ge 3.0 \times \text{SMA}(\text{Volume}, 20)$$
-           - **Close-Location-Value (CLV) Bullish Rejection:** The candle must reject the lows and close strongly in the upper half of its total range:
-             $$\text{CLV} = \frac{\text{Close} - \text{Low}}{\text{High} - \text{Low}} \ge 0.75$$
-           - **Asian Dead-Zone Exclusion Shield:** Entries between 00:00 and 04:00 UTC are strictly vetoed ($0 \le \text{MinuteOfDay} \le 240$) to prevent buying into low-liquidity Asian drift.
-        2. **Dedicated Asymmetric Exit Controller:**
-           - **Primary Fixed Take Profit:** Fast exit at $+1.50\%$ gross ($+1.30\%$ net of 0.20% round-trip taker fees):
-             $$\text{Target Price} = \text{Entry} \times 1.015$$
-           - **Structural Hard Stop Loss:** Placed strictly $0.50\%$ below the sweep candle's lower wick:
-             $$\text{Hard Stop} = \text{Low}_{\text{sweep}} \times 0.995$$
-           - **Velocity Time Stop (120 Minutes):** If the relief squeeze fails to ignite within 8 bars (2 hours or 7,200s), immediately cut the position flat at market to eliminate downside drift risk.
-      - **Empirical Validation Telemetry & Technical Forensics (35,040 15-Minute Bars, Oct 31, 2025 to Oct 31, 2026):**
-        * **Full 365-Day Cycle Telemetry:**
-          - **Total Trades Executed:** **107 trades** (59 Core v4.5.0 + 22 Secondary RBR + 26 Tier-2 Bear Sweep Harvester).
-          - **Overall Win Rate:** **45.8%** (49 Wins, 58 Losses).
-          - **Profit Factor:** **1.18**.
-          - **Maximum Portfolio Drawdown:** **-18.3%**.
-          - **Final Compounded Capital:** **€1,063.52** (+6.35% net return from €1,000 initial capital with 100% full compounding).
-        * **Regime Breakdown & Bull Pullback Telemetry:**
-          - **H1 Bear Regime (Nov 2025 – Apr 2026):** Captured 14 Tier-2 trades (8 Wins, 6 Losses, 57.1% WR), delivering +€10.12 net PnL during severe market cascades.
-          - **180-Day Bull Run Period (May 3 – Oct 30, 2026):**
-            * Forensic analysis revealed that despite the 4H slope and distance qualifications, multi-day bull market pullbacks (May 16, May 22, May 27, May 28, June 5, June 24, July 27, July 28, Sept 10, Sept 15, Oct 8, Oct 18) temporarily pulled the 4H EMA50 slope negative and price $> 1.50\%$ below it.
-            * Consequently, Tier-2 triggered 12 times in the 180-day window (3 Wins, 9 Losses, 25.0% WR), contributing -€37.75 loss drag and reducing 180-day capital from €1,298.20 down to €1,248.50.
-            * This empirical finding establishes that 4H trend metrics alone do not fully decouple bear market cascades from deep bull pullbacks, providing actionable direction for macro daily filters (e.g. 1D EMA50 clearance) in future hardening cycles.
-      - **Synchronized Artifacts & Deliverables:**
-        * `Trade_Log.csv`: Synchronized 17-metric ledger expanded to all 107 certified trades across the 365-day continuous backtest.
-        * `trades_visualizer.html`: Master visualizer dashboard updated for all 107 trades with multi-silo filtering (CORE, RBR, BEAR).
-        * `trade_charts/`: Standalone interactive Plotly HTML charts updated (trade_01.html through trade_107.html).
-        * Unit Test Suite: Added `test_47_version_490_tier2_bear_sweep_harvester` to `test_zebra.py`. All **47/47 unit tests passing cleanly in 0.186s**.
    - **Strict Workspace Isolation Rule (AGENTS.md Rule 4):** The agent environment is strictly locked to `c:\gemini proyect\btctool 2.0`. Under no circumstances may any file be created, read, written, modified, or exported outside the project root.
    - **Master Technical Specification Document (`BTCTOOL_2_0_FULL_SPECIFICATION_WITH_OXY.txt`):** Synchronized to Version 3.2.0 Production with all mathematical formulas, OKX V5 REST and WebSocket specifications, fee model, anti-hanging state machine, and production daemon setup. Stored strictly in the project root.
 
