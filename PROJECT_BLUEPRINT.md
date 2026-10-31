@@ -892,9 +892,9 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
         * **Profit Factor:** Elevates from 1.39 to **1.59** (+0.20 boost).
         * **Maximum Portfolio Drawdown:** Slashed from -16.7% down to **-12.7%** (-400 bps risk reduction).
       - **Synchronized Artifacts & Deliverables:**
-        * `Trade_Log.csv`: Synchronized 17-metric ledger for all 35 trades.
-        * `trades_visualizer.html`: Master visualizer dashboard updated for all 35 trades.
-        * `trade_charts/`: Standalone interactive Plotly HTML charts updated (trade_01.html through trade_35.html).
+        * `Trade_Log.csv`: Synchronized 17-metric ledger expanded to full 365-day backtest (78 certified trades, €1,000 initial capital, 100% compounding reinvestment, ending at €1,138.90).
+        * `trades_visualizer.html`: Master visualizer dashboard updated for all 78 trades across the 365-day cycle.
+        * `trade_charts/`: Standalone interactive Plotly HTML charts updated (trade_01.html through trade_78.html).
         * Unit Test Suite: Added `test_46_version_480_dual_lever_regime_hardening` to `test_zebra.py`. All **46/46 unit tests passing cleanly in 0.307s**.
    - **Strict Workspace Isolation Rule (AGENTS.md Rule 4):** The agent environment is strictly locked to `c:\gemini proyect\btctool 2.0`. Under no circumstances may any file be created, read, written, modified, or exported outside the project root.
    - **Master Technical Specification Document (`BTCTOOL_2_0_FULL_SPECIFICATION_WITH_OXY.txt`):** Synchronized to Version 3.2.0 Production with all mathematical formulas, OKX V5 REST and WebSocket specifications, fee model, anti-hanging state machine, and production daemon setup. Stored strictly in the project root.

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>btctool 2.0 - Integrated Dual-Engine Trade Visualizer (35 Trades)</title>
+    <title>btctool 2.0 - Version 4.8.0 365-Day Continuous Visualizer (78 Trades)</title>
     <style>
         body {
             margin: 0; padding: 0; background-color: #0A0E17; color: #E2E8F0;
@@ -24,45 +24,88 @@
 </head>
 <body>
     <div class="header">
-        <div class="title">⚡ btctool 2.0 · Integrated Dual-Engine Visualizer (45 Trades · 180 Days Live BTC)</div>
+        <div class="title">⚡ btctool 2.0 · Version 4.8.0 365-Day Visualizer (78 Trades · Oct 2025 – Oct 2026)</div>
         <div class="controls">
             <button onclick="prevTrade()">◀ Previous</button>
             <select id="tradeSelect" onchange="loadTrade(this.value)">
-                <option value="trade_01.html">Trade #01 [CORE]: MACRO_BREAK_48H (-0.42%) - 2026-05-06</option>
-<option value="trade_02.html">Trade #02 [CORE]: SWEEP_24H_RECLAIM (+0.34%) - 2026-05-07</option>
-<option value="trade_03.html">Trade #03 [CORE]: SWEEP_24H_RECLAIM (+0.54%) - 2026-05-10</option>
-<option value="trade_04.html">Trade #04 [CORE]: MACRO_BREAK_48H (-0.45%) - 2026-05-14</option>
-<option value="trade_05.html">Trade #05 [RBR]: RANGE_BOLLINGER_REVERSION (-0.22%) - 2026-05-22</option>
-<option value="trade_06.html">Trade #06 [RBR]: RANGE_BOLLINGER_REVERSION (-0.20%) - 2026-05-26</option>
-<option value="trade_07.html">Trade #07 [CORE]: SWEEP_24H_RECLAIM (+0.59%) - 2026-06-16</option>
-<option value="trade_08.html">Trade #08 [CORE]: SWEEP_24H_RECLAIM (+0.12%) - 2026-06-17</option>
-<option value="trade_09.html">Trade #09 [CORE]: MACRO_BREAK_48H (-0.97%) - 2026-06-22</option>
-<option value="trade_10.html">Trade #10 [CORE]: MACRO_BREAK_48H (+0.03%) - 2026-07-03</option>
-<option value="trade_11.html">Trade #11 [CORE]: BREAK_24H (+0.61%) - 2026-07-09</option>
-<option value="trade_12.html">Trade #12 [CORE]: SWEEP_24H_RECLAIM (+0.22%) - 2026-07-11</option>
-<option value="trade_13.html">Trade #13 [CORE]: BREAK_24H (+1.30%) - 2026-07-14</option>
-<option value="trade_14.html">Trade #14 [CORE]: SWEEP_24H_RECLAIM (+0.54%) - 2026-07-16</option>
-<option value="trade_15.html">Trade #15 [RBR]: RANGE_BOLLINGER_REVERSION (+0.47%) - 2026-07-20</option>
-<option value="trade_16.html">Trade #16 [RBR]: RANGE_BOLLINGER_REVERSION (-0.55%) - 2026-08-10</option>
-<option value="trade_17.html">Trade #17 [CORE]: MACRO_BREAK_48H (+18.11%) - 2026-08-19</option>
-<option value="trade_18.html">Trade #18 [CORE]: SWEEP_24H_RECLAIM (+0.52%) - 2026-08-23</option>
-<option value="trade_19.html">Trade #19 [CORE]: MACRO_BREAK_48H (-0.23%) - 2026-08-24</option>
-<option value="trade_20.html">Trade #20 [CORE]: SWEEP_24H_RECLAIM (+0.67%) - 2026-08-25</option>
-<option value="trade_21.html">Trade #21 [CORE]: MACRO_BREAK_48H (-0.90%) - 2026-08-27</option>
-<option value="trade_22.html">Trade #22 [CORE]: SWEEP_24H_RECLAIM (+0.48%) - 2026-08-30</option>
-<option value="trade_23.html">Trade #23 [RBR]: RANGE_BOLLINGER_REVERSION (+0.25%) - 2026-09-01</option>
-<option value="trade_24.html">Trade #24 [CORE]: MACRO_BREAK_48H (+1.30%) - 2026-09-03</option>
-<option value="trade_25.html">Trade #25 [CORE]: SWEEP_24H_RECLAIM (+0.00%) - 2026-09-06</option>
-<option value="trade_26.html">Trade #26 [CORE]: CAPITULATION_SWEEP_48H (+0.80%) - 2026-09-11</option>
-<option value="trade_27.html">Trade #27 [CORE]: MACRO_BREAK_48H (+2.14%) - 2026-09-18</option>
-<option value="trade_28.html">Trade #28 [CORE]: MACRO_BREAK_48H (+0.15%) - 2026-09-21</option>
-<option value="trade_29.html">Trade #29 [CORE]: MACRO_BREAK_48H (+1.30%) - 2026-09-21</option>
-<option value="trade_30.html">Trade #30 [RBR]: RANGE_BOLLINGER_REVERSION (+0.30%) - 2026-09-25</option>
-<option value="trade_31.html">Trade #31 [CORE]: MACRO_BREAK_48H (-0.86%) - 2026-09-30</option>
-<option value="trade_32.html">Trade #32 [RBR]: RANGE_BOLLINGER_REVERSION (+0.33%) - 2026-10-05</option>
-<option value="trade_33.html">Trade #33 [RBR]: RANGE_BOLLINGER_REVERSION (+0.25%) - 2026-10-12</option>
-<option value="trade_34.html">Trade #34 [CORE]: CAPITULATION_SWEEP_48H (+1.03%) - 2026-10-15</option>
-<option value="trade_35.html">Trade #35 [CORE]: MACRO_BREAK_48H (+0.04%) - 2026-10-21</option>
+                <option value="trade_01.html">Trade #01 [CORE]: MACRO_BREAK_48H (-0.07%) - 2025-11-10</option>
+<option value="trade_02.html">Trade #02 [CORE]: MACRO_BREAK_48H (-0.62%) - 2025-11-27</option>
+<option value="trade_03.html">Trade #03 [CORE]: MACRO_BREAK_48H (-0.23%) - 2025-12-09</option>
+<option value="trade_04.html">Trade #04 [CORE]: BREAK_24H (-1.70%) - 2025-12-11</option>
+<option value="trade_05.html">Trade #05 [CORE]: MACRO_BREAK_48H (-0.73%) - 2025-12-22</option>
+<option value="trade_06.html">Trade #06 [RBR]: RANGE_BOLLINGER_REVERSION (-0.06%) - 2025-12-22</option>
+<option value="trade_07.html">Trade #07 [RBR]: RANGE_BOLLINGER_REVERSION (+0.00%) - 2025-12-26</option>
+<option value="trade_08.html">Trade #08 [CORE]: MACRO_BREAK_48H (-0.68%) - 2025-12-29</option>
+<option value="trade_09.html">Trade #09 [CORE]: BREAK_24H (-1.28%) - 2025-12-30</option>
+<option value="trade_10.html">Trade #10 [RBR]: RANGE_BOLLINGER_REVERSION (-0.17%) - 2025-12-31</option>
+<option value="trade_11.html">Trade #11 [CORE]: MACRO_BREAK_48H (-0.33%) - 2026-01-02</option>
+<option value="trade_12.html">Trade #12 [CORE]: MACRO_BREAK_48H (+0.01%) - 2026-01-05</option>
+<option value="trade_13.html">Trade #13 [CORE]: MACRO_BREAK_48H (-0.37%) - 2026-01-05</option>
+<option value="trade_14.html">Trade #14 [RBR]: RANGE_BOLLINGER_REVERSION (-0.44%) - 2026-01-12</option>
+<option value="trade_15.html">Trade #15 [CORE]: MACRO_BREAK_48H (+1.30%) - 2026-01-13</option>
+<option value="trade_16.html">Trade #16 [CORE]: SWEEP_24H_RECLAIM (-1.74%) - 2026-01-15</option>
+<option value="trade_17.html">Trade #17 [CORE]: SWEEP_24H_RECLAIM (+0.31%) - 2026-01-16</option>
+<option value="trade_18.html">Trade #18 [CORE]: SWEEP_24H_RECLAIM (-0.25%) - 2026-01-16</option>
+<option value="trade_19.html">Trade #19 [RBR]: RANGE_BOLLINGER_REVERSION (-1.40%) - 2026-02-26</option>
+<option value="trade_20.html">Trade #20 [RBR]: RANGE_BOLLINGER_REVERSION (+0.62%) - 2026-03-01</option>
+<option value="trade_21.html">Trade #21 [CORE]: MACRO_BREAK_48H (-1.26%) - 2026-03-02</option>
+<option value="trade_22.html">Trade #22 [CORE]: MACRO_BREAK_48H (+1.30%) - 2026-03-04</option>
+<option value="trade_23.html">Trade #23 [RBR]: RANGE_BOLLINGER_REVERSION (-1.40%) - 2026-03-05</option>
+<option value="trade_24.html">Trade #24 [CORE]: MACRO_BREAK_48H (-0.70%) - 2026-03-10</option>
+<option value="trade_25.html">Trade #25 [CORE]: MACRO_BREAK_48H (-1.51%) - 2026-03-17</option>
+<option value="trade_26.html">Trade #26 [RBR]: RANGE_BOLLINGER_REVERSION (-0.49%) - 2026-03-24</option>
+<option value="trade_27.html">Trade #27 [CORE]: CAPITULATION_SWEEP_48H (+0.00%) - 2026-03-29</option>
+<option value="trade_28.html">Trade #28 [RBR]: RANGE_BOLLINGER_REVERSION (+0.49%) - 2026-03-31</option>
+<option value="trade_29.html">Trade #29 [CORE]: MACRO_BREAK_48H (-1.18%) - 2026-04-01</option>
+<option value="trade_30.html">Trade #30 [CORE]: MACRO_BREAK_48H (-0.44%) - 2026-04-06</option>
+<option value="trade_31.html">Trade #31 [RBR]: RANGE_BOLLINGER_REVERSION (-0.42%) - 2026-04-06</option>
+<option value="trade_32.html">Trade #32 [CORE]: SWEEP_24H_RECLAIM (+0.00%) - 2026-04-07</option>
+<option value="trade_33.html">Trade #33 [CORE]: BREAK_24H (+1.30%) - 2026-04-13</option>
+<option value="trade_34.html">Trade #34 [CORE]: MACRO_BREAK_48H (-0.78%) - 2026-04-17</option>
+<option value="trade_35.html">Trade #35 [CORE]: MACRO_BREAK_48H (-0.33%) - 2026-04-20</option>
+<option value="trade_36.html">Trade #36 [CORE]: BREAK_12H (+1.30%) - 2026-04-22</option>
+<option value="trade_37.html">Trade #37 [CORE]: SWEEP_24H_RECLAIM (+0.46%) - 2026-04-23</option>
+<option value="trade_38.html">Trade #38 [RBR]: RANGE_BOLLINGER_REVERSION (-0.34%) - 2026-04-27</option>
+<option value="trade_39.html">Trade #39 [RBR]: RANGE_BOLLINGER_REVERSION (+0.16%) - 2026-04-29</option>
+<option value="trade_40.html">Trade #40 [CORE]: MACRO_BREAK_48H (-0.22%) - 2026-05-01</option>
+<option value="trade_41.html">Trade #41 [RBR]: RANGE_BOLLINGER_REVERSION (-0.11%) - 2026-05-04</option>
+<option value="trade_42.html">Trade #42 [CORE]: MACRO_BREAK_48H (-0.42%) - 2026-05-06</option>
+<option value="trade_43.html">Trade #43 [CORE]: SWEEP_24H_RECLAIM (+0.34%) - 2026-05-07</option>
+<option value="trade_44.html">Trade #44 [CORE]: SWEEP_24H_RECLAIM (+0.54%) - 2026-05-10</option>
+<option value="trade_45.html">Trade #45 [CORE]: MACRO_BREAK_48H (-0.45%) - 2026-05-14</option>
+<option value="trade_46.html">Trade #46 [RBR]: RANGE_BOLLINGER_REVERSION (-0.22%) - 2026-05-22</option>
+<option value="trade_47.html">Trade #47 [RBR]: RANGE_BOLLINGER_REVERSION (-0.20%) - 2026-05-26</option>
+<option value="trade_48.html">Trade #48 [CORE]: MACRO_BREAK_48H (-0.03%) - 2026-06-15</option>
+<option value="trade_49.html">Trade #49 [CORE]: SWEEP_24H_RECLAIM (+0.59%) - 2026-06-16</option>
+<option value="trade_50.html">Trade #50 [CORE]: SWEEP_24H_RECLAIM (+0.12%) - 2026-06-17</option>
+<option value="trade_51.html">Trade #51 [CORE]: MACRO_BREAK_48H (-0.97%) - 2026-06-22</option>
+<option value="trade_52.html">Trade #52 [CORE]: MACRO_BREAK_48H (+0.03%) - 2026-07-03</option>
+<option value="trade_53.html">Trade #53 [CORE]: BREAK_24H (+0.61%) - 2026-07-09</option>
+<option value="trade_54.html">Trade #54 [CORE]: SWEEP_24H_RECLAIM (+0.22%) - 2026-07-11</option>
+<option value="trade_55.html">Trade #55 [CORE]: BREAK_24H (+1.30%) - 2026-07-14</option>
+<option value="trade_56.html">Trade #56 [CORE]: SWEEP_24H_RECLAIM (+0.54%) - 2026-07-16</option>
+<option value="trade_57.html">Trade #57 [RBR]: RANGE_BOLLINGER_REVERSION (+0.47%) - 2026-07-20</option>
+<option value="trade_58.html">Trade #58 [RBR]: RANGE_BOLLINGER_REVERSION (-0.55%) - 2026-08-10</option>
+<option value="trade_59.html">Trade #59 [CORE]: MACRO_BREAK_48H (+18.04%) - 2026-08-19</option>
+<option value="trade_60.html">Trade #60 [CORE]: SWEEP_24H_RECLAIM (+0.52%) - 2026-08-23</option>
+<option value="trade_61.html">Trade #61 [CORE]: MACRO_BREAK_48H (-0.23%) - 2026-08-24</option>
+<option value="trade_62.html">Trade #62 [CORE]: SWEEP_24H_RECLAIM (+0.67%) - 2026-08-25</option>
+<option value="trade_63.html">Trade #63 [CORE]: MACRO_BREAK_48H (-0.90%) - 2026-08-27</option>
+<option value="trade_64.html">Trade #64 [CORE]: SWEEP_24H_RECLAIM (+0.48%) - 2026-08-30</option>
+<option value="trade_65.html">Trade #65 [RBR]: RANGE_BOLLINGER_REVERSION (+0.25%) - 2026-09-01</option>
+<option value="trade_66.html">Trade #66 [CORE]: MACRO_BREAK_48H (+1.30%) - 2026-09-03</option>
+<option value="trade_67.html">Trade #67 [CORE]: SWEEP_24H_RECLAIM (+0.00%) - 2026-09-06</option>
+<option value="trade_68.html">Trade #68 [CORE]: CAPITULATION_SWEEP_48H (+0.80%) - 2026-09-11</option>
+<option value="trade_69.html">Trade #69 [CORE]: MACRO_BREAK_48H (+1.95%) - 2026-09-18</option>
+<option value="trade_70.html">Trade #70 [CORE]: MACRO_BREAK_48H (+0.15%) - 2026-09-21</option>
+<option value="trade_71.html">Trade #71 [CORE]: MACRO_BREAK_48H (+1.30%) - 2026-09-21</option>
+<option value="trade_72.html">Trade #72 [RBR]: RANGE_BOLLINGER_REVERSION (+0.30%) - 2026-09-25</option>
+<option value="trade_73.html">Trade #73 [CORE]: MACRO_BREAK_48H (-0.86%) - 2026-09-30</option>
+<option value="trade_74.html">Trade #74 [RBR]: RANGE_BOLLINGER_REVERSION (+0.33%) - 2026-10-05</option>
+<option value="trade_75.html">Trade #75 [RBR]: RANGE_BOLLINGER_REVERSION (+0.25%) - 2026-10-12</option>
+<option value="trade_76.html">Trade #76 [CORE]: CAPITULATION_SWEEP_48H (+1.03%) - 2026-10-15</option>
+<option value="trade_77.html">Trade #77 [CORE]: MACRO_BREAK_48H (+0.04%) - 2026-10-21</option>
+<option value="trade_78.html">Trade #78 [RBR]: RANGE_BOLLINGER_REVERSION (-0.66%) - 2026-10-29</option>
 
             </select>
             <button onclick="nextTrade()">Next ▶</button>
