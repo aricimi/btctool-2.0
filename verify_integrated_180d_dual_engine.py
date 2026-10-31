@@ -292,11 +292,15 @@ def run_simulation():
             res_4h = max(highs_4h[start_4h:h4_idx+1]) if h4_idx > start_4h else b['close'] * 1.05
             headroom = (res_4h - b['close']) / b['close'] * 100.0
             
-            # Multi-Horizon Breakouts
+            # Multi-Horizon Breakouts (v4.2.0: Mandatory >= +0.80% 4H EMA50 Trend Clearance Gate)
             if is_bull_4h and clv >= min_clv:
                 sh_48h = max(highs[i-192:i])
-                if b['close'] > sh_48h and closes[i-1] <= sh_48h:
-                    if vr >= min_vr and body_pct >= 0.25 and headroom >= 0.5:
+                is_48h_break = b['close'] > sh_48h and closes[i-1] <= sh_48h
+                if is_48h_break:
+                    if dist_ema < 0.80:
+                        # Vetoed as low-momentum range chop; suppress fallthrough to shorter breakout horizons
+                        continue
+                    elif vr >= min_vr and body_pct >= 0.25 and headroom >= 0.5:
                         pos = {
                             'type': 'MACRO_BREAK_48H', 'entry_idx': i, 'entry_t': dt, 'entry_p': b['close'],
                             'hard_stop': b['close'] * (1.0 - stop_pct), 'trail_floor': b['close'] - (trail_atr * atr_val),

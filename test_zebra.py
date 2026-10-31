@@ -2252,6 +2252,58 @@ class TestZebraBot(unittest.TestCase):
         self.assertEqual(intent_exit.action, "BANK_PROFIT")
         self.assertIn("1H_EMA20_TREND_EXIT", intent_exit.reason)
 
+    def test_40_macro_break_48h_trend_clearance_gate(self):
+        """
+        Verify Version 4.2.0 Macro Trend Clearance Gate for MACRO_BREAK_48H:
+        1. 48H Breakout with price distance < +0.80% above 4H EMA50 is vetoed (fallthrough suppressed).
+        2. 48H Breakout with price distance >= +0.80% above 4H EMA50 triggers ENTER_CORE_LOT_1.
+        """
+        brain = FreeConvictionEngine()
+        ema50_4h = 80000.0
+
+        # Construct 25 dummy 15M candles with 48h high at 80200.0
+        candles = []
+        for i in range(25):
+            candles.append({
+                "open": 80000.0, "high": 80200.0, "low": 79900.0, "close": 80100.0, "vol": 100.0
+            })
+
+        # Case A: Low-momentum breakout: Close at 80400.0 breaks 80200.0 high,
+        # but distance from EMA50 (80000.0) is only +0.50% (< +0.80% hurdle)
+        cur_bar_low_dist = {
+            "open": 80100.0, "high": 80450.0, "low": 80050.0, "close": 80400.0, "vol": 350.0
+        }
+        matrix_veto = {
+            "latest_price": 80400.0,
+            "candles_15m": candles + [cur_bar_low_dist],
+            "timeframes": {"4h": {"ema_50": ema50_4h, "bb_mid": ema50_4h}},
+            "multi_screen_bounds": {"nearest_support": 80000.0, "nearest_resistance": 81000.0, "macro_ceiling": 82000.0, "macro_runway_pct": 2.0},
+            "tanh_imbalance": 0.20, "cvd": 100.0, "absorption_index": 15.0, "composite_atr": 200.0,
+            "utc_dow": 2, # Tuesday
+        }
+        intent_veto = brain.evaluate(matrix_veto)
+        # Should not enter MACRO_BREAK_48H or fallthrough to BREAK_24H
+        self.assertNotEqual(intent_veto.scenario, "MACRO_BREAK_48H")
+        self.assertNotEqual(intent_veto.scenario, "BREAK_24H")
+
+        # Case B: High-momentum breakout: Close at 81700.0 breaks 80200.0 high,
+        # distance from EMA50 (80000.0) is +2.125% (>= +0.80% hurdle)
+        cur_bar_high_dist = {
+            "open": 80500.0, "high": 81750.0, "low": 80400.0, "close": 81700.0, "vol": 350.0
+        }
+        matrix_accept = {
+            "latest_price": 81700.0,
+            "candles_15m": candles + [cur_bar_high_dist],
+            "timeframes": {"4h": {"ema_50": ema50_4h, "bb_mid": ema50_4h}},
+            "multi_screen_bounds": {"nearest_support": 80500.0, "nearest_resistance": 83000.0, "macro_ceiling": 85000.0, "macro_runway_pct": 4.0},
+            "tanh_imbalance": 0.25, "cvd": 120.0, "absorption_index": 18.0, "composite_atr": 250.0,
+            "utc_dow": 2,
+        }
+        intent_accept = brain.evaluate(matrix_accept)
+        self.assertEqual(intent_accept.action, "ENTER_CORE_LOT_1")
+        self.assertEqual(intent_accept.scenario, "MACRO_BREAK_48H")
+        self.assertIn("MACRO_BREAK_48H", intent_accept.reason)
+
 
 if __name__ == "__main__":
     unittest.main()

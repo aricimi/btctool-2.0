@@ -607,8 +607,7 @@ class FreeConvictionEngine:
         intent_telemetry["intuition_mod"] = round(intuition_mod, 3)
         intent_telemetry["tuned_confidence"] = round(tuned_confidence, 3)
 
-        # 2.6 SETUP A: 24H LIQUIDITY SWEEP & RECLAIM (Validated Dip-Absorption Alpha)
-        # Unfreezes dip-buying strictly for high-conviction 24H liquidity flushes in Bull Macro regimes.
+        # 2.58 SETUP: 48H CAPITULATION SWEEP (Panic Absorption Reclaim)
         candles_15m_all = matrix.get("candles_15m") or []
         tfs = matrix.get("timeframes", {})
         tf_4h = tfs.get("4h", {})
@@ -616,6 +615,50 @@ class FreeConvictionEngine:
         ema50_4h = float(tf_4h.get("ema_50", bb_mid_4h))
         is_bull_macro_sweep = (price >= ema50_4h) or (bb_mid_4h > 0 and price >= bb_mid_4h)
 
+        if candles_15m_all and len(candles_15m_all) >= 20:
+            cur_15m = candles_15m_all[-1]
+            c_low = float(cur_15m.get("low", price))
+            c_high = float(cur_15m.get("high", price))
+            c_close = float(cur_15m.get("close", price))
+            c_open = float(cur_15m.get("open", price))
+            lookback_192 = min(len(candles_15m_all) - 1, 192)
+            if lookback_192 >= 20:
+                recent_lows_48h = [float(c.get("low", price)) for c in candles_15m_all[-(lookback_192 + 1):-1]]
+                sl_48h = min(recent_lows_48h) if recent_lows_48h else c_low
+                is_sweep_48h = (c_low < sl_48h) and (c_close > sl_48h)
+                c_rng = c_high - c_low
+                clv = (c_close - c_low) / c_rng if c_rng > 0 else 0.5
+                body_pct = ((c_close - c_open) / c_open * 100.0) if c_open > 0 else 0.0
+                v_recent = [float(c.get("vol", 0.0)) for c in candles_15m_all[-min(len(candles_15m_all), 21):-1]]
+                v_sma20 = float(np.mean(v_recent)) if v_recent else 1.0
+                c_vol = float(cur_15m.get("vol", 0.0))
+                vr = c_vol / v_sma20 if v_sma20 > 0 else 1.0
+
+                if is_sweep_48h and vr >= 2.5 and body_pct >= 0.20 and clv >= 0.70:
+                    take_sweep = is_bull_macro_sweep or (vr >= 3.5)
+                    if take_sweep:
+                        stop_price = round(price * 0.985, 2)
+                        return TradeIntent(
+                            action="ENTER_CORE_LOT_1",
+                            scenario="CAPITULATION_SWEEP_48H",
+                            entry_price=price,
+                            target_price=nearest_resistance,
+                            proposed_stop=stop_price,
+                            expected_runway_pct=macro_runway,
+                            confidence=0.85,
+                            reason=f"CAPITULATION_SWEEP_48H: 48H low (${sl_48h:,.2f}) swept and reclaimed with panic absorption (VR={vr:.1f}x, CLV={clv:.2f}) at ${price:,.2f}.",
+                            telemetry={
+                                **intent_telemetry,
+                                "scenario": "CAPITULATION_SWEEP_48H",
+                                "sl_48h": round(sl_48h, 2),
+                                "clv": round(clv, 2),
+                                "vr": round(vr, 2),
+                                "body_pct": round(body_pct, 2),
+                            },
+                        )
+
+        # 2.6 SETUP A: 24H LIQUIDITY SWEEP & RECLAIM (Validated Dip-Absorption Alpha)
+        # Unfreezes dip-buying strictly for high-conviction 24H liquidity flushes in Bull Macro regimes.
         if candles_15m_all and len(candles_15m_all) >= 20 and is_bull_macro_sweep:
             cur_15m = candles_15m_all[-1]
             c_low = float(cur_15m.get("low", price))
@@ -662,6 +705,85 @@ class FreeConvictionEngine:
                             "body_pct": round(body_pct, 2),
                             "target_price": tp_price,
                             "proposed_stop": stop_price,
+                        },
+                    )
+
+        # 2.62 SETUP: MULTI-HORIZON BREAKOUT SUITE (v4.2.0)
+        # Evaluates 48H and 24H breakouts with mandatory 4H EMA50 Trend Clearance Gate (>= +0.80% for 48H).
+        utc_dow = matrix.get("utc_dow")  # 5, 6 is weekend
+        is_weekend = (utc_dow in (5, 6)) if utc_dow is not None else False
+        if candles_15m_all and len(candles_15m_all) >= 20 and is_bull_macro_sweep and not is_weekend:
+            cur_15m = candles_15m_all[-1]
+            c_high = float(cur_15m.get("high", price))
+            c_close = float(cur_15m.get("close", price))
+            c_open = float(cur_15m.get("open", price))
+            c_low = float(cur_15m.get("low", price))
+            c_rng = c_high - c_low
+            clv = (c_close - c_low) / c_rng if c_rng > 0 else 0.5
+            body_pct = ((c_close - c_open) / c_open * 100.0) if c_open > 0 else 0.0
+
+            v_recent = [float(c.get("vol", 0.0)) for c in candles_15m_all[-min(len(candles_15m_all), 21):-1]]
+            v_sma20 = float(np.mean(v_recent)) if v_recent else 1.0
+            c_vol = float(cur_15m.get("vol", 0.0))
+            vr = c_vol / v_sma20 if v_sma20 > 0 else 1.0
+
+            dist_ema50_pct = ((price - ema50_4h) / ema50_4h) * 100.0 if ema50_4h > 0 else 0.0
+
+            # 48H lookback
+            lookback_192 = min(len(candles_15m_all) - 1, 192)
+            recent_highs_48h = [float(c.get("high", price)) for c in candles_15m_all[-(lookback_192 + 1):-1]]
+            sh_48h = max(recent_highs_48h) if recent_highs_48h else price
+            prev_close = float(candles_15m_all[-2].get("close", price)) if len(candles_15m_all) >= 2 else price
+            is_48h_break = (c_close > sh_48h) and (prev_close <= sh_48h)
+
+            if is_48h_break:
+                # v4.2.0 Mandatory 4H EMA50 Trend Clearance Gate
+                if dist_ema50_pct < 0.80:
+                    # Low-momentum range noise veto; suppress fallthrough to shorter horizons
+                    pass
+                elif vr >= 2.2 and body_pct >= 0.25 and clv >= 0.70:
+                    stop_price = round(price * 0.985, 2)
+                    return TradeIntent(
+                        action="ENTER_CORE_LOT_1",
+                        scenario="MACRO_BREAK_48H",
+                        entry_price=price,
+                        target_price=macro_ceiling,
+                        proposed_stop=stop_price,
+                        expected_runway_pct=macro_runway,
+                        confidence=0.85,
+                        reason=f"MACRO_BREAK_48H: 48H high (${sh_48h:,.2f}) broken with momentum (Dist4H={dist_ema50_pct:+.2f}% >= +0.80%, VR={vr:.1f}x, CLV={clv:.2f}).",
+                        telemetry={
+                            **intent_telemetry,
+                            "scenario": "MACRO_BREAK_48H",
+                            "sh_48h": round(sh_48h, 2),
+                            "dist_ema50_pct": round(dist_ema50_pct, 2),
+                            "vr": round(vr, 2),
+                            "clv": round(clv, 2),
+                        },
+                    )
+            elif clv >= 0.70:
+                # 24H lookback
+                lookback_96 = min(len(candles_15m_all) - 1, 96)
+                recent_highs_24h = [float(c.get("high", price)) for c in candles_15m_all[-(lookback_96 + 1):-1]]
+                sh_24h = max(recent_highs_24h) if recent_highs_24h else price
+                is_24h_break = (c_close > sh_24h) and (prev_close <= sh_24h)
+                if is_24h_break and vr >= 2.2 and body_pct >= 0.25:
+                    stop_price = round(price * 0.985, 2)
+                    return TradeIntent(
+                        action="ENTER_CORE_LOT_1",
+                        scenario="BREAK_24H",
+                        entry_price=price,
+                        target_price=macro_ceiling,
+                        proposed_stop=stop_price,
+                        expected_runway_pct=macro_runway,
+                        confidence=0.82,
+                        reason=f"BREAK_24H: 24H high (${sh_24h:,.2f}) broken with volume (VR={vr:.1f}x, CLV={clv:.2f}).",
+                        telemetry={
+                            **intent_telemetry,
+                            "scenario": "BREAK_24H",
+                            "sh_24h": round(sh_24h, 2),
+                            "dist_ema50_pct": round(dist_ema50_pct, 2),
+                            "vr": round(vr, 2),
                         },
                     )
 
