@@ -205,6 +205,22 @@ def run_simulation():
                     exit_reason = "TIME_STOP_4H"
                     exited = True
 
+            # 5. BEAR SWEEP HARVESTER DEDICATED EXITS (v4.9.0)
+            elif pos['type'] == 'BEAR_SWEEP_HARVESTER':
+                tp_target = entry_p * 1.015
+                if b['high'] >= tp_target:
+                    exit_p = tp_target
+                    exit_reason = "TP_FIXED_1.5%"
+                    exited = True
+                elif b['low'] <= pos['hard_stop']:
+                    exit_p = pos['hard_stop']
+                    exit_reason = "HARD_STOP_0.5%"
+                    exited = True
+                elif bars_held >= 8:
+                    exit_p = b['close']
+                    exit_reason = "TIME_STOP_120M"
+                    exited = True
+
             # 3. BREAKOUT RUNNERS: 1H EMA20 TREND SHIELD (v4.1.0) & EXIT CONTROLS (v4.7.0)
             else:
                 # Version 4.7.0 Exit Controls for MACRO_BREAK_48H
@@ -468,6 +484,30 @@ def run_simulation():
                     }
                     continue
 
+            # TRIGGER 5: Tier-2 Bear Liquidity Sweep Harvester (v4.9.0)
+            dist_from_4h_ema50 = dist_ema
+            is_confirmed_bear_regime = (not is_bull_4h) and (ema50_4h_slope < 0.0) and (dist_from_4h_ema50 <= -1.50)
+            if is_confirmed_bear_regime:
+                is_asian_zone = (0 <= entry_minutes <= 240)
+                sl_24h = min(lows[i-96:i])
+                swept_24h = (b['low'] < sl_24h)
+                if swept_24h and not is_asian_zone and (vr >= 3.0) and (clv >= 0.75):
+                    hard_stop = round(b['low'] * 0.995, 2)
+                    pos = {
+                        'type': 'BEAR_SWEEP_HARVESTER',
+                        'silo': 'TIER2_BEAR_HARVESTER',
+                        'entry_idx': i,
+                        'entry_t': dt,
+                        'entry_p': b['close'],
+                        'hard_stop': hard_stop,
+                        'trail_floor': hard_stop,
+                        'rsi_entry': rsi[i],
+                        'vr_entry': vr,
+                        'dist_ema50': dist_ema,
+                        'peak_p': b['close']
+                    }
+                    continue
+
     wins = [t for t in trades if t['net_pct'] > 0]
     losses = [t for t in trades if t['net_pct'] <= 0]
     wr = len(wins)/len(trades)*100.0 if trades else 0.0
@@ -551,7 +591,7 @@ def run_simulation():
         ), row=1, col=1)
         
         fig.add_trace(go.Scatter(x=dts, y=sub_ema50, mode='lines', line=dict(color='#38bdf8', width=2), name='4H EMA50 Shield'), row=1, col=1)
-        if t['type'] not in ['SWEEP_24H_RECLAIM', 'RANGE_BOLLINGER_REVERSION']:
+        if t['type'] not in ['SWEEP_24H_RECLAIM', 'RANGE_BOLLINGER_REVERSION', 'BEAR_SWEEP_HARVESTER']:
             fig.add_trace(go.Scatter(x=dts, y=sub_trail, mode='lines', line=dict(color='#fbbf24', width=2, dash='dot'), name='Trailing ATR Floor'), row=1, col=1)
             
         color_res = '#00FFA3' if t['net_pct'] > 0 else '#FF4B4B'
@@ -587,7 +627,7 @@ def run_simulation():
     for t in trades:
         res_str = f"+{t['net_pct']:.2f}%" if t['net_pct'] > 0 else f"{t['net_pct']:.2f}%"
         color = "#00FFA3" if t['net_pct'] > 0 else "#FF4B4B"
-        silo_lbl = "CORE" if t.get('silo') == 'CORE_v450' else "RBR"
+        silo_lbl = "CORE" if t.get('silo') == 'CORE_v450' else ("RBR" if t.get('silo') == 'SECONDARY_RBR' else "BEAR")
         options_html += f'<option value="trade_{t["id"]:02d}.html">Trade #{t["id"]:02d} [{silo_lbl}]: {t["type"]} ({res_str}) - {t["entry_t"][:10]}</option>\n'
 
     master_html = f"""<!DOCTYPE html>
