@@ -2415,6 +2415,56 @@ class TestZebraBot(unittest.TestCase):
         intent_break = brain.evaluate(matrix_break)
         self.assertNotEqual(intent_break.scenario, "BREAK_24H")
 
+    def test_43_version_450_failed_breakout_cooldown(self):
+        """
+        Verify Version 4.5.0 Failed Breakout Cooldown Directive:
+        1. When a breakout trade stops out at a loss, last_failed_breakout_ts is recorded.
+        2. Within 12 hours (43,200s), subsequent breakouts (MACRO_BREAK_48H, BREAK_24H) are vetoed.
+        3. After 12 hours have elapsed, breakout evaluation resumes normally.
+        """
+        brain = FreeConvictionEngine()
+
+        # Simulate losing breakout trade stop-out at t = 100,000
+        active_breakout = {
+            "entry": 82000.0, "trailing_stop": 81000.0, "scenario": "MACRO_BREAK_48H", "highest_price": 82050.0
+        }
+        matrix_stop = {
+            "latest_price": 80900.0,
+            "timestamp": 100000.0,
+        }
+        intent_stop = brain.evaluate(matrix_stop, active_trade=active_breakout)
+        self.assertEqual(intent_stop.action, "CUT_THESIS_INVALIDATED")
+        self.assertEqual(brain.last_failed_breakout_ts, 100000.0)
+
+        # Build breakout candle matrix (with 48h range >= 2.0%)
+        candles = []
+        for i in range(200):
+            candles.append({
+                "open": 81000.0, "high": 81500.0, "low": 79500.0, "close": 81200.0, "vol": 100.0
+            })
+        cur_break = {
+            "open": 81300.0, "high": 82600.0, "low": 81300.0, "close": 82500.0, "vol": 500.0
+        }
+        matrix_during_cooldown = {
+            "latest_price": 82500.0,
+            "timestamp": 100000.0 + (3 * 3600.0),  # 3 hours later (within 12h cooldown)
+            "candles_15m": candles + [cur_break],
+            "timeframes": {"4h": {"ema_50": 79000.0, "bb_mid": 79000.0}, "1h": {"ema_20": 81000.0, "ema20_slope": 0.0030}},
+            "multi_screen_bounds": {"nearest_support": 80000.0, "nearest_resistance": 85000.0, "macro_ceiling": 86000.0, "macro_runway_pct": 3.0},
+            "utc_dow": 2,
+        }
+
+        # Breakout MUST be vetoed during cooldown
+        intent_during = brain.evaluate(matrix_during_cooldown)
+        self.assertNotEqual(intent_during.scenario, "MACRO_BREAK_48H")
+        self.assertNotEqual(intent_during.scenario, "BREAK_24H")
+
+        # After 12.5 hours (45,000s elapsed), breakout MUST be permitted
+        matrix_after_cooldown = dict(matrix_during_cooldown)
+        matrix_after_cooldown["timestamp"] = 100000.0 + (12.5 * 3600.0)
+        intent_after = brain.evaluate(matrix_after_cooldown)
+        self.assertEqual(intent_after.scenario, "MACRO_BREAK_48H")
+
 
 if __name__ == "__main__":
     unittest.main()

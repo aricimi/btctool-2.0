@@ -126,6 +126,7 @@ def run_simulation():
     stop_pct = 0.015
     min_vr = 2.2
     min_clv = 0.70
+    last_failed_breakout_bar = -999
     
     for i in range(192, n):
         b = bars_15m[i]
@@ -221,6 +222,10 @@ def run_simulation():
                 if capital > peak: peak = capital
                 dd = (peak - capital) / peak * 100.0
                 if dd > max_dd: max_dd = dd
+
+                # Track failed breakout for v4.5.0 12-Hour Cooldown
+                if pos['type'] in ['MACRO_BREAK_48H', 'BREAK_24H', 'BREAK_12H'] and pnl < -0.05:
+                    last_failed_breakout_bar = i
                 trades.append({
                     'id': len(trades) + 1,
                     'type': pos['type'],
@@ -313,8 +318,12 @@ def run_simulation():
                         }
                         continue
 
-            # Standard Breakouts: Block weekends
+            # Standard Breakouts: Block weekends & v4.5.0 12-Hour Failed Breakout Cooldown
             if is_weekend:
+                continue
+
+            in_breakout_cooldown = (i - last_failed_breakout_bar < 48)  # 48 bars = 12 hours
+            if in_breakout_cooldown:
                 continue
                 
             start_4h = max(0, h4_idx - 42)

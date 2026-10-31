@@ -150,6 +150,7 @@ class FreeConvictionEngine:
     def __init__(self, decay_rate: float = 0.85):
         self.belief_system = BeliefSystem(decay_rate=decay_rate)
         self.pending_acceptance: Optional[dict] = None
+        self.last_failed_breakout_ts: float = 0.0
 
     @staticmethod
     def calculate_classical_expectancy(
@@ -176,6 +177,7 @@ class FreeConvictionEngine:
         """Resets persistent belief state to neutral baseline."""
         self.belief_system.reset()
         self.pending_acceptance = None
+        self.last_failed_breakout_ts = 0.0
 
     def evaluate(self, matrix: dict, active_trade: Optional[dict] = None, governor: Optional[Any] = None) -> TradeIntent:
         """
@@ -320,6 +322,13 @@ class FreeConvictionEngine:
                         telemetry={"scenario": scenario, "gain_pct": gain_pct},
                     )
                 else:
+                    cur_ts = float(matrix.get("timestamp", time.time()))
+                    if is_breakout_runner:
+                        self.last_failed_breakout_ts = cur_ts
+                        logger.warning(
+                            f"[Brain] FAILED BREAKOUT RECORDED: {scenario} stopped out at loss ({gain_pct*100:+.2f}%). "
+                            f"Enforcing 12-Hour Cooldown until ts={cur_ts + 43200.0}."
+                        )
                     return TradeIntent(
                         action="CUT_THESIS_INVALIDATED",
                         scenario=scenario,
@@ -763,11 +772,17 @@ class FreeConvictionEngine:
                         },
                     )
 
-        # 2.62 SETUP: MULTI-HORIZON BREAKOUT SUITE (v4.2.0)
+        # 2.62 SETUP: MULTI-HORIZON BREAKOUT SUITE (v4.2.0 & v4.5.0)
         # Evaluates 48H and 24H breakouts with mandatory 4H EMA50 Trend Clearance Gate (>= +0.80% for 48H).
+        # v4.5.0 Directive: 12-Hour Failed Breakout Cooldown Gate (locks breakout triggers for 43,200s after any losing breakout exit).
+        cur_ts = float(matrix.get("timestamp", time.time()))
+        if "last_failed_breakout_ts" in matrix:
+            self.last_failed_breakout_ts = max(self.last_failed_breakout_ts, float(matrix["last_failed_breakout_ts"]))
+        in_breakout_cooldown = (cur_ts - self.last_failed_breakout_ts) < (12 * 3600.0)
+
         utc_dow = matrix.get("utc_dow")  # 5, 6 is weekend
         is_weekend = (utc_dow in (5, 6)) if utc_dow is not None else False
-        if candles_15m_all and len(candles_15m_all) >= 20 and is_bull_macro_sweep and not is_weekend:
+        if candles_15m_all and len(candles_15m_all) >= 20 and is_bull_macro_sweep and not is_weekend and not in_breakout_cooldown:
             cur_15m = candles_15m_all[-1]
             c_high = float(cur_15m.get("high", price))
             c_close = float(cur_15m.get("close", price))
