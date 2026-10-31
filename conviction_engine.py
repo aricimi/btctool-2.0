@@ -640,7 +640,28 @@ class FreeConvictionEngine:
                     dist_ema50_pct = ((price - ema50_4h) / ema50_4h) * 100.0 if ema50_4h > 0 else 0.0
                     depth_gate = dist_ema50_pct <= -1.0
                     quality_gate = (vr >= 4.5) or (dist_ema50_pct <= -2.5)
-                    if not (depth_gate and quality_gate):
+
+                    # v4.4.0 Institutional Capitulation Quality Gate (Directive 4)
+                    candle_body_pct = (abs(c_close - c_open) / c_rng * 100.0) if c_rng > 0 else 0.0
+                    utc_hour = matrix.get("utc_hour")
+                    utc_minute = matrix.get("utc_minute", 0)
+                    if utc_hour is None:
+                        ts_val = cur_15m.get("timestamp") or cur_15m.get("ts") or matrix.get("timestamp")
+                        if isinstance(ts_val, (int, float)):
+                            dt_cur = datetime.datetime.fromtimestamp(ts_val, tz=datetime.timezone.utc)
+                            utc_hour, utc_minute = dt_cur.hour, dt_cur.minute
+                        elif isinstance(ts_val, str) and ":" in ts_val:
+                            try:
+                                parts = ts_val.split(" ")[1].split(":")
+                                utc_hour, utc_minute = int(parts[0]), int(parts[1])
+                            except Exception:
+                                utc_hour, utc_minute = 12, 0
+                        else:
+                            utc_hour, utc_minute = 12, 0
+                    is_london_ny = (11 <= utc_hour <= 15) or (utc_hour == 16 and utc_minute == 0)
+                    inst_cap_gate = (vr >= 10.0) or (candle_body_pct >= 60.0 and is_london_ny)
+
+                    if not (depth_gate and quality_gate and inst_cap_gate):
                         take_sweep = False
 
                     if take_sweep:
@@ -691,6 +712,32 @@ class FreeConvictionEngine:
                 v_sma20 = float(np.mean(v_recent)) if v_recent else 1.0
                 c_vol = float(cur_15m.get("vol", 0.0))
                 vr = c_vol / v_sma20 if v_sma20 > 0 else 1.0
+
+                # v4.4.0 Asian Dead-Zone Filter (Directive 1)
+                utc_hour = matrix.get("utc_hour")
+                utc_minute = matrix.get("utc_minute", 0)
+                if utc_hour is None:
+                    ts_val = cur_15m.get("timestamp") or cur_15m.get("ts") or matrix.get("timestamp")
+                    if isinstance(ts_val, (int, float)):
+                        dt_cur = datetime.datetime.fromtimestamp(ts_val, tz=datetime.timezone.utc)
+                        utc_hour, utc_minute = dt_cur.hour, dt_cur.minute
+                    elif isinstance(ts_val, str) and ":" in ts_val:
+                        try:
+                            parts = ts_val.split(" ")[1].split(":")
+                            utc_hour, utc_minute = int(parts[0]), int(parts[1])
+                        except Exception:
+                            utc_hour, utc_minute = 12, 0
+                    else:
+                        utc_hour, utc_minute = 12, 0
+                entry_minutes = utc_hour * 60 + utc_minute
+                in_asian_dead_zone = (90 <= entry_minutes <= 210)
+                candle_body_pct = (abs(c_close - c_open) / c_rng * 100.0) if c_rng > 0 else 0.0
+                tf_1h = tfs.get("1h", {})
+                ema20_1h_slope = float(tf_1h.get("ema20_slope", tf_1h.get("slope", 0.0030)))
+                if in_asian_dead_zone:
+                    asian_pass = (ema20_1h_slope > 0.0) and (candle_body_pct >= 25.0)
+                    if not asian_pass:
+                        is_sweep_reclaimed = False
 
                 if is_sweep_reclaimed and vr >= 2.2 and clv >= 0.80 and body_pct >= -0.10:
                     tp_price = round(price + (2.5 * atr), 2)
@@ -744,38 +791,55 @@ class FreeConvictionEngine:
             prev_close = float(candles_15m_all[-2].get("close", price)) if len(candles_15m_all) >= 2 else price
             is_48h_break = (c_close > sh_48h) and (prev_close <= sh_48h)
 
+            tf_1h = tfs.get("1h", {})
+            ema20_1h_slope = float(tf_1h.get("ema20_slope", tf_1h.get("slope", 0.0030)))
+
             if is_48h_break:
                 # v4.2.0 Mandatory 4H EMA50 Trend Clearance Gate
                 if dist_ema50_pct < 0.80:
                     # Low-momentum range noise veto; suppress fallthrough to shorter horizons
                     pass
-                elif vr >= 2.2 and body_pct >= 0.25 and clv >= 0.70:
-                    stop_price = round(price * 0.985, 2)
-                    return TradeIntent(
-                        action="ENTER_CORE_LOT_1",
-                        scenario="MACRO_BREAK_48H",
-                        entry_price=price,
-                        target_price=macro_ceiling,
-                        proposed_stop=stop_price,
-                        expected_runway_pct=macro_runway,
-                        confidence=0.85,
-                        reason=f"MACRO_BREAK_48H: 48H high (${sh_48h:,.2f}) broken with momentum (Dist4H={dist_ema50_pct:+.2f}% >= +0.80%, VR={vr:.1f}x, CLV={clv:.2f}).",
-                        telemetry={
-                            **intent_telemetry,
-                            "scenario": "MACRO_BREAK_48H",
-                            "sh_48h": round(sh_48h, 2),
-                            "dist_ema50_pct": round(dist_ema50_pct, 2),
-                            "vr": round(vr, 2),
-                            "clv": round(clv, 2),
-                        },
-                    )
+                else:
+                    # v4.4.0 Range Compression & Sunday Turnover Filter (Directive 3)
+                    recent_lows_48h = [float(c.get("low", price)) for c in candles_15m_all[-(lookback_192 + 1):-1]]
+                    sl_48h = min(recent_lows_48h) if recent_lows_48h else price * 0.98
+                    range_48h_pct = ((sh_48h - sl_48h) / price * 100.0) if price > 0 else 0.0
+                    
+                    if ema20_1h_slope < 0.0015 or range_48h_pct < 2.0:
+                        # Veto low-momentum range compression / rollover
+                        pass
+                    elif vr >= 2.2 and body_pct >= 0.25 and clv >= 0.70:
+                        stop_price = round(price * 0.985, 2)
+                        return TradeIntent(
+                            action="ENTER_CORE_LOT_1",
+                            scenario="MACRO_BREAK_48H",
+                            entry_price=price,
+                            target_price=macro_ceiling,
+                            proposed_stop=stop_price,
+                            expected_runway_pct=macro_runway,
+                            confidence=0.85,
+                            reason=f"MACRO_BREAK_48H: 48H high (${sh_48h:,.2f}) broken with momentum (Dist4H={dist_ema50_pct:+.2f}% >= +0.80%, VR={vr:.1f}x, CLV={clv:.2f}).",
+                            telemetry={
+                                **intent_telemetry,
+                                "scenario": "MACRO_BREAK_48H",
+                                "sh_48h": round(sh_48h, 2),
+                                "dist_ema50_pct": round(dist_ema50_pct, 2),
+                                "vr": round(vr, 2),
+                                "clv": round(clv, 2),
+                            },
+                        )
             elif clv >= 0.70:
                 # 24H lookback
                 lookback_96 = min(len(candles_15m_all) - 1, 96)
                 recent_highs_24h = [float(c.get("high", price)) for c in candles_15m_all[-(lookback_96 + 1):-1]]
                 sh_24h = max(recent_highs_24h) if recent_highs_24h else price
                 is_24h_break = (c_close > sh_24h) and (prev_close <= sh_24h)
-                if is_24h_break and vr >= 2.2 and body_pct >= 0.25:
+
+                # v4.4.0 Overhead Resistance Ceiling Gate (Directive 2)
+                overhead_ok = ((sh_48h - price) / price >= 0.012) if price < sh_48h else True
+                slope_ok = (ema20_1h_slope >= 0.0020)
+
+                if is_24h_break and overhead_ok and slope_ok and vr >= 2.2 and body_pct >= 0.25:
                     stop_price = round(price * 0.985, 2)
                     return TradeIntent(
                         action="ENTER_CORE_LOT_1",

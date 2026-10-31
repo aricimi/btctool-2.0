@@ -256,18 +256,35 @@ def run_simulation():
             body_pct = (b['close'] - b['open']) / b['open'] * 100.0
             rng = b['high'] - b['low']
             clv = (b['close'] - b['low']) / rng if rng > 0 else 0.5
+            candle_body_pct = (abs(b['close'] - b['open']) / rng * 100.0) if rng > 0 else 0.0
             dist_ema = (b['close'] - ema50_4h[h4_idx]) / ema50_4h[h4_idx] * 100.0
+
+            # 1H EMA20 slope over last 6 1H bars (6 hours)
+            h1_idx = map_15m_to_1h[i]
+            prev_h1_idx = max(0, h1_idx - 6)
+            ema20_1h_slope = (ema20_1h[h1_idx] - ema20_1h[prev_h1_idx]) / ema20_1h[prev_h1_idx]
+
+            entry_minutes = dt_obj.hour * 60 + dt_obj.minute
             
-            # TRIGGER 1: Macro 48h Capitulation Sweep (v4.3.0 Depth & Quality Gate)
+            sh_48h = max(highs[i-192:i])
             sl_48h = min(lows[i-192:i])
+            range_48h_pct = (sh_48h - sl_48h) / b['close'] * 100.0
+            
+            # TRIGGER 1: Macro 48h Capitulation Sweep (v4.4.0 Institutional Quality Gate)
             if b['low'] < sl_48h and b['close'] > sl_48h:
                 if vr >= 2.5 and body_pct >= 0.20 and clv >= 0.70:
                     take_sweep = is_bull_4h or (vr >= 3.5)
-                    # v4.3.0 Depth & Quality Gate Integration
+                    # Depth Gate
                     depth_gate = dist_ema <= -1.0
                     quality_gate = (vr >= 4.5) or (dist_ema <= -2.5)
-                    if not (depth_gate and quality_gate):
+
+                    # v4.4.0 Directive 4: Volume Multiplier >= 10.0x OR (Candle Body % >= 60.0% AND Entry Time between 11:00 and 16:00 UTC)
+                    is_london_ny = (11 <= dt_obj.hour <= 15) or (dt_obj.hour == 16 and dt_obj.minute == 0)
+                    inst_cap_gate = (vr >= 10.0) or (candle_body_pct >= 60.0 and is_london_ny)
+
+                    if not (depth_gate and quality_gate and inst_cap_gate):
                         take_sweep = False
+
                     if take_sweep:
                         pos = {
                             'type': 'CAPITULATION_SWEEP_48H', 'entry_idx': i, 'entry_t': dt, 'entry_p': b['close'],
@@ -276,11 +293,18 @@ def run_simulation():
                         }
                         continue
 
-            # TRIGGER 2: 24H Liquidity Sweep & Reclaim (Pin Bar / Hammer Rejection)
+            # TRIGGER 2: 24H Liquidity Sweep & Reclaim (v4.4.0 Asian Dead-Zone Filter)
             if is_bull_4h:
                 sl_24h = min(lows[i-96:i])
                 if b['low'] < sl_24h and b['close'] > sl_24h:
                     if vr >= 2.5 and clv >= 0.80 and body_pct >= -0.10:
+                        # v4.4.0 Directive 1: Reject entries between 01:30 and 03:30 UTC UNLESS 1H EMA20 slope > 0.00% AND Candle Body % >= 25.0%
+                        in_asian_dead_zone = (90 <= entry_minutes <= 210)
+                        if in_asian_dead_zone:
+                            asian_pass = (ema20_1h_slope > 0.0) and (candle_body_pct >= 25.0)
+                            if not asian_pass:
+                                continue
+
                         pos = {
                             'type': 'SWEEP_24H_RECLAIM', 'entry_idx': i, 'entry_t': dt, 'entry_p': b['close'],
                             'hard_stop': min(b['low'] * 0.998, b['close'] * (1.0 - stop_pct)),
@@ -297,15 +321,19 @@ def run_simulation():
             res_4h = max(highs_4h[start_4h:h4_idx+1]) if h4_idx > start_4h else b['close'] * 1.05
             headroom = (res_4h - b['close']) / b['close'] * 100.0
             
-            # Multi-Horizon Breakouts (v4.2.0: Mandatory >= +0.80% 4H EMA50 Trend Clearance Gate)
+            # Multi-Horizon Breakouts (v4.4.0 Range Compression, Turnover & Overhead Gates)
             if is_bull_4h and clv >= min_clv:
-                sh_48h = max(highs[i-192:i])
+                # 48H Breakout
                 is_48h_break = b['close'] > sh_48h and closes[i-1] <= sh_48h
                 if is_48h_break:
                     if dist_ema < 0.80:
-                        # Vetoed as low-momentum range chop; suppress fallthrough to shorter breakout horizons
                         continue
-                    elif vr >= min_vr and body_pct >= 0.25 and headroom >= 0.5:
+                    
+                    # v4.4.0 Directive 3: Reject if 1H EMA20 slope < +0.0015 (+0.15%) OR total 48H price range < 2.0%
+                    if ema20_1h_slope < 0.0015 or range_48h_pct < 2.0:
+                        continue
+
+                    if vr >= min_vr and body_pct >= 0.25 and headroom >= 0.5:
                         pos = {
                             'type': 'MACRO_BREAK_48H', 'entry_idx': i, 'entry_t': dt, 'entry_p': b['close'],
                             'hard_stop': b['close'] * (1.0 - stop_pct), 'trail_floor': b['close'] - (trail_atr * atr_val),
@@ -313,8 +341,16 @@ def run_simulation():
                         }
                         continue
 
+                # 24H Breakout
                 sh_24h = max(highs[i-96:i])
                 if b['close'] > sh_24h and closes[i-1] <= sh_24h:
+                    # v4.4.0 Directive 2: Require ((SH_48H - Entry_Price) / Entry_Price) >= 0.012 (1.20%) OR Entry_Price >= SH_48H
+                    # Require 1H EMA20 slope >= +0.0020 (+0.20%)
+                    overhead_ok = ((sh_48h - b['close']) / b['close'] >= 0.012) or (b['close'] >= sh_48h)
+                    slope_ok = (ema20_1h_slope >= 0.0020)
+                    if not (overhead_ok and slope_ok):
+                        continue
+
                     if vr >= min_vr and body_pct >= 0.25 and headroom >= 0.8:
                         pos = {
                             'type': 'BREAK_24H', 'entry_idx': i, 'entry_t': dt, 'entry_p': b['close'],

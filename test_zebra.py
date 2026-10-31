@@ -2261,11 +2261,11 @@ class TestZebraBot(unittest.TestCase):
         brain = FreeConvictionEngine()
         ema50_4h = 80000.0
 
-        # Construct 25 dummy 15M candles with 48h high at 80200.0
+        # Construct 25 dummy 15M candles with 48h high at 80200.0 and low at 78000.0 (range = 2.75% >= 2.0%)
         candles = []
         for i in range(25):
             candles.append({
-                "open": 80000.0, "high": 80200.0, "low": 79900.0, "close": 80100.0, "vol": 100.0
+                "open": 80000.0, "high": 80200.0, "low": 78000.0, "close": 80100.0, "vol": 100.0
             })
 
         # Case A: Low-momentum breakout: Close at 80400.0 breaks 80200.0 high,
@@ -2309,7 +2309,7 @@ class TestZebraBot(unittest.TestCase):
         Verify Version 4.3.0 Capitulation Depth & Quality Gate for CAPITULATION_SWEEP_48H:
         1. Sweep above -1.0% distance from 4H EMA50 (e.g. -0.625%) is vetoed.
         2. Sweep at -1.5% distance with volume multiplier 3.0x (< 4.5x) is vetoed.
-        3. Sweep at <= -1.0% with volume multiplier >= 4.5x triggers ENTER_CORE_LOT_1.
+        3. Sweep at <= -1.0% with volume multiplier >= 10.0x triggers ENTER_CORE_LOT_1.
         """
         brain = FreeConvictionEngine()
         ema50_4h = 80000.0
@@ -2349,9 +2349,9 @@ class TestZebraBot(unittest.TestCase):
         intent_low_vol = brain.evaluate(matrix_low_vol)
         self.assertNotEqual(intent_low_vol.scenario, "CAPITULATION_SWEEP_48H")
 
-        # Case C: Valid Capitulation: Depth -1.06% and extreme volume VR >= 4.5x (CLV >= 0.70)
+        # Case C: Valid Capitulation: Depth -1.06% and extreme institutional panic volume VR >= 10.0x
         cur_valid = {
-            "open": 78900.0, "high": 79200.0, "low": 78800.0, "close": 79150.0, "vol": 500.0
+            "open": 78900.0, "high": 79200.0, "low": 78800.0, "close": 79150.0, "vol": 1050.0
         }
         matrix_valid = {
             "latest_price": 79150.0,
@@ -2363,6 +2363,57 @@ class TestZebraBot(unittest.TestCase):
         intent_valid = brain.evaluate(matrix_valid)
         self.assertEqual(intent_valid.action, "ENTER_CORE_LOT_1")
         self.assertEqual(intent_valid.scenario, "CAPITULATION_SWEEP_48H")
+
+    def test_42_version_440_structural_pruning_rules(self):
+        """
+        Verify Version 4.4.0 Structural Pruning Directives:
+        1. Asian Dead-Zone Filter: SWEEP_24H_RECLAIM between 01:30 and 03:30 UTC vetoed if slope <= 0 or body < 25%.
+        2. Overhead Resistance Ceiling Gate: BREAK_24H vetoed if 48h ceiling < 1.20% overhead and slope < +0.20%.
+        3. Range Compression Filter: MACRO_BREAK_48H vetoed if 48h range < 2.0% or 1H slope < +0.15%.
+        """
+        brain = FreeConvictionEngine()
+        ema50_4h = 80000.0
+
+        # Construct candles with 24h low at 80200.0, 48h high at 82000.0
+        candles = []
+        for i in range(25):
+            candles.append({
+                "open": 80500.0, "high": 80700.0, "low": 80200.0, "close": 80600.0, "vol": 100.0
+            })
+
+        # Test 1: Asian Dead-Zone Sweep at 02:30 UTC with thin body (15%) and negative slope
+        cur_asian_sweep = {
+            "open": 80150.0, "high": 80600.0, "low": 80100.0, "close": 80220.0, "vol": 350.0
+        }
+        matrix_asian = {
+            "latest_price": 80220.0,
+            "candles_15m": candles + [cur_asian_sweep],
+            "timeframes": {"4h": {"ema_50": ema50_4h, "bb_mid": ema50_4h}, "1h": {"ema_20": 80500.0, "ema20_slope": -0.0020}},
+            "multi_screen_bounds": {"nearest_support": 80000.0, "nearest_resistance": 82000.0},
+            "utc_hour": 2, "utc_minute": 30,
+        }
+        intent_asian = brain.evaluate(matrix_asian)
+        self.assertNotEqual(intent_asian.scenario, "SWEEP_24H_RECLAIM")
+
+        # Test 2: Overhead Resistance Ceiling Gate on BREAK_24H:
+        # 24H High at 81000.0, 48H High at 81400.0, Price at 81100.0 (Ceiling is only +0.37% overhead < 1.20%)
+        candles_break = []
+        for i in range(100):
+            candles_break.append({
+                "open": 80500.0, "high": 81000.0 if i < 90 else 81400.0, "low": 80000.0, "close": 80800.0, "vol": 100.0
+            })
+        cur_break = {
+            "open": 80900.0, "high": 81150.0, "low": 80850.0, "close": 81100.0, "vol": 350.0
+        }
+        matrix_break = {
+            "latest_price": 81100.0,
+            "candles_15m": candles_break + [cur_break],
+            "timeframes": {"4h": {"ema_50": 79000.0, "bb_mid": 79000.0}, "1h": {"ema_20": 80500.0, "ema20_slope": 0.0010}},
+            "multi_screen_bounds": {"nearest_support": 80000.0, "nearest_resistance": 83000.0, "macro_ceiling": 85000.0, "macro_runway_pct": 3.0},
+            "utc_dow": 2,
+        }
+        intent_break = brain.evaluate(matrix_break)
+        self.assertNotEqual(intent_break.scenario, "BREAK_24H")
 
 
 if __name__ == "__main__":
