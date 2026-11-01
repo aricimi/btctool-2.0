@@ -48,7 +48,7 @@ class TestConvictionEngineFutures(unittest.TestCase):
         self.assertEqual(sig.setup_type, "SHORT_4H_UPPER_BB_REJECT")
         self.assertEqual(sig.side, "SHORT")
         self.assertEqual(sig.price, 81400.0)
-        self.assertEqual(sig.take_profit, 80000.0) # 4H Midline target
+        self.assertEqual(sig.take_profit, 81400.0 * 0.980) # 2.0% fixed target (79772.0)
         self.assertIsNotNone(self.engine.active_position)
         self.assertEqual(self.engine.active_position.side, "SHORT")
 
@@ -87,7 +87,7 @@ class TestConvictionEngineFutures(unittest.TestCase):
         sig = self.engine.evaluate_bar(105, cur_bar, prev_bars, mtf_data)
         self.assertEqual(sig.action, "EXIT_SHORT")
         self.assertEqual(sig.price, 78500.0) # Closed at target
-        self.assertEqual(sig.reason, "TAKE_PROFIT_4H_MID")
+        self.assertEqual(sig.reason, "TAKE_PROFIT_2PCT")
         self.assertIsNone(self.engine.active_position)
 
     def test_05_short_breakeven_protection_ratchet(self):
