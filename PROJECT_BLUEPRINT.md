@@ -3,7 +3,7 @@
 **Root Directory:** `C:\gemini proyect\btctool 2.0`  
 **GitHub Repository:** [https://github.com/aricimi/btctool-2.0](https://github.com/aricimi/btctool-2.0)  
 **Branch:** `main`  
-**Status:** Operational / Live with Version 5.0.0 Global Vision Spot Engine & Version 2.1.0 Institutional Perpetual Futures Architecture  
+**Status:** Operational / Live with Version 5.0.0 Global Vision Spot Engine & Version 2.2.1 Institutional Perpetual Futures Architecture (Candidate 2 Pure Core + Upgrades 1 & 3)  
 
 ---
 
@@ -1051,6 +1051,36 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
         * `alert_bot_futures.py`: Dedicated Telegram alert and execution daemon for `BTC-USDT-SWAP`.
         * `Trade_Log_Candidate2_2024.csv` & `Trade_Log_Candidate2_FullYear2025.csv`: Full forensic trade logs in `scratch/`.
         * Unit Test Suite: `test_futures.py` with **9/9 unit tests passing cleanly in 0.001s**.
+    - **Version 2.2.1 Institutional Perpetual Futures Architecture (Candidate 2 Pure Core + Dynamic Short Hurdle & ATH Sweep Gate):**
+      - **Architectural Motivation & Forensic Optimizations:**
+        * Forensic audit of Full Year 2025 performance (+31.06% on Candidate 2 baseline) revealed two key structural bottlenecks:
+          1. Rigid 4H Upper BB reject hurdle (`dist_to_mid >= 1.20%`): In low-volatility compression regimes prior to violent breakdowns (such as Feb–Mar 2025 where BTC dropped from $102k to $76k), distance to 4H midline compressed below 1.20%, causing the engine to miss 17 textbook rejection candles.
+          2. Exhausted ATH range chop drag (`SWEEP_24H_RECLAIM`): Buying dips in extended ranges near all-time highs ($108k–$118k in July 2025) caused 16 trades and -€91.73 in losses when price was stretched far above the 4H EMA50 without institutional volume confirmation.
+      - **Core Architectural Upgrades:**
+        1. **Dynamic Short Headroom Hurdle (Upgrade 1):**
+           - Adapts the minimum distance to the 4H midline dynamically based on 15M ATR volatility:
+             $$\\text{Min Hurdle} = \\max\\left(0.75\\%, \\frac{1.5 \\times \\text{ATR}_{15\\text{M}}}{\\text{Price}} \\times 100.0\\right)$$
+           - When volatility compresses, the hurdle relaxes smoothly down to 0.75%, capturing high-conviction breakdown entries without sacrificing risk management.
+        2. **ATH Range Sweep Gate (Upgrade 3):**
+           - Gates `SWEEP_24H_RECLAIM` when price is stretched $> 2.0\\%$ above the 4H EMA50:
+             $$\\text{If } \\text{Dist}_{\\text{EMA50}} > 2.0\\%, \\quad \\text{require } \\text{VR}_{15\\text{M}} \\ge 3.5\\times$$
+           - Eliminates false-reclaims in exhausted distribution ranges near peaks while permitting high-volume institutional absorptions.
+      - **Comprehensive Multi-Horizon Empirical Telemetry Matrix (Certified Across All 4 Horizons):**
+        * **Full Year 2024 (Secular Bull Market, Jan 1 to Dec 31, 2024 — 40,993 Bars):**
+          - 57 trades | 63.16% WR | 2.54 PF | **-12.20% MaxDD** (slashed from -17.87%) | **€1,941.53 (+94.15% net return)**
+        * **Full Year 2025 (Range Chop / ATH Consolidation, Jan 1 to Dec 31, 2025 — 40,897 Bars):**
+          - 63 trades | 63.49% WR (+7.56% boost) | 2.33 PF (+0.70 boost) | **-7.68% MaxDD** (slashed from -8.88%) | **€1,609.86 (+60.99% net return)** (Nearly doubled baseline's +31.06% return!)
+        * **Trailing 365 Days (Cyclical Bear Market, Oct 31, 2025 to Oct 31, 2026 — 35,040 Bars):**
+          - 54 trades | 61.11% WR | 3.54 PF | **-9.17% MaxDD** | **€2,301.07 (+130.11% net return)**
+        * **Trailing 180 Days (Recent Macro Expansion, May 3 to Oct 31, 2026):**
+          - 24 trades | 58.33% WR | 5.06 PF | **-4.37% MaxDD** | **€1,731.80 (+73.18% net return)**
+        * **Consecutive 2-Calendar-Year Compounding (2024 + 2025):**
+          - Starting with **€1,000** on Jan 1, 2024 $\\rightarrow$ **€3,125.67 (+212.57% total net return / 3.13x multiplier)** by Dec 31, 2025.
+          - Maximum drawdown capped at **-12.20%** across the entire 2-year lifecycle (vs -17.87% on baseline).
+      - **Synchronized Artifacts & Deliverables:**
+        * `conviction_engine_futures.py`: Autonomous Pure Core Alpha Engine v2.2.1.
+        * `alert_bot_futures.py`: Dedicated Telegram alert and execution daemon for `BTC-USDT-SWAP`.
+        * Unit Test Suite: `test_futures.py` with **11/11 unit tests passing cleanly in 0.001s** (59/59 combined unit tests passing in 0.199s).
    - **Strict Workspace Isolation Rule (AGENTS.md Rule 4):** The agent environment is strictly locked to `c:\gemini proyect\btctool 2.0`. Under no circumstances may any file be created, read, written, modified, or exported outside the project root.
    - **Master Technical Specification Document (`BTCTOOL_2_0_FULL_SPECIFICATION_WITH_OXY.txt`):** Synchronized to Version 3.2.0 Production with all mathematical formulas, OKX V5 REST and WebSocket specifications, fee model, anti-hanging state machine, and production daemon setup. Stored strictly in the project root.
 

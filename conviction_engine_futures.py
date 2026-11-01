@@ -1,10 +1,12 @@
 """
-conviction_engine_futures.py — Institutional Bidirectional Futures Engine (btctool 2.0 / BTC_BOT 2.2)
-Architecture: Candidate 2 (Pure Core Alpha Engine)
+conviction_engine_futures.py — Institutional Bidirectional Futures Engine (btctool 2.0 / BTC_BOT 2.2.1)
+Architecture: Candidate 2 Pure Core Alpha + Upgrades 1 & 3 (Dynamic Short Hurdle + ATH Sweep Gate)
 Target Instrument: OKX BTC-USDT-SWAP (Perpetual Futures)
 Margin Architecture: Isolated Margin (Default 2.5x Leverage)
 Execution Philosophy:
 - Master Switch Architecture with Tactical 4H Distribution Short Valve.
+- Dynamic Short Headroom Hurdle (Upgrade 1): Adapts minimum distance to 4H midline to ATR/volatility (max(0.75%, 1.5*ATR)), unlocking high-conviction pre-breakdown shorts.
+- ATH Range Sweep Gate (Upgrade 3): Requires institutional volume surge (VR >= 3.5) when price is stretched >2.0% above 4H EMA50, eliminating chop drag near all-time highs.
 - Pure Institutional Core: Breakouts (48H, 24H, 12H), Liquidity Sweeps (24H, 48H Capitulation), and 4H Distribution Shorts.
 - Mean-Reversion Knife-Catching (`UNIFIED_4L_REBOUND`) and Chop Scalping (`RANGE_BOLLINGER_REVERSION`) Permanently Pruned.
 - Strict fee friction modeling: 0.06% round-trip OKX Futures taker/maker blend.
@@ -297,13 +299,14 @@ class ConvictionEngineFutures:
             touch_upper_4h = p_high >= (h4['bb_upper'] * 0.998)
             bear_reversal = (p_close < p_open) and (clv <= 0.40)
             dist_to_4h_mid = ((p_close - h4['bb_mid']) / p_close) * 100.0
-            if touch_upper_4h and bear_reversal and (dist_to_4h_mid >= 1.20):
+            min_hurdle = max(0.75, (1.5 * atr_val / p_close * 100.0))
+            if touch_upper_4h and bear_reversal and (dist_to_4h_mid >= min_hurdle):
                 hard_stop = min(p_high * 1.0030, p_close * 1.0150)
                 tp_target = p_close * 0.980 # 2.0% fixed target
                 cand_short = (
                     "SHORT_4H_UPPER_BB_REJECT", "SHORT", "FUTURES_SHORT",
                     hard_stop, tp_target, "4H_UPPER_BB_REJECT",
-                    {'vr': vr, 'clv': clv, 'dist_to_mid': dist_to_4h_mid}
+                    {'vr': vr, 'clv': clv, 'dist_to_mid': dist_to_4h_mid, 'min_hurdle': min_hurdle}
                 )
 
         cand_capitulation = None
@@ -331,7 +334,12 @@ class ConvictionEngineFutures:
                     if in_asian_dead_zone:
                         asian_pass = (h1['ema20_slope'] > 0.0) and (candle_body_pct >= 25.0)
 
-                    if asian_pass:
+                    # Upgrade 3: ATH Sweep Gate (protect against buying exhausted ranges near highs)
+                    ath_pass = True
+                    if dist_ema > 2.0 and vr < 3.5:
+                        ath_pass = False
+
+                    if asian_pass and ath_pass:
                         hard_stop = min(p_low * 0.998, p_close * (1.0 - self.base_stop_pct))
                         tp_target = p_close + (2.5 * atr_val)
                         cand_sweep_24h = (

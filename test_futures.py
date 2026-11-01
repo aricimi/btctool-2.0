@@ -1,5 +1,5 @@
 """
-test_futures.py — Dedicated Institutional Unit Test Suite for Futures 2.2 (Candidate 2: Pure Core Alpha Engine)
+test_futures.py — Dedicated Institutional Unit Test Suite for Futures 2.2.1 (Candidate 2 Pure Core + Upgrades 1 & 3)
 Target: OKX BTC-USDT-SWAP (Perpetual Futures)
 Verifies:
 1. Isolated Margin & Liquidation Boundary Mathematics (2.5x Leverage)
@@ -11,6 +11,8 @@ Verifies:
 7. Verification that Rebounds & RBR are pruned; Capitulation Sweep 48H triggers on flush
 8. Bidirectional State Machine Mutex (No self-hedging)
 9. Failed Breakout Cooldown Integrity (48-bar lockout)
+10. Dynamic Short Hurdle (Upgrade 1): Adapts minimum distance to 4H midline based on ATR
+11. ATH Sweep Gate (Upgrade 3): Prunes false-reclaims in stretched ATH distribution ranges
 """
 
 import unittest
@@ -191,6 +193,60 @@ class TestConvictionEngineFutures(unittest.TestCase):
         self.assertEqual(sig.action, "EXIT_LONG")
         self.assertEqual(sig.reason, "HARD_STOP")
         self.assertEqual(self.engine.last_failed_breakout_bar, 105)
+
+    def test_10_dynamic_short_hurdle_upgrade_1(self):
+        # Upgrade 1: Dynamic Short Hurdle adapts minimum distance to 4H midline based on ATR
+        # When ATR is low (e.g. 400 at price 80,000 -> 1.5 * 400 / 80000 * 100 = 0.75%), min_hurdle is 0.75%.
+        # A setup with dist_to_4h_mid = 0.90% (e.g. close=80,000, 4h mid=79,280 -> dist=0.90%)
+        # would FAIL the legacy rigid 1.20% hurdle, but PASSES Upgrade 1's dynamic 0.75% hurdle.
+        cur_bar = {'open': 80500.0, 'high': 80800.0, 'low': 79800.0, 'close': 80000.0, 'vol': 500.0, 'ts': 1762000000}
+        prev_bars = [{'high': 80800.0, 'low': 79000.0, 'close': 80000.0} for _ in range(200)]
+        mtf_data = {
+            '1d': {'close': 80000.0, 'ema50': 85000.0, 'ema50_slope': -0.005}, # 1D Bear
+            '4h': {'close': 80000.0, 'high': 80900.0, 'low': 78000.0, 'ema50': 83000.0, 'ema50_slope': -0.003,
+                   'bb_mid': 79280.0, 'bb_upper': 80850.0, 'bb_lower': 77710.0}, # dist_to_mid = 0.90%, high touches upper BB
+            '1h': {'close': 80000.0, 'ema20': 80200.0, 'ema20_slope': -0.001, 'bb_mid': 80200.0, 'bb_upper': 81200.0, 'bb_lower': 79200.0},
+            '15m': {'atr': 400.0, 'vol_sma20': 200.0, 'rsi': 55.0, 'bb_mid': 80100.0, 'bb_upper': 80800.0, 'bb_lower': 79400.0}
+        }
+        sig = self.engine.evaluate_bar(200, cur_bar, prev_bars, mtf_data)
+        self.assertEqual(sig.action, "ENTER_SHORT")
+        self.assertEqual(sig.setup_type, "SHORT_4H_UPPER_BB_REJECT")
+        self.assertAlmostEqual(sig.telemetry['min_hurdle'], 0.75, places=2)
+        self.assertTrue(sig.telemetry['dist_to_mid'] >= sig.telemetry['min_hurdle'])
+
+        # Now test rejection when dist_to_mid < min_hurdle (e.g. 4H mid is 79,600 -> dist = 0.50% < 0.75%)
+        mtf_data_reject = dict(mtf_data)
+        mtf_data_reject['4h'] = dict(mtf_data['4h'])
+        mtf_data_reject['4h']['bb_mid'] = 79600.0 # dist_to_mid = 0.50%
+        engine2 = ConvictionEngineFutures(leverage=2.5, fee_rt=0.0006)
+        sig2 = engine2.evaluate_bar(200, cur_bar, prev_bars, mtf_data_reject)
+        self.assertNotEqual(sig2.action, "ENTER_SHORT")
+
+    def test_11_ath_sweep_gate_upgrade_3(self):
+        # Upgrade 3: ATH Sweep Gate prunes false-reclaims in stretched ATH distribution ranges.
+        # When price is > 2.0% above 4H EMA50 (dist_ema > 2.0%), require institutional volume VR >= 3.5.
+        # Case A: dist_ema > 2.0% and VR = 2.6 (< 3.5) -> Must be BLOCKED.
+        # 4H EMA50 = 85,000, Close = 87,000 -> dist_ema = (87000 - 85000)/85000 * 100 = +2.35%
+        # 24H low = 86,500, cur_bar low = 86,200, close = 87,000 (reclaims 24H low)
+        cur_bar_blocked = {'open': 86400.0, 'high': 87100.0, 'low': 86200.0, 'close': 87000.0, 'vol': 520.0, 'ts': 1762020000} # vol/vol_sma20 = 520/200 = 2.6
+        prev_bars = [{'high': 88000.0, 'low': 86500.0, 'close': 87200.0} for _ in range(200)] # 24H low is 86,500
+        mtf_data = {
+            '1d': {'close': 87000.0, 'ema50': 80000.0, 'ema50_slope': +0.005},
+            '4h': {'close': 87000.0, 'high': 88500.0, 'low': 84500.0, 'ema50': 85000.0, 'ema50_slope': +0.003, # dist_ema = +2.35%
+                   'bb_mid': 86500.0, 'bb_upper': 88500.0, 'bb_lower': 84500.0},
+            '1h': {'close': 87000.0, 'ema20': 86800.0, 'ema20_slope': +0.002, 'bb_mid': 86800.0, 'bb_upper': 87500.0, 'bb_lower': 86100.0},
+            '15m': {'atr': 500.0, 'vol_sma20': 200.0, 'rsi': 55.0, 'bb_mid': 86600.0, 'bb_upper': 87300.0, 'bb_lower': 85900.0}
+        }
+        engine_a = ConvictionEngineFutures(leverage=2.5, fee_rt=0.0006)
+        sig_a = engine_a.evaluate_bar(200, cur_bar_blocked, prev_bars, mtf_data)
+        self.assertNotEqual(sig_a.action, "ENTER_LONG", "ATH Sweep Gate should have blocked VR=2.6 when dist_ema > 2.0%")
+
+        # Case B: dist_ema > 2.0% but institutional surge VR >= 3.5 (e.g. vol = 760 -> VR = 3.8) -> PASSES!
+        cur_bar_pass = {'open': 86400.0, 'high': 87100.0, 'low': 86200.0, 'close': 87000.0, 'vol': 760.0, 'ts': 1762020000}
+        engine_b = ConvictionEngineFutures(leverage=2.5, fee_rt=0.0006)
+        sig_b = engine_b.evaluate_bar(200, cur_bar_pass, prev_bars, mtf_data)
+        self.assertEqual(sig_b.action, "ENTER_LONG")
+        self.assertEqual(sig_b.setup_type, "SWEEP_24H_RECLAIM")
 
 
 if __name__ == "__main__":
