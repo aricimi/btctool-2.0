@@ -334,6 +334,84 @@ class TestConvictionEngineFutures(unittest.TestCase):
         equity_risk_high_vol = sig_high_vol.leverage * sig_high_vol.telemetry['active_stop_pct']
         self.assertTrue(equity_risk_high_vol <= 0.0375)
 
+    def test_14_tuned_4h_breakdown_short_and_extension_guard(self):
+        # Version 2.4.0 (Path A): Tuned 4H Breakdown Short
+        # Sub-case A: dist_to_ema50_pct > 7.0% -> BLOCKED by Macro Extension Guard (no bottom-shorting)
+        # Prev 48H low = 80,000. Cur close = 79,500 (bd_depth = 500 / 80000 = 0.625% in [0.20%, 2.50%]).
+        # If 4H EMA50 is 86,500 -> dist_to_ema50_pct = (86500 - 79500) / 86500 = 8.09% > 7.0% -> BLOCKED
+        cur_bar = {'open': 79800.0, 'high': 79850.0, 'low': 79400.0, 'close': 79500.0, 'vol': 350.0, 'ts': 1762172800}
+        prev_bars = [{'high': 82000.0, 'low': 80000.0, 'close': 80500.0} for _ in range(200)] # sl_48h = 80000
+        # vr = 350 / 200 = 1.75 >= 1.30
+        # body_pct = (79500 - 79800)/79800 = -0.376% <= -0.25%
+        # clv = (79500 - 79400)/(79850 - 79400) = 100 / 450 = 0.222 <= 0.40
+        mtf_data_blocked = {
+            '1d': {'close': 79500.0, 'ema50': 87000.0, 'ema50_slope': -0.002},
+            '4h': {'close': 79500.0, 'high': 82000.0, 'low': 79000.0, 'ema50': 86500.0, 'ema50_slope': -0.001,
+                   'bb_mid': 81000.0, 'bb_upper': 83000.0, 'bb_lower': 79000.0},
+            '1h': {'close': 79500.0, 'ema20': 80200.0, 'ema20_slope': -0.001, 'bb_mid': 80200.0, 'bb_upper': 81200.0, 'bb_lower': 79200.0},
+            '15m': {'atr': 450.0, 'vol_sma20': 200.0, 'rsi': 35.0, 'bb_mid': 80000.0, 'bb_upper': 80600.0, 'bb_lower': 79400.0}
+        }
+        engine_blocked = ConvictionEngineFutures(leverage=2.5, fee_rt=0.0006)
+        sig_blocked = engine_blocked.evaluate_bar(200, cur_bar, prev_bars, mtf_data_blocked)
+        # Verify blocked by Macro Extension Guard (> 7.0%)
+        self.assertNotEqual(sig_blocked.action, "ENTER_SHORT")
+
+        # Sub-case B: dist_to_ema50_pct <= 7.0% -> PASSES cleanly and triggers TUNED_4H_BREAKDOWN_SHORT
+        # If 4H EMA50 is 83,500 -> dist_to_ema50_pct = (83500 - 79500) / 83500 = 4.79% <= 7.0% -> TRIGGERED
+        mtf_data_pass = dict(mtf_data_blocked)
+        mtf_data_pass['4h'] = dict(mtf_data_blocked['4h'])
+        mtf_data_pass['4h']['ema50'] = 83500.0
+        engine_pass = ConvictionEngineFutures(leverage=2.5, fee_rt=0.0006)
+        sig_pass = engine_pass.evaluate_bar(200, cur_bar, prev_bars, mtf_data_pass)
+        self.assertEqual(sig_pass.action, "ENTER_SHORT")
+        self.assertEqual(sig_pass.setup_type, "TUNED_4H_BREAKDOWN_SHORT")
+        self.assertTrue(sig_pass.telemetry['dist_to_ema50_pct'] <= 7.0)
+        self.assertTrue(0.20 <= sig_pass.telemetry['bd_depth'] <= 2.50)
+
+    def test_15_tuned_4h_breakdown_short_lifecycle_and_two_tranches(self):
+        # Version 2.4.0 (Path A): Two-Tranche Short Monetization Lifecycle
+        # Entry at 80,000 on bar 100
+        cur_bar = {'open': 80300.0, 'high': 80350.0, 'low': 79900.0, 'close': 80000.0, 'vol': 350.0, 'ts': 1762172800}
+        prev_bars = [{'high': 82000.0, 'low': 80500.0, 'close': 81000.0} for _ in range(200)] # sl_48h = 80500 -> bd_depth = 500/80500 = 0.62%
+        mtf_data = {
+            '1d': {'close': 80000.0, 'ema50': 85000.0, 'ema50_slope': -0.002},
+            '4h': {'close': 80000.0, 'high': 82000.0, 'low': 79500.0, 'ema50': 83000.0, 'ema50_slope': -0.001,
+                   'bb_mid': 81000.0, 'bb_upper': 83000.0, 'bb_lower': 79000.0},
+            '1h': {'close': 80000.0, 'ema20': 80800.0, 'ema20_slope': -0.001, 'bb_mid': 80800.0, 'bb_upper': 81800.0, 'bb_lower': 79800.0},
+            '15m': {'atr': 400.0, 'vol_sma20': 200.0, 'rsi': 40.0, 'bb_mid': 80600.0, 'bb_upper': 81200.0, 'bb_lower': 80000.0}
+        }
+        engine = ConvictionEngineFutures(leverage=2.5, fee_rt=0.0006)
+        sig_enter = engine.evaluate_bar(100, cur_bar, prev_bars, mtf_data)
+        self.assertEqual(sig_enter.action, "ENTER_SHORT")
+        self.assertEqual(sig_enter.setup_type, "TUNED_4H_BREAKDOWN_SHORT")
+        self.assertFalse(engine.active_position.t1_banked)
+
+        # Bar 101: Price drops to 77,100 (drop is 2,900 / 80,000 = 3.625% > 3.5%)
+        # Tranche 1 should bank 50% size at +3.5% gain, ratcheting hard stop to BE (80000 * 0.9980 = 79,840)
+        # Bar high is 77,900, which is below trail_ceil (77100 + 3*400 = 78300), so runner remains held
+        cur_bar_t1 = {'open': 77800.0, 'high': 77900.0, 'low': 77100.0, 'close': 77300.0, 'vol': 400.0, 'ts': 1762173700}
+        sig_t1 = engine.evaluate_bar(101, cur_bar_t1, prev_bars, mtf_data)
+        self.assertEqual(sig_t1.action, "HOLD")
+        self.assertTrue(engine.active_position.t1_banked)
+        self.assertEqual(sig_t1.telemetry['t1_banked'], True)
+        self.assertAlmostEqual(engine.active_position.t1_ret, 0.0350, places=4)
+        # Check that stop ratcheted to Breakeven (+0.20% buffer)
+        self.assertAlmostEqual(engine.active_position.hard_stop, 80000.0 * 0.9980, places=1)
+
+        # Bar 102: Runner trailing - price rebounds and hits 3.0x ATR ceiling
+        # Trough price is 77,100, ATR is 400 -> trail_ceil = 77100 + 3.0 * 400 = 78,300
+        # High reaches 78,500 (hits ceiling)
+        cur_bar_exit = {'open': 77800.0, 'high': 78500.0, 'low': 77700.0, 'close': 78400.0, 'vol': 300.0, 'ts': 1762174600}
+        sig_exit = engine.evaluate_bar(102, cur_bar_exit, prev_bars, mtf_data)
+        self.assertEqual(sig_exit.action, "EXIT_SHORT")
+        self.assertEqual(sig_exit.setup_type, "TUNED_4H_BREAKDOWN_SHORT")
+        self.assertEqual(sig_exit.reason, "RUNNER_TRAIL_ATR")
+        self.assertTrue(sig_exit.telemetry['t1_banked'])
+        self.assertAlmostEqual(sig_exit.telemetry['t1_ret'], 0.0350, places=4)
+        self.assertIn('blended_pnl_pct', sig_exit.telemetry)
+        self.assertTrue(sig_exit.telemetry['blended_pnl_pct'] > 0.02)
+        self.assertIsNone(engine.active_position)
+
 
 if __name__ == "__main__":
     unittest.main()

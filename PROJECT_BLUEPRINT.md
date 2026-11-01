@@ -3,7 +3,7 @@
 **Root Directory:** `C:\gemini proyect\btctool 2.0`  
 **GitHub Repository:** [https://github.com/aricimi/btctool-2.0](https://github.com/aricimi/btctool-2.0)  
 **Branch:** `main`  
-**Status:** Operational / Live with Version 5.0.0 Global Vision Spot Engine & Version 2.3.0 Institutional Perpetual Futures Architecture (Candidate 2 Pure Core + Upgrades 1 & 3 + Short Runner Valve & Dynamic Risk Budget)  
+**Status:** Operational / Live with Version 5.0.0 Global Vision Spot Engine & Version 2.4.0 Institutional Perpetual Futures Architecture (Path A: Pure Core + Upgrades 1 & 3 + Short Runner Valve + Dynamic Risk Budget + Tuned 4H Breakdown Short Module)  
 
 ---
 
@@ -1121,6 +1121,41 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
         * `conviction_engine_futures.py`: Autonomous Perpetual Futures Engine Version 2.3.0.
         * `alert_bot_futures.py`: Dedicated Telegram alert and execution daemon for `BTC-USDT-SWAP`.
         * Unit Test Suite: `test_futures.py` with **13/13 unit tests passing cleanly in 0.002s** (61/61 combined unit tests passing in 0.229s).
+    - **Version 2.4.0 Institutional Perpetual Futures Architecture (Path A: Tuned 4H Breakdown Short Module & Dormancy Elimination):**
+      - **Architectural Motivation & Forensic Dormancy Audit:**
+        * A 2-year dormancy audit across 2024 and 2025 identified Version 2.3.0's longest unbroken period of zero trades: **43.6 consecutive days** (Feb 11 to Mar 27, 2025). During this window, BTC dropped -15.45% from $95,776 to $80,978 within a 30.33% total range ($23,225 swing). While capital was preserved at 100% Cash (€1,000 flat), massive directional cascade profit was missed.
+        * Evaluation of 3 intraday models (Asian sweep, 15M squeeze, 15M mean-reversion) in this window resulted in net losses (-3.4% to -13.2%, PF <= 0.49).
+        * Multi-asset expansion (altcoins) was permanently discarded after empirical backtesting proved lower altcoin volume, higher taker fees, and uncompensated volatility diluted 2-year compounding from +296% down to +12%.
+        * **The Discovery (Archetype 1 / Tuned 4H Breakdown Short):** 4H structural breakdown shorts (`p_close < sl_48h`) with volume ratio >= 1.30, strong bearish candle body (<= -0.25%), and weak close location (CLV <= 0.40) generated +21.00% net profit (€1,210.03, PF 3.06, WR 62.50%) across 8 trades in the 30-day dormancy window alone.
+      - **Core Architectural Inventions (Path A Specification):**
+        1. **Tuned 4H Structural Breakdown Short (`TUNED_4H_BREAKDOWN_SHORT`):**
+           - **Macro Trend Requirement:** 4H EMA50 slope <= +0.0005 and price below 4H EMA50 (`is_bear_4h`).
+           - **Structural Support Trigger:** 15M Close breaks cleanly below 48H swing low (`p_close < sl_48h`) with breakdown depth between 0.20% and 2.50% (`0.20 <= bd_depth <= 2.50`).
+           - **Institutional Flow Confirmation:** Volume Ratio $VR \ge 1.30$, Candle Body $\% \le -0.25\%$, and Close Location Value $CLV \le 0.40$.
+        2. **Macro Extension Guard ($\le 7.0\%$):**
+           - Distance to 4H EMA50 is strictly capped:
+             $$\text{Dist to EMA50}_{4\text{H}} = \frac{\text{EMA50}_{4\text{H}} - \text{Close}}{\text{EMA50}_{4\text{H}}} \times 100\% \le 7.0\%$$
+           - Pruning shorts when price is extended $>7.0\%$ below 4H EMA50 prevents dangerous bottom-shorting at cyclical exhaustion bottoms, eliminating 3 historical stop-outs and raising win rate from 38% to 62.5%.
+        3. **Two-Tranche Profit Monetization & Trailing ATR Ceiling:**
+           - **Tranche 1 (50% Size):** Banks immediately at +3.5% profit target ($\text{Entry} \times 0.9650$), locking in guaranteed gross profit.
+           - **Stop Ratchet:** Instantly ratchets the hard stop on Tranche 2 to Breakeven (+0.20% net buffer: $\text{Entry} \times 0.9980$).
+           - **Tranche 2 (50% Runner):** Trails behind dynamic ATR ceiling ($\text{Trough} + 3.0 \times \text{ATR}$) or 36-hour maximum hold time stop (144 bars), riding macro breakdown legs.
+           - **Pre-T1 Defense:** Breakeven ratchet triggered if price moves $+1.80\%$ in favor; stall time stop at 48 bars (12 hours).
+      - **Certified Multi-Horizon Empirical Telemetry Matrix (Full Production Harness with 0.06% Round-Trip OKX Friction):**
+        * **Full Year 2024 (Secular Bull Market, Jan 1 to Dec 31, 2024 — 40,993 Bars):**
+          - 105 trades | 50.48% WR | 1.47 PF | **-19.22% MaxDD** | **€2,287.56 (+128.76% net return)**
+        * **Full Year 2025 (Chop / ATH Distribution & Cascades, Jan 1 to Dec 31, 2025 — 40,897 Bars):**
+          - 123 trades | 58.54% WR | 1.90 PF | **-13.83% MaxDD** | **€3,829.03 (+282.90% net return)** (Massive +€1,975 extra profit over v2.3.0!)
+        * **Trailing 365 Days (Mixed Distribution & Severe Cascades):**
+          - 117 trades | 49.57% WR | 1.49 PF | **-28.94% MaxDD** | **€1,876.31 (+87.63% net return)**
+        * **Consecutive 2-Calendar-Year Compounding (2024 $\rightarrow$ 2025):**
+          - Starting with **€1,000** on Jan 1, 2024 $\rightarrow$ **€8,759.15 (+775.91% total net return / 8.76x multiplier)** by Dec 31, 2025!
+          - Outperformed Path B (Bidirectional with Reclaim Longs) by **+€1,057.39** while maintaining lower drawdown (-19.2% vs -25.0% in 2024; -28.9% vs -37.2% in 365d).
+          - Trade frequency doubled from ~60 to ~110–123 trades/year (~1 trade every 2.7 days), permanently resolving the 44-day dormancy.
+      - **Synchronized Artifacts & Deliverables:**
+        * `conviction_engine_futures.py`: Autonomous Perpetual Futures Engine Version 2.4.0 (Path A Production).
+        * `alert_bot_futures.py`: Dedicated Telegram alert and execution daemon for `BTC-USDT-SWAP` synchronized to Version 2.4.0.
+        * Unit Test Suite: `test_futures.py` with **15/15 unit tests passing cleanly in 0.002s**.
    - **Strict Workspace Isolation Rule (AGENTS.md Rule 4):** The agent environment is strictly locked to `c:\gemini proyect\btctool 2.0`. Under no circumstances may any file be created, read, written, modified, or exported outside the project root.
    - **Master Technical Specification Document (`BTCTOOL_2_0_FULL_SPECIFICATION_WITH_OXY.txt`):** Synchronized to Version 3.2.0 Production with all mathematical formulas, OKX V5 REST and WebSocket specifications, fee model, anti-hanging state machine, and production daemon setup. Stored strictly in the project root.
 

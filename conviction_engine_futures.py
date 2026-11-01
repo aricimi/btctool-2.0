@@ -1,16 +1,20 @@
 """
-conviction_engine_futures.py — Institutional Bidirectional Futures Engine (btctool 2.0 / BTC_BOT 2.3.0)
-Architecture: Candidate 2 Pure Core Alpha + Upgrades 1 & 3 + Short Runner Valve & Dynamic Risk Budget
+conviction_engine_futures.py — Institutional Bidirectional Futures Engine (btctool 2.0 / BTC_BOT 2.4.0)
+Architecture: Candidate 2 Pure Core Alpha + Upgrades 1 & 3 + Short Runner Valve & Dynamic Risk Budget + Tuned 4H Breakdown Short Module (Path A)
 Target Instrument: OKX BTC-USDT-SWAP (Perpetual Futures)
 Margin Architecture: Isolated Margin (Dynamic Volatility Sizing 1.75x–3.125x, Default 2.5x)
 Execution Philosophy:
-- Master Switch Architecture with Tactical 4H Distribution Short Valve.
+- Master Switch Architecture with Tactical 4H Distribution & Breakdown Short Valves.
 - Dynamic Short Headroom Hurdle (Upgrade 1): Adapts minimum distance to 4H midline to ATR/volatility (max(0.75%, 1.5*ATR)), unlocking high-conviction pre-breakdown shorts.
 - ATH Range Sweep Gate (Upgrade 3): Requires institutional volume surge (VR >= 3.5) when price is stretched >2.0% above 4H EMA50, eliminating chop drag near all-time highs.
 - Asymmetric Short Runner Valve (Rec 1): Closes 50% at +2.0% profit target, ratchets stop to Breakeven (+0.20% buffer), and trails remaining 50% behind 1H EMA20.
+- Tuned 4H Breakdown Short Module (Version 2.4.0 / Path A):
+  * Exploits cascading 48H structural breakdowns when 4H trend is bearish (4H EMA50 slope <= +0.0005).
+  * Macro Extension Guard (<= 7.0%): Prunes hazardous bottom-shorts when price is over-extended from 4H EMA50.
+  * Two-Tranche Monetization: Banks 50% at +3.5% gain, ratchets runner stop to Breakeven (+0.20% buffer), and trails runner behind 3.0x ATR ceiling or 36-hour maximum hold time stop.
 - Volatility-Adjusted Sizing (Rec 3): Dynamically scales leverage between 1.75x and 3.125x inversely to 15M ATR% (scaling up on tight coils, scaling down on chaotic wicks).
 - Dynamic Risk Budget: Strictly caps single-trade equity stop loss at <= 3.75% across all leverage scales, completely eliminating tail risk.
-- Pure Institutional Core: Breakouts (48H, 24H, 12H), Liquidity Sweeps (24H, 48H Capitulation), and 4H Distribution Shorts.
+- Pure Institutional Core: Breakouts (48H, 24H, 12H), Liquidity Sweeps (24H, 48H Capitulation), 4H Distribution Shorts, and 4H Breakdown Shorts.
 - Mean-Reversion Knife-Catching (`UNIFIED_4L_REBOUND`) and Chop Scalping (`RANGE_BOLLINGER_REVERSION`) Permanently Pruned.
 - Strict fee friction modeling: 0.06% round-trip OKX Futures taker/maker blend.
 - Isolated liquidation buffer defense: Liquidation remains >30% away at all times, with hard stop capped at <= 3.75% equity risk (20x safety margin).
@@ -273,6 +277,34 @@ class ConvictionEngineFutures:
                                 exit_p = pos.hard_stop; exit_reason = "BE_PROTECTION"; exited = True
                         elif pos.bars_held >= 32:
                             exit_p = p_close; exit_reason = "TIME_STOP_8H"; exited = True
+                elif pos.type == "TUNED_4H_BREAKDOWN_SHORT":
+                    # Version 2.4.0 (Path A): Tuned Breakdown Short Position Management
+                    # Tranche 1: Bank 50% size at +3.5% profit target
+                    if not pos.t1_banked and p_low <= (entry_p * 0.9650):
+                        pos.t1_banked = True
+                        pos.t1_ret = 0.0350 # 3.5% gross return banked on Tranche 1 (50%)
+                        pos.t1_price = entry_p * 0.9650
+                        pos.hard_stop = min(pos.hard_stop, entry_p * 0.9980) # Ratchet Tranche 2 stop to BE (+0.20% buffer)
+
+                    if pos.t1_banked:
+                        # Tranche 2 is trailing with 3.0x ATR ceiling or 36H time stop
+                        trail_ceil = pos.trough_p + (3.0 * atr_val)
+                        if p_high >= pos.hard_stop:
+                            exit_p = pos.hard_stop; exit_reason = "RUNNER_BE_STOP"; exited = True
+                        elif p_high >= trail_ceil:
+                            exit_p = trail_ceil; exit_reason = "RUNNER_TRAIL_ATR"; exited = True
+                        elif pos.bars_held >= 144:
+                            exit_p = p_close; exit_reason = "RUNNER_TIME_STOP_36H"; exited = True
+                    else:
+                        if p_high >= pos.hard_stop:
+                            exit_p = pos.hard_stop; exit_reason = "HARD_STOP"; exited = True
+                        elif favorable_pct >= 1.80:
+                            pos.hard_stop = min(pos.hard_stop, entry_p * 0.9980)
+                            if p_high >= pos.hard_stop:
+                                exit_p = pos.hard_stop; exit_reason = "BE_PROTECTION"; exited = True
+                        elif pos.bars_held >= 48:
+                            exit_p = p_close; exit_reason = "TIME_STOP_STALL"; exited = True
+
                 else:
                     if pos.take_profit and p_low <= pos.take_profit:
                         exit_p = pos.take_profit; exit_reason = "TAKE_PROFIT_2PCT"; exited = True
@@ -300,6 +332,8 @@ class ConvictionEngineFutures:
                     telem['t1_banked'] = True
                     telem['t1_price'] = pos.t1_price
                     telem['t1_ret'] = pos.t1_ret
+                    ret2 = (entry_p - exit_p) / entry_p if pos.side == "SHORT" else (exit_p - entry_p) / entry_p
+                    telem['blended_pnl_pct'] = 0.5 * pos.t1_ret + 0.5 * ret2
 
                 self.active_position = None
                 return FuturesSignal(
@@ -365,6 +399,24 @@ class ConvictionEngineFutures:
                     {'vr': vr, 'clv': clv, 'dist_to_mid': dist_to_4h_mid, 'min_hurdle': min_hurdle},
                     None, eff_leverage, active_stop_pct
                 )
+
+        # Candidate Breakdown Short: TUNED_4H_BREAKDOWN_SHORT (Version 2.4.0 / Path A)
+        cand_breakdown_short = None
+        if is_bear_4h and (h4.get('ema50_slope', 0.0) <= 0.0005):
+            dist_to_ema50_pct = ((h4['ema50'] - p_close) / h4['ema50']) * 100.0 if h4.get('ema50', 0.0) > 0 else 0.0
+            # Macro Extension Guard <= 7.0%: Eliminates bottom-shorting when price is severely over-extended
+            if dist_to_ema50_pct <= 7.0:
+                if p_close < sl_48h:
+                    bd_depth = ((sl_48h - p_close) / sl_48h) * 100.0
+                    if 0.20 <= bd_depth <= 2.50:
+                        if vr >= 1.30 and body_pct <= -0.25 and clv <= 0.40:
+                            hard_stop = min(p_high * 1.0020, p_close * (1.0 + active_stop_pct))
+                            cand_breakdown_short = (
+                                "TUNED_4H_BREAKDOWN_SHORT", "SHORT", "FUTURES_SHORT",
+                                hard_stop, None, "4H_STRUCTURAL_BREAKDOWN",
+                                {'vr': vr, 'clv': clv, 'bd_depth': bd_depth, 'dist_to_ema50_pct': dist_to_ema50_pct},
+                                sl_48h, eff_leverage, active_stop_pct
+                            )
 
         cand_capitulation = None
         if p_low < sl_48h and p_close > sl_48h:
@@ -460,9 +512,11 @@ class ConvictionEngineFutures:
 
         if is_bull_1d:
             # Tactical Distribution Short Valve:
-            # If 4H is in active distribution during a bull pull-back, prioritize institutional short
+            # If 4H is in active distribution during a bull pull-back, prioritize institutional short or breakdown short
             if is_4h_dist and cand_short is not None:
                 chosen = cand_short
+            elif is_4h_dist and cand_breakdown_short is not None:
+                chosen = cand_breakdown_short
             else:
                 for c in [cand_capitulation, cand_sweep_24h, cand_breakout]:
                     if c is not None:
@@ -470,17 +524,19 @@ class ConvictionEngineFutures:
                         break
 
         elif is_bear_1d:
-            # Bear Playbook: Prioritize Short, allow deep 48H Capitulation flush reclaim
-            for c in [cand_short, cand_capitulation]:
+            # Bear Playbook: Prioritize Short, then Breakdown Short, then deep 48H Capitulation flush reclaim
+            for c in [cand_short, cand_breakdown_short, cand_capitulation]:
                 if c is not None:
                     chosen = c
                     break
 
         else:
             # Neutral / Chop Regime:
-            # If 4H distribution occurs, allow tactical distribution short; otherwise 100% Cash!
+            # If 4H distribution occurs, allow tactical distribution short or breakdown short; otherwise 100% Cash!
             if is_4h_dist and cand_short is not None:
                 chosen = cand_short
+            elif is_4h_dist and cand_breakdown_short is not None:
+                chosen = cand_breakdown_short
 
         if chosen is not None:
             setup_type = chosen[0]
