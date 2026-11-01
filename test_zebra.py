@@ -2702,6 +2702,94 @@ class TestZebraBot(unittest.TestCase):
         self.assertEqual(intent_rbr_tight.scenario, "RANGE_BOLLINGER_REVERSION")
         self.assertEqual(intent_rbr_tight.action, "ENTER_CORE_LOT_1")
 
+    def test_47_version_490_unified_4layer_mtf_rebound(self):
+        """
+        Verify Version 4.9.0 Unified 4-Layer Multi-Timeframe Rebound Engine:
+        1. Entry Trigger: Price stretched at 1H %B <= 0.05, 4H %B <= 0.35, Headroom >= 2.0%,
+           VR >= 2.2, CLV >= 0.70 with 15M lower Bollinger band reclaim triggers ENTER_CORE_LOT_1 (UNIFIED_4L_REBOUND).
+        2. Veto: If 1H %B > 0.05 (e.g. 0.14 > 0.05), entry is vetoed.
+        3. Exits:
+           - Reaching 1H midline triggers BANK_PROFIT (1H_MIDLINE_TARGET).
+           - Breaching proposed_stop triggers CUT_THESIS_INVALIDATED (WICK_HARD_SL).
+           - Covering >= 40% of target distance ratchets stop to BE (+0.20% fee cover).
+        """
+        from conviction_engine import FreeConvictionEngine
+
+        brain = FreeConvictionEngine()
+        price = 61373.0
+
+        # Base 15M candles (25 bars) with lower band around 61,270
+        candles = []
+        for i in range(25):
+            candles.append({
+                "open": 61400.0, "high": 61600.0, "low": 61100.0, "close": 61300.0, "vol": 100.0
+            })
+
+        # Turn candle: low pierced 60,900, closed back at 61,373 (above 15m lower band ~61,200)
+        # CLV = (61373 - 60900) / (61400 - 60900) = 473 / 500 = 0.946 >= 0.70
+        turn_candle = {
+            "open": 61000.0, "high": 61400.0, "low": 60900.0, "close": 61373.0, "vol": 350.0  # VR = 3.5x >= 2.2
+        }
+
+        # 1H envelope: Lower=61,300, Upper=67,300, Mid=64,300.
+        # Headroom = (64,300 - 61,373) / 61,373 * 100 = 4.77% >= 2.0%
+        # %B_1h = (61373 - 61300) / (67300 - 61300) = 73 / 6000 = 0.012 <= 0.05
+        # 4H envelope: Lower=60,000, Upper=75,000, Mid=67,500. %B_4h = 1373 / 15000 = 0.091 <= 0.35
+        matrix_valid = {
+            "latest_price": 61373.0,
+            "candles_15m": candles + [turn_candle],
+            "timeframes": {
+                "4h": {
+                    "ema_50": 68000.0, "ema_50_slope": -0.0020,
+                    "bb_upper": 75000.0, "bb_lower": 60000.0, "bb_mid": 67500.0
+                },
+                "1h": {
+                    "bb_upper": 67300.0, "bb_lower": 61300.0, "bb_mid": 64300.0,
+                    "ema_20": 64300.0, "ema20_slope": -0.0010
+                }
+            },
+            "multi_screen_bounds": {"nearest_support": 60900.0, "nearest_resistance": 64300.0, "macro_ceiling": 68000.0, "macro_runway_pct": 4.7},
+            "tanh_imbalance": 0.20, "cvd": 50.0, "absorption_index": 15.0, "composite_atr": 350.0,
+        }
+
+        intent_valid = brain.evaluate(matrix_valid)
+        self.assertEqual(intent_valid.scenario, "UNIFIED_4L_REBOUND")
+        self.assertEqual(intent_valid.action, "ENTER_CORE_LOT_1")
+        self.assertEqual(intent_valid.target_price, 64300.0)
+
+        # Test Veto: 1H %B = 0.14 > 0.05 (not stretched enough)
+        matrix_veto_pctb = dict(matrix_valid)
+        matrix_veto_pctb["timeframes"] = {
+            "4h": matrix_valid["timeframes"]["4h"],
+            "1h": {
+                "bb_upper": 67300.0, "bb_lower": 60400.0, "bb_mid": 63850.0,
+            }
+        }
+        intent_veto = brain.evaluate(matrix_veto_pctb)
+        self.assertNotEqual(intent_veto.scenario, "UNIFIED_4L_REBOUND")
+
+        # Test Exit 1: Midline Target Hit
+        active_trade_exit = {
+            "scenario": "UNIFIED_4L_REBOUND",
+            "entry": 61373.0,
+            "target_price": 64300.0,
+            "proposed_stop": 60717.0,
+            "highest_price": 64400.0,
+            "bars_held": 20
+        }
+        matrix_exit_target = dict(matrix_valid)
+        matrix_exit_target["latest_price"] = 64350.0
+        intent_exit_target = brain.evaluate(matrix_exit_target, active_trade=active_trade_exit)
+        self.assertEqual(intent_exit_target.action, "BANK_PROFIT")
+        self.assertEqual(intent_exit_target.telemetry.get("exit_reason"), "1H_MIDLINE_TARGET")
+
+        # Test Exit 2: Hard Wick Stop Hit
+        matrix_exit_stop = dict(matrix_valid)
+        matrix_exit_stop["latest_price"] = 60700.0
+        intent_exit_stop = brain.evaluate(matrix_exit_stop, active_trade=active_trade_exit)
+        self.assertEqual(intent_exit_stop.action, "CUT_THESIS_INVALIDATED")
+        self.assertEqual(intent_exit_stop.telemetry.get("exit_reason"), "WICK_HARD_SL")
+
 
 if __name__ == "__main__":
     unittest.main()

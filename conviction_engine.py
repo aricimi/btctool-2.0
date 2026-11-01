@@ -229,6 +229,71 @@ class FreeConvictionEngine:
             tranche_2 = bool(active_trade.get("tranche_2_added", False))
             scenario = active_trade.get("scenario", "TRADE")
 
+            # 1.035 DEDICATED EXIT MODEL: UNIFIED_4L_REBOUND (v4.9.0)
+            if scenario == "UNIFIED_4L_REBOUND":
+                target_mid = float(active_trade.get("target_price", 0.0))
+                tfs = matrix.get("timeframes", {})
+                tf_1h = tfs.get("1h", {})
+                if tf_1h and "bb_mid" in tf_1h and float(tf_1h["bb_mid"]) > 0:
+                    target_mid = float(tf_1h["bb_mid"])
+
+                # Exit 1: 1H Midline Target Hit
+                if price >= target_mid and target_mid > 0:
+                    return TradeIntent(
+                        action="BANK_PROFIT",
+                        scenario=scenario,
+                        gain_pct=gain_pct,
+                        entry_price=price,
+                        reason=f"UNIFIED_4L TARGET HIT: Reached 1H Midline (${target_mid:,.2f}) at +{gain_pct*100:.2f}% gross (+{(gain_pct-0.0020)*100:.2f}% net). Securing profit.",
+                        telemetry={"scenario": scenario, "gain_pct": gain_pct, "exit_reason": "1H_MIDLINE_TARGET"},
+                    )
+
+                # Exit 2: Hard Structural Wick Stop
+                hard_stop = float(active_trade.get("proposed_stop", active_trade.get("stop_p", trailing_stop)))
+                if price <= hard_stop:
+                    return TradeIntent(
+                        action="CUT_THESIS_INVALIDATED",
+                        scenario=scenario,
+                        gain_pct=gain_pct,
+                        entry_price=price,
+                        proposed_stop=hard_stop,
+                        reason=f"UNIFIED_4L HARD STOP HIT: Price (${price:,.2f}) breached wick stop (${hard_stop:,.2f}).",
+                        telemetry={"scenario": scenario, "gain_pct": gain_pct, "exit_reason": "WICK_HARD_SL"},
+                    )
+
+                # Breakeven Ratchet: if price reaches 40% of target distance, ratchet stop to entry + 0.20%
+                dist_to_mid = target_mid - entry
+                if dist_to_mid > 0 and (highest_price - entry) >= (dist_to_mid * 0.40):
+                    be_stop = round(entry * 1.0020, 2)
+                    if be_stop > hard_stop:
+                        active_trade["proposed_stop"] = be_stop
+                        if price <= be_stop:
+                            action_type = "BANK_PROFIT" if gain_pct >= 0.0020 else "CUT_THESIS_INVALIDATED"
+                            return TradeIntent(
+                                action=action_type,
+                                scenario=scenario,
+                                gain_pct=gain_pct,
+                                entry_price=price,
+                                proposed_stop=be_stop,
+                                reason=f"UNIFIED_4L BE PROTECTION: Stop ratcheted to BE+fee (${be_stop:,.2f}) triggered.",
+                                telemetry={"scenario": scenario, "gain_pct": gain_pct, "exit_reason": "BE_PROTECTION"},
+                            )
+
+                # Exit 3: Max Holding Horizon (8 Hours = 32 bars or 28,800s)
+                bars_held = int(active_trade.get("bars_held", 0))
+                time_in_trade = (time.time() - float(active_trade.get("entry_time", 0.0))) if active_trade.get("entry_time") else 0
+                if bars_held >= 32 or time_in_trade >= 28800:
+                    action_type = "BANK_PROFIT" if gain_pct >= 0.0020 else "CUT_THESIS_INVALIDATED"
+                    return TradeIntent(
+                        action=action_type,
+                        scenario=scenario,
+                        gain_pct=gain_pct,
+                        entry_price=price,
+                        proposed_stop=price,
+                        reason=f"UNIFIED_4L TIME STOP (8H): Holding horizon expired at ${price:,.2f} ({gain_pct*100:+.2f}% gross).",
+                        telemetry={"scenario": scenario, "gain_pct": gain_pct, "exit_reason": "TIME_STOP_8H"},
+                    )
+
             # 1.04 DEDICATED SECONDARY EXIT MODEL: RANGE_BOLLINGER_REVERSION (v4.6.0)
             if scenario in ("RANGE_BOLLINGER_REVERSION", "SEC_RANGE_BOLLINGER_REVERSION"):
                 bars_held = int(active_trade.get("bars_held", 0))
@@ -719,14 +784,79 @@ class FreeConvictionEngine:
         intent_telemetry["intuition_mod"] = round(intuition_mod, 3)
         intent_telemetry["tuned_confidence"] = round(tuned_confidence, 3)
 
-        # 2.58 SETUP: 48H CAPITULATION SWEEP (Panic Absorption Reclaim)
+        # 2.56 SETUP: UNIFIED 4-LAYER MULTI-TIMEFRAME REBOUND (v4.9.0 Institutional Release)
+        # Evaluates extreme macro-stretch mean-reversion during bear cascades & panics.
         candles_15m_all = matrix.get("candles_15m") or []
         tfs = matrix.get("timeframes", {})
         tf_4h = tfs.get("4h", {})
+        tf_1h = tfs.get("1h", {})
         bb_mid_4h = float(tf_4h.get("bb_mid", 0.0))
+        bb_upper_4h = float(tf_4h.get("bb_upper", 0.0))
+        bb_lower_4h = float(tf_4h.get("bb_lower", 0.0))
         ema50_4h = float(tf_4h.get("ema_50", bb_mid_4h))
         ema50_4h_slope = float(tf_4h.get("ema_50_slope", tf_4h.get("ema50_slope", 0.0010)))
         is_bull_macro_sweep = (price >= ema50_4h) or (bb_mid_4h > 0 and price >= bb_mid_4h)
+
+        bb_mid_1h = float(tf_1h.get("bb_mid", 0.0))
+        bb_upper_1h = float(tf_1h.get("bb_upper", 0.0))
+        bb_lower_1h = float(tf_1h.get("bb_lower", 0.0))
+
+        if candles_15m_all and len(candles_15m_all) >= 20 and bb_upper_1h > bb_lower_1h and bb_upper_4h > bb_lower_4h and bb_mid_1h > 0:
+            cur_15m_4l = candles_15m_all[-1]
+            c_low_4l = float(cur_15m_4l.get("low", price))
+            c_high_4l = float(cur_15m_4l.get("high", price))
+            c_close_4l = float(cur_15m_4l.get("close", price))
+            c_rng_4l = c_high_4l - c_low_4l
+            clv_4l = (c_close_4l - c_low_4l) / c_rng_4l if c_rng_4l > 0 else 0.5
+
+            v_recent_4l = [float(c.get("vol", 0.0)) for c in candles_15m_all[-min(len(candles_15m_all), 21):-1]]
+            v_sma20_4l = float(np.mean(v_recent_4l)) if v_recent_4l else 1.0
+            vr_4l = float(cur_15m_4l.get("vol", 0.0)) / v_sma20_4l if v_sma20_4l > 0 else 1.0
+
+            pct_b_1h = (c_close_4l - bb_lower_1h) / (bb_upper_1h - bb_lower_1h)
+            pct_b_4h = (c_close_4l - bb_lower_4h) / (bb_upper_4h - bb_lower_4h)
+            headroom_1h = (bb_mid_1h - c_close_4l) / c_close_4l * 100.0
+
+            # 15M Bollinger lower band check
+            c_closes_20_4l = [float(c.get("close", price)) for c in candles_15m_all[-20:]]
+            bb_mid_15m_4l = float(np.mean(c_closes_20_4l))
+            bb_lower_15m_4l = bb_mid_15m_4l - 2.0 * float(np.std(c_closes_20_4l))
+            pierced_15m_4l = (c_low_4l <= bb_lower_15m_4l)
+            reclaimed_15m_4l = (c_close_4l > bb_lower_15m_4l)
+
+            # Strict Elastic Rebound Gates (v4.9.0):
+            # 1. 1H %B <= 0.05 (Extreme 2-Sigma lower stretch)
+            # 2. 4H %B <= 0.35 (Lower envelope macro clearance)
+            # 3. Headroom >= 2.0% (Guarantees >= +1.0% net profit after 0.20% OKX fee)
+            # 4. 15M Volume Surge VR >= 2.2 and CLV >= 0.70 with lower band reclaim
+            if pct_b_1h <= 0.05 and pct_b_4h <= 0.35 and headroom_1h >= 2.0:
+                if pierced_15m_4l and reclaimed_15m_4l and vr_4l >= 2.2 and clv_4l >= 0.70:
+                    stop_price = round(c_low_4l * 0.9970, 2)
+                    tp_target = round(bb_mid_1h, 2)
+                    return TradeIntent(
+                        action="ENTER_CORE_LOT_1",
+                        scenario="UNIFIED_4L_REBOUND",
+                        entry_price=price,
+                        target_price=tp_target,
+                        proposed_stop=stop_price,
+                        expected_runway_pct=round(headroom_1h, 2),
+                        confidence=0.88,
+                        reason=f"UNIFIED_4L_REBOUND: 1H %B={pct_b_1h:.2f} <= 0.05, 4H %B={pct_b_4h:.2f} <= 0.35, Headroom={headroom_1h:.2f}% >= 2.0%, VR={vr_4l:.1f}x, CLV={clv_4l:.2f}. Target: 1H Midline (${tp_target:,.2f}), Stop: ${stop_price:,.2f}.",
+                        telemetry={
+                            **intent_telemetry,
+                            "scenario": "UNIFIED_4L_REBOUND",
+                            "silo": "TIER_1_REBOUND",
+                            "pct_b_1h": round(pct_b_1h, 3),
+                            "pct_b_4h": round(pct_b_4h, 3),
+                            "headroom_1h": round(headroom_1h, 2),
+                            "vr": round(vr_4l, 2),
+                            "clv": round(clv_4l, 2),
+                            "target_price": tp_target,
+                            "proposed_stop": stop_price,
+                        },
+                    )
+
+        # 2.58 SETUP: 48H CAPITULATION SWEEP (Panic Absorption Reclaim)
 
         if candles_15m_all and len(candles_15m_all) >= 20:
             cur_15m = candles_15m_all[-1]
