@@ -89,10 +89,10 @@ class TestConvictionEngineFutures(unittest.TestCase):
         self.assertEqual(sig.side, "SHORT")
         self.assertEqual(sig.price, 81400.0)
 
-    def test_05_short_take_profit_execution(self):
-        # Put engine in active short position at 80,000, TP at 78,500
+    def test_05_generic_short_take_profit_execution(self):
+        # Put engine in active generic short position at 80,000, TP at 78,500
         self.engine.active_position = FuturesPosition(
-            side="SHORT", type="SHORT_4H_UPPER_BB_REJECT", silo="FUTURES_SHORT",
+            side="SHORT", type="GENERIC_SHORT", silo="FUTURES_SHORT",
             entry_idx=100, entry_t="2026-02-01 12:00", entry_p=80000.0,
             hard_stop=81200.0, take_profit=78500.0, trough_p=80000.0, leverage=2.5
         )
@@ -247,6 +247,92 @@ class TestConvictionEngineFutures(unittest.TestCase):
         sig_b = engine_b.evaluate_bar(200, cur_bar_pass, prev_bars, mtf_data)
         self.assertEqual(sig_b.action, "ENTER_LONG")
         self.assertEqual(sig_b.setup_type, "SWEEP_24H_RECLAIM")
+
+    def test_12_short_runner_valve_rec_1(self):
+        # Recommendation 1: Asymmetric Short Runner Valve
+        # When in SHORT_4H_UPPER_BB_REJECT entered at 80,000:
+        # Phase 1: Price reaches +2.0% profit target (80,000 * 0.98 = 78,400)
+        # -> Banks Tranche 1 (50%), ratchets stop to BE (+0.20% buffer: 79,840), and stays in position (HOLD, RUNNER_ACTIVE)
+        self.engine.active_position = FuturesPosition(
+            side="SHORT", type="SHORT_4H_UPPER_BB_REJECT", silo="FUTURES_SHORT",
+            entry_idx=100, entry_t="2026-02-01 12:00", entry_p=80000.0,
+            hard_stop=81200.0, take_profit=78400.0, trough_p=80000.0, leverage=2.5
+        )
+        cur_bar_t1 = {'open': 79000.0, 'high': 79200.0, 'low': 78400.0, 'close': 78600.0, 'vol': 100.0, 'ts': 1762001000}
+        prev_bars = [{'high': 80000.0, 'low': 78500.0, 'close': 79000.0} for _ in range(50)]
+        mtf_data_hold = {
+            '1d': {'close': 78600.0, 'ema50': 85000.0, 'ema50_slope': -0.002},
+            '4h': {'close': 78600.0, 'high': 80000.0, 'low': 78400.0, 'ema50': 83000.0, 'ema50_slope': -0.002, 'bb_mid': 78500.0, 'bb_upper': 81000.0, 'bb_lower': 76000.0},
+            '1h': {'close': 78600.0, 'ema20': 79000.0, 'ema20_slope': -0.001, 'bb_mid': 79000.0, 'bb_upper': 80000.0, 'bb_lower': 78000.0},
+            '15m': {'atr': 400.0, 'vol_sma20': 150.0, 'rsi': 40.0, 'bb_mid': 78900.0, 'bb_upper': 79500.0, 'bb_lower': 78300.0}
+        }
+        sig_t1 = self.engine.evaluate_bar(105, cur_bar_t1, prev_bars, mtf_data_hold)
+        self.assertEqual(sig_t1.action, "HOLD")
+        self.assertEqual(sig_t1.reason, "RUNNER_ACTIVE")
+        self.assertTrue(self.engine.active_position.t1_banked)
+        self.assertEqual(self.engine.active_position.t1_ret, 0.020)
+        self.assertAlmostEqual(self.engine.active_position.hard_stop, 79840.0, places=1)
+
+        # Phase 2: Tranche 2 trails until 1H EMA20 crossover
+        # Bar 107 is 1H close (107 % 4 == 3). 1H close (79,200) > 1H EMA20 (79,000)
+        cur_bar_exit = {'open': 78800.0, 'high': 79300.0, 'low': 78700.0, 'close': 79200.0, 'vol': 120.0, 'ts': 1762004000}
+        mtf_data_exit = {
+            '1d': {'close': 79200.0, 'ema50': 85000.0, 'ema50_slope': -0.002},
+            '4h': {'close': 79200.0, 'high': 80000.0, 'low': 78400.0, 'ema50': 83000.0, 'ema50_slope': -0.002, 'bb_mid': 78500.0, 'bb_upper': 81000.0, 'bb_lower': 76000.0},
+            '1h': {'close': 79200.0, 'ema20': 79000.0, 'ema20_slope': -0.001, 'bb_mid': 79000.0, 'bb_upper': 80000.0, 'bb_lower': 78000.0},
+            '15m': {'atr': 400.0, 'vol_sma20': 150.0, 'rsi': 48.0, 'bb_mid': 78900.0, 'bb_upper': 79500.0, 'bb_lower': 78300.0}
+        }
+        sig_exit = self.engine.evaluate_bar(107, cur_bar_exit, prev_bars, mtf_data_exit)
+        self.assertEqual(sig_exit.action, "EXIT_SHORT")
+        self.assertEqual(sig_exit.reason, "RUNNER_1H_EMA20_EXIT")
+        self.assertTrue(sig_exit.telemetry['t1_banked'])
+        self.assertEqual(sig_exit.telemetry['t1_ret'], 0.020)
+        self.assertIsNone(self.engine.active_position)
+
+    def test_13_volatility_sizing_and_dynamic_risk_budget_rec_3(self):
+        # Recommendation 3: Volatility-Adjusted Sizing & Dynamic Risk Budget
+        # Case A: Low Volatility (Tight Coil, ATR% = 0.40% <= 0.48%) -> Leverage scales to 3.125x max,
+        # and Dynamic Risk Budget clamps stop loss to 1.20% (0.0375 / 3.125 = 0.0120), capping equity risk to 3.75%.
+        # ts = 1762172800 is Monday (weekday, not blocked by weekend filter)
+        cur_bar_coil = {'open': 79950.0, 'high': 80250.0, 'low': 79900.0, 'close': 80220.0, 'vol': 800.0, 'ts': 1762172800}
+        prev_bars = [{'high': 80000.0, 'low': 78000.0, 'close': 79900.0} for _ in range(200)] # 48H high is 80000, low is 78000 (range = 2.56% >= 2.0%)
+        # atr = 320.88 at price 80,220 -> atr_pct = 320.88 / 80220 * 100 = 0.40%
+        # size_scale = min(1.25, 0.60 / 0.40 = 1.50) = 1.25 -> eff_leverage = 2.5 * 1.25 = 3.125x
+        # active_stop_pct = min(0.015, 0.0375 / 3.125) = 0.0120 (1.20%)
+        mtf_data_coil = {
+            '1d': {'close': 80220.0, 'ema50': 75000.0, 'ema50_slope': +0.005},
+            '4h': {'close': 80220.0, 'high': 82000.0, 'low': 78000.0, 'ema50': 78000.0, 'ema50_slope': +0.003,
+                   'bb_mid': 79000.0, 'bb_upper': 82500.0, 'bb_lower': 77000.0},
+            '1h': {'close': 80220.0, 'ema20': 79500.0, 'ema20_slope': +0.002, 'bb_mid': 79500.0, 'bb_upper': 80500.0, 'bb_lower': 78500.0},
+            '15m': {'atr': 320.88, 'vol_sma20': 200.0, 'rsi': 60.0, 'bb_mid': 79800.0, 'bb_upper': 80400.0, 'bb_lower': 79200.0}
+        }
+        engine_coil = ConvictionEngineFutures(leverage=2.5, fee_rt=0.0006)
+        sig_coil = engine_coil.evaluate_bar(200, cur_bar_coil, prev_bars, mtf_data_coil)
+        self.assertEqual(sig_coil.action, "ENTER_LONG")
+        self.assertEqual(sig_coil.setup_type, "MACRO_BREAK_48H")
+        self.assertAlmostEqual(sig_coil.leverage, 3.125, places=3)
+        self.assertAlmostEqual(sig_coil.telemetry['active_stop_pct'], 0.0120, places=4)
+        # Verify hard_stop price is exactly 1.20% below close: 80220 * (1 - 0.0120)
+        self.assertAlmostEqual(sig_coil.hard_stop, 80220.0 * 0.9880, places=1)
+        # Verify max single trade equity risk is strictly capped at 3.75%:
+        equity_risk = sig_coil.leverage * sig_coil.telemetry['active_stop_pct']
+        self.assertAlmostEqual(equity_risk, 0.0375, places=4)
+
+        # Case B: High Volatility (Chaotic wicks, ATR% = 1.0%) -> Leverage scales to 1.75x min,
+        # and Dynamic Risk Budget maintains stop loss at base 1.50%.
+        # atr = 802.2 at price 80,220 -> atr_pct = 1.0%
+        # size_scale = max(0.70, 0.60 / 1.00 = 0.60) = 0.70 -> eff_leverage = 2.5 * 0.70 = 1.75x
+        # active_stop_pct = min(0.015, 0.0375 / 1.75 = 0.0214) = 0.0150 (1.50%)
+        mtf_data_high_vol = dict(mtf_data_coil)
+        mtf_data_high_vol['15m'] = dict(mtf_data_coil['15m'])
+        mtf_data_high_vol['15m']['atr'] = 802.2
+        engine_high_vol = ConvictionEngineFutures(leverage=2.5, fee_rt=0.0006)
+        sig_high_vol = engine_high_vol.evaluate_bar(200, cur_bar_coil, prev_bars, mtf_data_high_vol)
+        self.assertEqual(sig_high_vol.action, "ENTER_LONG")
+        self.assertAlmostEqual(sig_high_vol.leverage, 1.75, places=3)
+        self.assertAlmostEqual(sig_high_vol.telemetry['active_stop_pct'], 0.0150, places=4)
+        equity_risk_high_vol = sig_high_vol.leverage * sig_high_vol.telemetry['active_stop_pct']
+        self.assertTrue(equity_risk_high_vol <= 0.0375)
 
 
 if __name__ == "__main__":
