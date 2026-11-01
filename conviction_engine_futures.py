@@ -1,11 +1,12 @@
 """
-conviction_engine_futures.py — Institutional Bidirectional Futures Engine (btctool 2.0 / BTC_BOT 2.1)
+conviction_engine_futures.py — Institutional Bidirectional Futures Engine (btctool 2.0 / BTC_BOT 2.2)
+Architecture: Candidate 2 (Pure Core Alpha Engine)
 Target Instrument: OKX BTC-USDT-SWAP (Perpetual Futures)
 Margin Architecture: Isolated Margin (Default 2.5x Leverage)
 Execution Philosophy:
-- Master Switch Architecture: Mutually exclusive Playbooks (Bull, Bear, Neutral Chop).
-- Certified Version 5.0.0 Global Vision Multi-Timeframe Synthesis on Long Silos.
-- Forensic Alpha Reversal Engine on Short Silos (`SHORT_4H_UPPER_BB_REJECT`).
+- Master Switch Architecture with Tactical 4H Distribution Short Valve.
+- Pure Institutional Core: Breakouts (48H, 24H, 12H), Liquidity Sweeps (24H, 48H Capitulation), and 4H Distribution Shorts.
+- Mean-Reversion Knife-Catching (`UNIFIED_4L_REBOUND`) and Chop Scalping (`RANGE_BOLLINGER_REVERSION`) Permanently Pruned.
 - Strict fee friction modeling: 0.06% round-trip OKX Futures taker/maker blend.
 - Isolated liquidation buffer defense: 2.5x leverage places liquidation >38% away,
   while maximum stop-loss is strictly capped at 1.50% (25x safety margin).
@@ -27,8 +28,8 @@ DEFAULT_ISOLATED_LEVERAGE = 2.5         # 2.5x Isolated Margin Leverage
 @dataclass
 class FuturesPosition:
     side: str                         # "LONG" or "SHORT"
-    type: str                         # Setup identifier (e.g. "UNIFIED_4L_REBOUND", "SHORT_4H_UPPER_BB_REJECT")
-    silo: str                         # "TIER_1_REBOUND", "CORE_v450", "SECONDARY_RBR", "FUTURES_SHORT"
+    type: str                         # Setup identifier (e.g. "MACRO_BREAK_48H", "SHORT_4H_UPPER_BB_REJECT")
+    silo: str                         # "CORE_v450", "FUTURES_SHORT"
     entry_idx: int
     entry_t: str
     entry_p: float
@@ -65,7 +66,7 @@ class FuturesSignal:
 class ConvictionEngineFutures:
     """
     Autonomous Multi-Timeframe Bidirectional Futures Engine.
-    Operates in isolated margin on BTC-USDT-SWAP with Top-Level Master Switch Routing.
+    Operates in isolated margin on BTC-USDT-SWAP with Pure Core Alpha Master Switch Architecture.
     """
 
     def __init__(self, leverage: float = DEFAULT_ISOLATED_LEVERAGE, fee_rt: float = OKX_FUTURES_ROUNDTRIP_FEE_PCT):
@@ -134,6 +135,7 @@ class ConvictionEngineFutures:
         is_bear_1d = (p_close < d1['ema50']) and (d1['ema50_slope'] < 0.0)
         is_bull_4h = p_close > h4['ema50']
         is_bear_4h = p_close < h4['ema50']
+        is_4h_dist = is_bear_4h and (h4.get('ema50_slope', 0.0) < -0.0005)
 
         # Time helpers
         ts = b.get('ts', 0)
@@ -175,23 +177,7 @@ class ConvictionEngineFutures:
                     pos.peak_p = p_high
                 peak_gain_pct = ((pos.peak_p - entry_p) / entry_p) * 100.0
 
-                if pos.type == 'UNIFIED_4L_REBOUND':
-                    target_midline = h1['bb_mid']
-                    if p_high >= target_midline:
-                        exit_p = target_midline; exit_reason = "1H_MIDLINE_TARGET"; exited = True
-                    elif p_low <= pos.hard_stop:
-                        exit_p = pos.hard_stop; exit_reason = "WICK_HARD_SL"; exited = True
-                    else:
-                        dist_to_mid = target_midline - entry_p
-                        if (pos.peak_p - entry_p) >= (dist_to_mid * 0.40):
-                            be_stop = entry_p * 1.0020
-                            pos.hard_stop = max(pos.hard_stop, be_stop)
-                            if p_low <= pos.hard_stop:
-                                exit_p = pos.hard_stop; exit_reason = "BE_PROTECTION"; exited = True
-                        elif pos.bars_held >= 32:
-                            exit_p = p_close; exit_reason = "TIME_STOP_8H"; exited = True
-
-                elif pos.type == 'SWEEP_24H_RECLAIM':
+                if pos.type == 'SWEEP_24H_RECLAIM':
                     if (p_high - entry_p) >= (2.0 * atr_val):
                         pos.hard_stop = max(pos.hard_stop, entry_p * 1.002)
                     tp_p = entry_p + (2.5 * atr_val)
@@ -217,17 +203,6 @@ class ConvictionEngineFutures:
                             exited = True
                         elif pos.trail_floor and p_low <= pos.trail_floor:
                             exit_p = pos.trail_floor; exit_reason = "TRAILING_ATR"; exited = True
-
-                elif pos.type == 'RANGE_BOLLINGER_REVERSION':
-                    target_p = m15['bb_mid']
-                    if p_high >= target_p:
-                        exit_p = target_p; exit_reason = "BOLLINGER_MID_TARGET"; exited = True
-                    elif p_low <= pos.hard_stop:
-                        exit_p = pos.hard_stop; exit_reason = "STRUCTURAL_BAND_STOP"; exited = True
-                    elif pos.bars_held >= 8 and (p_close - entry_p) / entry_p < 0.0025:
-                        exit_p = p_close; exit_reason = "EARLY_VELOCITY_STOP_2H"; exited = True
-                    elif pos.bars_held >= 16:
-                        exit_p = p_close; exit_reason = "TIME_STOP_4H"; exited = True
 
                 else: # Breakout runners (MACRO_BREAK_48H, BREAK_24H, BREAK_12H)
                     if pos.type == 'MACRO_BREAK_48H':
@@ -313,316 +288,189 @@ class ConvictionEngineFutures:
             )
 
         # =====================================================================
-        # 2. CANDIDATE EVALUATION: THE MASTER REGIME SWITCH (When FLAT)
+        # 2. CANDIDATE EVALUATION: THE PURE CORE MASTER REGIME SWITCH (When FLAT)
         # =====================================================================
-        # Shared MTF Envelope checks
-        w_1h = max(1e-5, h1['bb_upper'] - h1['bb_lower'])
-        pct_b_1h = (p_close - h1['bb_lower']) / w_1h
-        w_4h = max(1e-5, h4['bb_upper'] - h4['bb_lower'])
-        pct_b_4h = (p_close - h4['bb_lower']) / w_4h
-        headroom_1h = ((h1['bb_mid'] - p_close) / p_close) * 100.0
 
-        pass_envelopes = (pct_b_1h <= 0.05) and (pct_b_4h <= 0.35) and (headroom_1h >= 2.0)
-        pass_micro = (p_low < m15['bb_lower']) and (p_close > m15['bb_lower'])
-        pass_vol_clv = (vr >= 2.5) and (clv >= 0.75)
-
-        # ---------------------------------------------------------------------
-        # PLAYBOOK A: BULL REGIME (1D EMA50 Sloping Up & Price Above EMA50)
-        # Objective: Ride macro wave expansions and high-runway dips.
-        # Shorts are 100% physically unreachable and disabled in this branch.
-        # ---------------------------------------------------------------------
-        if is_bull_1d:
-            # 1. UNIFIED_4L_REBOUND
-            if pass_envelopes and pass_micro and pass_vol_clv:
-                hard_stop = p_low * 0.9970
-                tp_target = h1['bb_mid']
-                liq_p = self.calculate_liquidation_price(p_close, "LONG", self.leverage)
-                self.active_position = FuturesPosition(
-                    side="LONG", type="UNIFIED_4L_REBOUND", silo="TIER_1_REBOUND",
-                    entry_idx=bar_idx, entry_t=dt, entry_p=p_close, hard_stop=hard_stop,
-                    trail_floor=hard_stop, take_profit=tp_target, peak_p=p_close,
-                    leverage=self.leverage, rsi_entry=m15['rsi'], vr_entry=vr, dist_ema50=dist_ema
-                )
-                return FuturesSignal(
-                    action="ENTER_LONG", setup_type="UNIFIED_4L_REBOUND", side="LONG",
-                    price=p_close, hard_stop=hard_stop, take_profit=tp_target,
-                    leverage=self.leverage, liquidation_estimate=liq_p,
-                    reason="BULL_PLAYBOOK_UNIFIED_4L_REBOUND",
-                    telemetry={'headroom_1h': headroom_1h, 'pct_b_1h': pct_b_1h}
+        # Candidate Trigger Evaluators:
+        cand_short = None
+        if is_bear_4h:
+            touch_upper_4h = p_high >= (h4['bb_upper'] * 0.998)
+            bear_reversal = (p_close < p_open) and (clv <= 0.40)
+            dist_to_4h_mid = ((p_close - h4['bb_mid']) / p_close) * 100.0
+            if touch_upper_4h and bear_reversal and (dist_to_4h_mid >= 1.20):
+                hard_stop = min(p_high * 1.0030, p_close * 1.0150)
+                tp_target = p_close * 0.980 # 2.0% fixed target
+                cand_short = (
+                    "SHORT_4H_UPPER_BB_REJECT", "SHORT", "FUTURES_SHORT",
+                    hard_stop, tp_target, "4H_UPPER_BB_REJECT",
+                    {'vr': vr, 'clv': clv, 'dist_to_mid': dist_to_4h_mid}
                 )
 
-            # 2. CAPITULATION_SWEEP_48H
-            if p_low < sl_48h and p_close > sl_48h:
-                if vr >= 2.5 and body_pct >= 0.20 and clv >= 0.70:
-                    take_sweep = is_bull_4h or (vr >= 3.5)
-                    depth_gate = dist_ema <= -1.0
-                    quality_gate = (vr >= 4.5) or (dist_ema <= -2.5)
-                    is_london_ny = (11 <= dt_obj.hour <= 15) or (dt_obj.hour == 16 and dt_obj.minute == 0)
-                    inst_cap_gate = (vr >= 10.0) or (candle_body_pct >= 60.0 and is_london_ny)
-                    if depth_gate and quality_gate and inst_cap_gate and take_sweep:
-                        hard_stop = p_close * (1.0 - self.base_stop_pct)
-                        liq_p = self.calculate_liquidation_price(p_close, "LONG", self.leverage)
-                        self.active_position = FuturesPosition(
-                            side="LONG", type="CAPITULATION_SWEEP_48H", silo="CORE_v450",
-                            entry_idx=bar_idx, entry_t=dt, entry_p=p_close, hard_stop=hard_stop,
-                            trail_floor=p_close - (self.trail_atr_mult * atr_val), peak_p=p_close,
-                            leverage=self.leverage, rsi_entry=m15['rsi'], vr_entry=vr, dist_ema50=dist_ema
+        cand_capitulation = None
+        if p_low < sl_48h and p_close > sl_48h:
+            if vr >= 2.5 and body_pct >= 0.20 and clv >= 0.70:
+                take_sweep = is_bull_4h or (vr >= 3.5)
+                depth_gate = dist_ema <= -1.0
+                quality_gate = (vr >= 4.5) or (dist_ema <= -2.5)
+                is_london_ny = (11 <= dt_obj.hour <= 15) or (dt_obj.hour == 16 and dt_obj.minute == 0)
+                inst_cap_gate = (vr >= 10.0) or (candle_body_pct >= 60.0 and is_london_ny)
+                if depth_gate and quality_gate and inst_cap_gate and take_sweep:
+                    hard_stop = p_close * (1.0 - self.base_stop_pct)
+                    cand_capitulation = (
+                        "CAPITULATION_SWEEP_48H", "LONG", "CORE_v450",
+                        hard_stop, None, "CAPITULATION_SWEEP_48H",
+                        {'vr': vr, 'clv': clv}
+                    )
+
+        cand_sweep_24h = None
+        if is_bull_4h:
+            if p_low < sl_24h and p_close > sl_24h:
+                if vr >= 2.5 and clv >= 0.80 and body_pct >= -0.10:
+                    in_asian_dead_zone = (90 <= entry_minutes <= 210)
+                    asian_pass = True
+                    if in_asian_dead_zone:
+                        asian_pass = (h1['ema20_slope'] > 0.0) and (candle_body_pct >= 25.0)
+
+                    if asian_pass:
+                        hard_stop = min(p_low * 0.998, p_close * (1.0 - self.base_stop_pct))
+                        tp_target = p_close + (2.5 * atr_val)
+                        cand_sweep_24h = (
+                            "SWEEP_24H_RECLAIM", "LONG", "CORE_v450",
+                            hard_stop, tp_target, "SWEEP_24H_RECLAIM",
+                            {'vr': vr, 'clv': clv}
                         )
-                        return FuturesSignal(
-                            action="ENTER_LONG", setup_type="CAPITULATION_SWEEP_48H", side="LONG",
-                            price=p_close, hard_stop=hard_stop, take_profit=None,
-                            leverage=self.leverage, liquidation_estimate=liq_p,
-                            reason="BULL_PLAYBOOK_CAPITULATION_SWEEP_48H",
-                            telemetry={'vr': vr, 'clv': clv}
-                        )
 
-            # 3. SWEEP_24H_RECLAIM
-            if is_bull_4h:
-                if p_low < sl_24h and p_close > sl_24h:
-                    if vr >= 2.5 and clv >= 0.80 and body_pct >= -0.10:
-                        in_asian_dead_zone = (90 <= entry_minutes <= 210)
-                        asian_pass = True
-                        if in_asian_dead_zone:
-                            asian_pass = (h1['ema20_slope'] > 0.0) and (candle_body_pct >= 25.0)
+        cand_breakout = None
+        if not is_weekend:
+            in_breakout_cooldown = (bar_idx - self.last_failed_breakout_bar < 48)
+            if not in_breakout_cooldown:
+                res_4h = h4['high']
+                headroom = ((res_4h - p_close) / p_close) * 100.0
 
-                        if asian_pass:
-                            hard_stop = min(p_low * 0.998, p_close * (1.0 - self.base_stop_pct))
-                            tp_target = p_close + (2.5 * atr_val)
-                            liq_p = self.calculate_liquidation_price(p_close, "LONG", self.leverage)
-                            self.active_position = FuturesPosition(
-                                side="LONG", type="SWEEP_24H_RECLAIM", silo="CORE_v450",
-                                entry_idx=bar_idx, entry_t=dt, entry_p=p_close, hard_stop=hard_stop,
-                                trail_floor=p_close - (self.trail_atr_mult * atr_val),
-                                take_profit=tp_target, peak_p=p_close, leverage=self.leverage,
-                                rsi_entry=m15['rsi'], vr_entry=vr, dist_ema50=dist_ema
-                            )
-                            return FuturesSignal(
-                                action="ENTER_LONG", setup_type="SWEEP_24H_RECLAIM", side="LONG",
-                                price=p_close, hard_stop=hard_stop, take_profit=tp_target,
-                                leverage=self.leverage, liquidation_estimate=liq_p,
-                                reason="BULL_PLAYBOOK_SWEEP_24H_RECLAIM",
-                                telemetry={'vr': vr, 'clv': clv}
-                            )
-
-            # 4. BREAKOUT SUITE (MACRO_BREAK_48H, BREAK_24H, BREAK_12H)
-            if not is_weekend:
-                in_breakout_cooldown = (bar_idx - self.last_failed_breakout_bar < 48)
-                if not in_breakout_cooldown:
-                    res_4h = h4['high']
-                    headroom = ((res_4h - p_close) / p_close) * 100.0
-
-                    if is_bull_4h and clv >= 0.70:
-                        # 48H Breakout
-                        if p_close > sh_48h and prev_close <= sh_48h:
-                            if dist_ema >= 0.80 and h1['ema20_slope'] >= 0.0015 and range_48h_pct >= 2.0:
-                                if vr >= 2.2 and body_pct >= 0.25 and headroom >= 0.5:
-                                    hard_stop = p_close * (1.0 - self.base_stop_pct)
-                                    liq_p = self.calculate_liquidation_price(p_close, "LONG", self.leverage)
-                                    self.active_position = FuturesPosition(
-                                        side="LONG", type="MACRO_BREAK_48H", silo="CORE_v450",
-                                        entry_idx=bar_idx, entry_t=dt, entry_p=p_close, hard_stop=hard_stop,
-                                        trail_floor=p_close - (self.trail_atr_mult * atr_val), peak_p=p_close,
-                                        leverage=self.leverage, rsi_entry=m15['rsi'], vr_entry=vr, dist_ema50=dist_ema,
-                                        breakout_level=sh_48h
-                                    )
-                                    return FuturesSignal(
-                                        action="ENTER_LONG", setup_type="MACRO_BREAK_48H", side="LONG",
-                                        price=p_close, hard_stop=hard_stop, take_profit=None,
-                                        leverage=self.leverage, liquidation_estimate=liq_p,
-                                        reason="BULL_PLAYBOOK_48H_MACRO_BREAKOUT",
-                                        telemetry={'vr': vr, 'range_48h_pct': range_48h_pct}
-                                    )
-
-                        # 24H Breakout
-                        if p_close > sh_24h and prev_close <= sh_24h:
-                            overhead_ok = (((sh_48h - p_close) / p_close) >= 0.012) or (p_close >= sh_48h)
-                            slope_ok = (h1['ema20_slope'] >= 0.0020)
-                            if overhead_ok and slope_ok and vr >= 2.2 and body_pct >= 0.25 and headroom >= 0.8:
+                if is_bull_4h and clv >= 0.70:
+                    # 48H Breakout
+                    if p_close > sh_48h and prev_close <= sh_48h:
+                        if dist_ema >= 0.80 and h1['ema20_slope'] >= 0.0015 and range_48h_pct >= 2.0:
+                            if vr >= 2.2 and body_pct >= 0.25 and headroom >= 0.5:
                                 hard_stop = p_close * (1.0 - self.base_stop_pct)
-                                liq_p = self.calculate_liquidation_price(p_close, "LONG", self.leverage)
-                                self.active_position = FuturesPosition(
-                                    side="LONG", type="BREAK_24H", silo="CORE_v450",
-                                    entry_idx=bar_idx, entry_t=dt, entry_p=p_close, hard_stop=hard_stop,
-                                    trail_floor=p_close - (self.trail_atr_mult * atr_val), peak_p=p_close,
-                                    leverage=self.leverage, rsi_entry=m15['rsi'], vr_entry=vr, dist_ema50=dist_ema
-                                )
-                                return FuturesSignal(
-                                    action="ENTER_LONG", setup_type="BREAK_24H", side="LONG",
-                                    price=p_close, hard_stop=hard_stop, take_profit=None,
-                                    leverage=self.leverage, liquidation_estimate=liq_p,
-                                    reason="BULL_PLAYBOOK_24H_MOMENTUM_BREAKOUT",
-                                    telemetry={'vr': vr}
+                                cand_breakout = (
+                                    "MACRO_BREAK_48H", "LONG", "CORE_v450",
+                                    hard_stop, None, "48H_MACRO_BREAKOUT",
+                                    {'vr': vr, 'range_48h_pct': range_48h_pct},
+                                    sh_48h
                                 )
 
-                        # 12H Breakout
-                        if len(prev_bars_15m) >= 48:
-                            sh_12h = max(x['high'] for x in prev_bars_15m[-48:])
-                            if p_close > sh_12h and prev_close <= sh_12h:
-                                if vr >= 2.2 and body_pct >= 0.25 and headroom >= 1.0 and p_close <= m15['bb_upper']:
-                                    hard_stop = p_close * (1.0 - self.base_stop_pct)
-                                    liq_p = self.calculate_liquidation_price(p_close, "LONG", self.leverage)
-                                    self.active_position = FuturesPosition(
-                                        side="LONG", type="BREAK_12H", silo="CORE_v450",
-                                        entry_idx=bar_idx, entry_t=dt, entry_p=p_close, hard_stop=hard_stop,
-                                        trail_floor=p_close - (self.trail_atr_mult * atr_val), peak_p=p_close,
-                                        leverage=self.leverage, rsi_entry=m15['rsi'], vr_entry=vr, dist_ema50=dist_ema
-                                    )
-                                    return FuturesSignal(
-                                        action="ENTER_LONG", setup_type="BREAK_12H", side="LONG",
-                                        price=p_close, hard_stop=hard_stop, take_profit=None,
-                                        leverage=self.leverage, liquidation_estimate=liq_p,
-                                        reason="BULL_PLAYBOOK_12H_VELOCITY_BREAKOUT",
-                                        telemetry={'vr': vr}
-                                    )
+                    # 24H Breakout
+                    elif p_close > sh_24h and prev_close <= sh_24h:
+                        overhead_ok = (((sh_48h - p_close) / p_close) >= 0.012) or (p_close >= sh_48h)
+                        slope_ok = (h1['ema20_slope'] >= 0.0020)
+                        if overhead_ok and slope_ok and vr >= 2.2 and body_pct >= 0.25 and headroom >= 0.8:
+                            hard_stop = p_close * (1.0 - self.base_stop_pct)
+                            cand_breakout = (
+                                "BREAK_24H", "LONG", "CORE_v450",
+                                hard_stop, None, "24H_MOMENTUM_BREAKOUT",
+                                {'vr': vr},
+                                None
+                            )
 
-            # 5. RANGE_BOLLINGER_REVERSION (Bull Pullback compression)
-            is_flat_slope = abs(h1['ema20_slope']) <= 0.0015
-            is_compressed_48h = range_48h_pct <= 3.50
-            macro_ok = p_close > (h4['ema50'] * 0.97)
-            in_us_open = (750 <= entry_minutes <= 900)
-            us_open_pass = not in_us_open or (h1['ema20_slope'] >= 0.0)
-            in_asian_dead_zone = (60 <= entry_minutes <= 210)
-
-            if (is_flat_slope or is_compressed_48h) and macro_ok and us_open_pass and not in_asian_dead_zone:
-                pierced_lower = p_low <= m15['bb_lower']
-                closed_inside = p_close > m15['bb_lower']
-                runway_to_mid = ((m15['bb_mid'] - p_close) / p_close) * 100.0
-
-                if pierced_lower and closed_inside and (clv >= 0.50) and (m15['rsi'] <= 42.0) and (runway_to_mid >= 0.85):
-                    struct_stop = min(p_low * 0.998, p_close * 0.985)
-                    struct_stop = max(struct_stop, p_close * 0.988)
-                    tp_target = m15['bb_mid']
-                    liq_p = self.calculate_liquidation_price(p_close, "LONG", self.leverage)
-                    self.active_position = FuturesPosition(
-                        side="LONG", type="RANGE_BOLLINGER_REVERSION", silo="SECONDARY_RBR",
-                        entry_idx=bar_idx, entry_t=dt, entry_p=p_close, hard_stop=struct_stop,
-                        trail_floor=struct_stop, take_profit=tp_target, peak_p=p_close,
-                        leverage=self.leverage, rsi_entry=m15['rsi'], vr_entry=vr, dist_ema50=dist_ema
-                    )
-                    return FuturesSignal(
-                        action="ENTER_LONG", setup_type="RANGE_BOLLINGER_REVERSION", side="LONG",
-                        price=p_close, hard_stop=struct_stop, take_profit=tp_target,
-                        leverage=self.leverage, liquidation_estimate=liq_p,
-                        reason="BULL_PLAYBOOK_RANGE_BOLLINGER_REVERSION",
-                        telemetry={'runway_to_mid': runway_to_mid, 'rsi': m15['rsi']}
-                    )
+                    # 12H Breakout
+                    elif len(prev_bars_15m) >= 48:
+                        sh_12h = max(x['high'] for x in prev_bars_15m[-48:])
+                        if p_close > sh_12h and prev_close <= sh_12h:
+                            if vr >= 2.2 and body_pct >= 0.25 and headroom >= 1.0 and p_close <= m15['bb_upper']:
+                                hard_stop = p_close * (1.0 - self.base_stop_pct)
+                                cand_breakout = (
+                                    "BREAK_12H", "LONG", "CORE_v450",
+                                    hard_stop, None, "12H_VELOCITY_BREAKOUT",
+                                    {'vr': vr},
+                                    None
+                                )
 
         # ---------------------------------------------------------------------
-        # PLAYBOOK B: BEAR REGIME (1D EMA50 Sloping Down & Price Below EMA50)
-        # Objective: Short relief rallies at resistance; buy ONLY deep panic flushes.
-        # Breakouts and minor 24H sweeps are 100% physically unreachable.
+        # ROUTING LOGIC: MUTUALLY EXCLUSIVE MASTER SWITCH
         # ---------------------------------------------------------------------
+        chosen = None
+
+        if is_bull_1d:
+            # Tactical Distribution Short Valve:
+            # If 4H is in active distribution during a bull pull-back, prioritize institutional short
+            if is_4h_dist and cand_short is not None:
+                chosen = cand_short
+            else:
+                for c in [cand_capitulation, cand_sweep_24h, cand_breakout]:
+                    if c is not None:
+                        chosen = c
+                        break
+
         elif is_bear_1d:
-            # 1. SHORT_4H_UPPER_BB_REJECT (Primary Short Alpha Engine)
-            if is_bear_4h:
-                touch_upper_4h = p_high >= (h4['bb_upper'] * 0.998)
-                bear_reversal = (p_close < p_open) and (clv <= 0.40)
-                dist_to_4h_mid = ((p_close - h4['bb_mid']) / p_close) * 100.0
+            # Bear Playbook: Prioritize Short, allow deep 48H Capitulation flush reclaim
+            for c in [cand_short, cand_capitulation]:
+                if c is not None:
+                    chosen = c
+                    break
 
-                if touch_upper_4h and bear_reversal and (dist_to_4h_mid >= 1.20):
-                    hard_stop = min(p_high * 1.0030, p_close * 1.0150)
-                    tp_target = p_close * 0.980 # 2.0% fixed target
-                    liq_p = self.calculate_liquidation_price(p_close, "SHORT", self.leverage)
-                    self.active_position = FuturesPosition(
-                        side="SHORT", type="SHORT_4H_UPPER_BB_REJECT", silo="FUTURES_SHORT",
-                        entry_idx=bar_idx, entry_t=dt, entry_p=p_close, hard_stop=hard_stop,
-                        take_profit=tp_target, trough_p=p_close, leverage=self.leverage,
-                        rsi_entry=m15['rsi'], vr_entry=vr, dist_ema50=dist_ema
-                    )
-                    return FuturesSignal(
-                        action="ENTER_SHORT", setup_type="SHORT_4H_UPPER_BB_REJECT", side="SHORT",
-                        price=p_close, hard_stop=hard_stop, take_profit=tp_target,
-                        leverage=self.leverage, liquidation_estimate=liq_p,
-                        reason="BEAR_PLAYBOOK_4H_UPPER_BB_REJECT",
-                        telemetry={'vr': vr, 'clv': clv, 'dist_to_mid': dist_to_4h_mid}
-                    )
-
-            # 2. UNIFIED_4L_REBOUND (Deep 4-Layer Elastic Capitulation Scalp)
-            if pass_envelopes and pass_micro and pass_vol_clv:
-                hard_stop = p_low * 0.9970
-                tp_target = h1['bb_mid']
-                liq_p = self.calculate_liquidation_price(p_close, "LONG", self.leverage)
-                self.active_position = FuturesPosition(
-                    side="LONG", type="UNIFIED_4L_REBOUND", silo="TIER_1_REBOUND",
-                    entry_idx=bar_idx, entry_t=dt, entry_p=p_close, hard_stop=hard_stop,
-                    trail_floor=hard_stop, take_profit=tp_target, peak_p=p_close,
-                    leverage=self.leverage, rsi_entry=m15['rsi'], vr_entry=vr, dist_ema50=dist_ema
-                )
-                return FuturesSignal(
-                    action="ENTER_LONG", setup_type="UNIFIED_4L_REBOUND", side="LONG",
-                    price=p_close, hard_stop=hard_stop, take_profit=tp_target,
-                    leverage=self.leverage, liquidation_estimate=liq_p,
-                    reason="BEAR_PLAYBOOK_UNIFIED_4L_REBOUND",
-                    telemetry={'headroom_1h': headroom_1h, 'pct_b_1h': pct_b_1h}
-                )
-
-            # 3. CAPITULATION_SWEEP_48H (Extreme Institutional Capitulation)
-            if p_low < sl_48h and p_close > sl_48h:
-                if vr >= 2.5 and body_pct >= 0.20 and clv >= 0.70:
-                    take_sweep = is_bull_4h or (vr >= 3.5)
-                    depth_gate = dist_ema <= -1.0
-                    quality_gate = (vr >= 4.5) or (dist_ema <= -2.5)
-                    is_london_ny = (11 <= dt_obj.hour <= 15) or (dt_obj.hour == 16 and dt_obj.minute == 0)
-                    inst_cap_gate = (vr >= 10.0) or (candle_body_pct >= 60.0 and is_london_ny)
-                    if depth_gate and quality_gate and inst_cap_gate and take_sweep:
-                        hard_stop = p_close * (1.0 - self.base_stop_pct)
-                        liq_p = self.calculate_liquidation_price(p_close, "LONG", self.leverage)
-                        self.active_position = FuturesPosition(
-                            side="LONG", type="CAPITULATION_SWEEP_48H", silo="CORE_v450",
-                            entry_idx=bar_idx, entry_t=dt, entry_p=p_close, hard_stop=hard_stop,
-                            trail_floor=p_close - (self.trail_atr_mult * atr_val), peak_p=p_close,
-                            leverage=self.leverage, rsi_entry=m15['rsi'], vr_entry=vr, dist_ema50=dist_ema
-                        )
-                        return FuturesSignal(
-                            action="ENTER_LONG", setup_type="CAPITULATION_SWEEP_48H", side="LONG",
-                            price=p_close, hard_stop=hard_stop, take_profit=None,
-                            leverage=self.leverage, liquidation_estimate=liq_p,
-                            reason="BEAR_PLAYBOOK_CAPITULATION_SWEEP_48H",
-                            telemetry={'vr': vr, 'clv': clv}
-                        )
-
-        # ---------------------------------------------------------------------
-        # PLAYBOOK C: NEUTRAL / CHOP REGIME (Flat Slope / Straddling EMA50)
-        # Objective: Stand down in cash. Zero breakouts, zero shorts.
-        # Only compressed Range Bollinger Reversion allowed if range <= 3.5%.
-        # ---------------------------------------------------------------------
         else:
-            is_flat_slope = abs(h1['ema20_slope']) <= 0.0015
-            is_compressed_48h = range_48h_pct <= 3.50
-            macro_ok = p_close > (h4['ema50'] * 0.97)
-            in_us_open = (750 <= entry_minutes <= 900)
-            us_open_pass = not in_us_open or (h1['ema20_slope'] >= 0.0)
-            in_asian_dead_zone = (60 <= entry_minutes <= 210)
+            # Neutral / Chop Regime:
+            # If 4H distribution occurs, allow tactical distribution short; otherwise 100% Cash!
+            if is_4h_dist and cand_short is not None:
+                chosen = cand_short
 
-            if (is_flat_slope or is_compressed_48h) and macro_ok and us_open_pass and not in_asian_dead_zone:
-                pierced_lower = p_low <= m15['bb_lower']
-                closed_inside = p_close > m15['bb_lower']
-                runway_to_mid = ((m15['bb_mid'] - p_close) / p_close) * 100.0
+        if chosen is not None:
+            setup_type = chosen[0]
+            side = chosen[1]
+            silo = chosen[2]
+            hard_stop = chosen[3]
+            tp_target = chosen[4]
+            reason = chosen[5]
+            telem = chosen[6]
+            breakout_level = chosen[7] if len(chosen) > 7 else None
 
-                if pierced_lower and closed_inside and (clv >= 0.50) and (m15['rsi'] <= 42.0) and (runway_to_mid >= 0.85):
-                    struct_stop = min(p_low * 0.998, p_close * 0.985)
-                    struct_stop = max(struct_stop, p_close * 0.988)
-                    tp_target = m15['bb_mid']
-                    liq_p = self.calculate_liquidation_price(p_close, "LONG", self.leverage)
-                    self.active_position = FuturesPosition(
-                        side="LONG", type="RANGE_BOLLINGER_REVERSION", silo="SECONDARY_RBR",
-                        entry_idx=bar_idx, entry_t=dt, entry_p=p_close, hard_stop=struct_stop,
-                        trail_floor=struct_stop, take_profit=tp_target, peak_p=p_close,
-                        leverage=self.leverage, rsi_entry=m15['rsi'], vr_entry=vr, dist_ema50=dist_ema
-                    )
-                    return FuturesSignal(
-                        action="ENTER_LONG", setup_type="RANGE_BOLLINGER_REVERSION", side="LONG",
-                        price=p_close, hard_stop=struct_stop, take_profit=tp_target,
-                        leverage=self.leverage, liquidation_estimate=liq_p,
-                        reason="CHOP_PLAYBOOK_RANGE_BOLLINGER_REVERSION",
-                        telemetry={'runway_to_mid': runway_to_mid, 'rsi': m15['rsi']}
-                    )
+            liq_p = self.calculate_liquidation_price(p_close, side, self.leverage)
+            trail_fl = p_close - (self.trail_atr_mult * atr_val) if side == "LONG" else None
 
-        # Default: Scanning / No action
+            self.active_position = FuturesPosition(
+                side=side,
+                type=setup_type,
+                silo=silo,
+                entry_idx=bar_idx,
+                entry_t=dt,
+                entry_p=p_close,
+                hard_stop=hard_stop,
+                take_profit=tp_target,
+                trail_floor=trail_fl,
+                peak_p=p_close if side == "LONG" else 0.0,
+                trough_p=p_close if side == "SHORT" else 0.0,
+                leverage=self.leverage,
+                rsi_entry=m15['rsi'],
+                vr_entry=vr,
+                dist_ema50=dist_ema,
+                breakout_level=breakout_level
+            )
+
+            action = f"ENTER_{side}"
+            return FuturesSignal(
+                action=action,
+                setup_type=setup_type,
+                side=side,
+                price=p_close,
+                hard_stop=hard_stop,
+                take_profit=tp_target,
+                leverage=self.leverage,
+                liquidation_estimate=liq_p,
+                reason=f"MASTER_SWITCH_{reason}",
+                telemetry=telem
+            )
+
+        # Default: Scanning / No action (100% Cash Protection)
         return FuturesSignal(
-            action="SCANNING", setup_type="NONE", side="NONE",
-            price=p_close, hard_stop=0.0, take_profit=None,
-            leverage=self.leverage, liquidation_estimate=0.0,
+            action="SCANNING",
+            setup_type="NONE",
+            side="NONE",
+            price=p_close,
+            hard_stop=0.0,
+            take_profit=None,
+            leverage=self.leverage,
+            liquidation_estimate=0.0,
             reason="AWAITING_CONFLUENCE",
-            telemetry={'is_bull_1d': is_bull_1d, 'is_bear_1d': is_bear_1d}
+            telemetry={'is_bull_1d': is_bull_1d, 'is_bear_1d': is_bear_1d, 'is_4h_dist': is_4h_dist}
         )
