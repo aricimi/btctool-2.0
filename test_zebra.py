@@ -2791,5 +2791,119 @@ class TestZebraBot(unittest.TestCase):
         self.assertEqual(intent_exit_stop.telemetry.get("exit_reason"), "WICK_HARD_SL")
 
 
+
+    def test_48_version_500_global_vision_synthesis(self):
+        """
+        Verify Version 5.0.0 Global Vision Synthesis Engine:
+        1. Micro Hurdle Tightening: UNIFIED_4L_REBOUND requires VR >= 2.5x and CLV >= 0.75.
+           - Vetoes if VR = 2.3 < 2.5 or CLV = 0.72 < 0.75.
+        2. Daily Macro Vector (Gate 1): Breakout Suite checks 1D EMA50 and Slope.
+           - If 1D is present and 1D EMA50 slope <= 0.0 or price < 1D EMA50, breakout is vetoed even if 4H slope > 0.
+           - If 1D is present and price > 1D EMA50 with 1D EMA50 slope > 0, breakout is permitted.
+        """
+        from conviction_engine import FreeConvictionEngine
+
+        brain = FreeConvictionEngine()
+        price = 61373.0
+
+        # Base 15M candles
+        candles = []
+        for i in range(25):
+            candles.append({
+                "open": 61400.0, "high": 61600.0, "low": 61100.0, "close": 61300.0, "vol": 100.0
+            })
+
+        # Turn candle with VR = 3.5x >= 2.5, CLV = 0.946 >= 0.75
+        turn_valid = {
+            "open": 61000.0, "high": 61400.0, "low": 60900.0, "close": 61373.0, "vol": 350.0
+        }
+
+        matrix_rebound = {
+            "latest_price": 61373.0,
+            "candles_15m": candles + [turn_valid],
+            "timeframes": {
+                "4h": {
+                    "ema_50": 68000.0, "ema_50_slope": -0.0020,
+                    "bb_upper": 75000.0, "bb_lower": 60000.0, "bb_mid": 67500.0
+                },
+                "1h": {
+                    "bb_upper": 67300.0, "bb_lower": 61300.0, "bb_mid": 64300.0,
+                    "ema_20": 64300.0, "ema20_slope": -0.0010
+                }
+            },
+            "multi_screen_bounds": {"nearest_support": 60900.0, "nearest_resistance": 64300.0, "macro_ceiling": 68000.0, "macro_runway_pct": 4.7},
+            "tanh_imbalance": 0.20, "cvd": 50.0, "absorption_index": 15.0, "composite_atr": 350.0,
+        }
+
+        # 1. Valid rebound fires
+        intent = brain.evaluate(matrix_rebound)
+        self.assertEqual(intent.scenario, "UNIFIED_4L_REBOUND")
+        self.assertEqual(intent.action, "ENTER_CORE_LOT_1")
+
+        # 2. Veto when VR = 2.3 < 2.5
+        turn_low_vr = dict(turn_valid)
+        turn_low_vr["vol"] = 230.0  # VR = 2.3x < 2.5x
+        matrix_low_vr = dict(matrix_rebound)
+        matrix_low_vr["candles_15m"] = candles + [turn_low_vr]
+        intent_low_vr = brain.evaluate(matrix_low_vr)
+        self.assertNotEqual(intent_low_vr.scenario, "UNIFIED_4L_REBOUND")
+
+        # 3. Veto when CLV = 0.72 < 0.75
+        turn_low_clv = {
+            "open": 61000.0, "high": 61400.0, "low": 60900.0, "close": 61260.0, "vol": 350.0  # CLV = 360/500 = 0.72 < 0.75
+        }
+        matrix_low_clv = dict(matrix_rebound)
+        matrix_low_clv["candles_15m"] = candles + [turn_low_clv]
+        intent_low_clv = brain.evaluate(matrix_low_clv)
+        self.assertNotEqual(intent_low_clv.scenario, "UNIFIED_4L_REBOUND")
+
+        # 4. Daily Macro Vector Gate (1D EMA50) on Breakout Suite:
+        # Construct 48H Breakout setup at 75,000 (sh_48h was 74,500)
+        breakout_candles = []
+        for i in range(195):
+            breakout_candles.append({
+                "open": 74000.0, "high": 74500.0, "low": 72500.0, "close": 74200.0, "vol": 100.0
+            })
+        breakout_turn = {
+            "open": 74300.0, "high": 75200.0, "low": 74200.0, "close": 75000.0, "vol": 300.0
+        }
+
+        # 4a. When 1D EMA50 is downward sloped -> Breakout MUST be VETOED (even if 4H slope > 0)
+        matrix_break_veto = {
+            "latest_price": 75000.0,
+            "candles_15m": breakout_candles + [breakout_turn],
+            "timeframes": {
+                "4h": {
+                    "ema_50": 72000.0, "ema_50_slope": 0.0030,  # 4H slope is positive
+                    "bb_upper": 76000.0, "bb_lower": 71000.0, "bb_mid": 73500.0
+                },
+                "1h": {
+                    "bb_upper": 75500.0, "bb_lower": 73500.0, "bb_mid": 74500.0,
+                    "ema_20": 74500.0, "ema20_slope": 0.0025
+                },
+                "1d": {
+                    "ema_50": 76000.0, "ema_50_slope": -0.0010  # 1D is BEARISH / slumping
+                }
+            },
+            "multi_screen_bounds": {"nearest_support": 74200.0, "nearest_resistance": 78000.0, "macro_ceiling": 80000.0, "macro_runway_pct": 6.6},
+            "tanh_imbalance": 0.20, "cvd": 50.0, "absorption_index": 15.0, "composite_atr": 350.0,
+        }
+        intent_break_veto = brain.evaluate(matrix_break_veto)
+        self.assertNotEqual(intent_break_veto.scenario, "MACRO_BREAK_48H")
+
+        # 4b. When 1D EMA50 is confirmed BULLISH -> Breakout is PERMITTED
+        matrix_break_pass = dict(matrix_break_veto)
+        matrix_break_pass["timeframes"] = {
+            "4h": matrix_break_veto["timeframes"]["4h"],
+            "1h": matrix_break_veto["timeframes"]["1h"],
+            "1d": {
+                "ema_50": 71000.0, "ema_50_slope": 0.0020  # Price (75,000) > 71,000 and slope > 0
+            }
+        }
+        intent_break_pass = brain.evaluate(matrix_break_pass)
+        self.assertEqual(intent_break_pass.scenario, "MACRO_BREAK_48H")
+        self.assertEqual(intent_break_pass.action, "ENTER_CORE_LOT_1")
+
+
 if __name__ == "__main__":
     unittest.main()

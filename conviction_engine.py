@@ -824,13 +824,13 @@ class FreeConvictionEngine:
             pierced_15m_4l = (c_low_4l <= bb_lower_15m_4l)
             reclaimed_15m_4l = (c_close_4l > bb_lower_15m_4l)
 
-            # Strict Elastic Rebound Gates (v4.9.0):
+            # Strict Elastic Rebound Gates (v5.0.0 Global Vision Synthesis):
             # 1. 1H %B <= 0.05 (Extreme 2-Sigma lower stretch)
             # 2. 4H %B <= 0.35 (Lower envelope macro clearance)
             # 3. Headroom >= 2.0% (Guarantees >= +1.0% net profit after 0.20% OKX fee)
-            # 4. 15M Volume Surge VR >= 2.2 and CLV >= 0.70 with lower band reclaim
+            # 4. 15M Volume Surge VR >= 2.5 and CLV >= 0.75 with lower band reclaim
             if pct_b_1h <= 0.05 and pct_b_4h <= 0.35 and headroom_1h >= 2.0:
-                if pierced_15m_4l and reclaimed_15m_4l and vr_4l >= 2.2 and clv_4l >= 0.70:
+                if pierced_15m_4l and reclaimed_15m_4l and vr_4l >= 2.5 and clv_4l >= 0.75:
                     stop_price = round(c_low_4l * 0.9970, 2)
                     tp_target = round(bb_mid_1h, 2)
                     return TradeIntent(
@@ -841,7 +841,7 @@ class FreeConvictionEngine:
                         proposed_stop=stop_price,
                         expected_runway_pct=round(headroom_1h, 2),
                         confidence=0.88,
-                        reason=f"UNIFIED_4L_REBOUND: 1H %B={pct_b_1h:.2f} <= 0.05, 4H %B={pct_b_4h:.2f} <= 0.35, Headroom={headroom_1h:.2f}% >= 2.0%, VR={vr_4l:.1f}x, CLV={clv_4l:.2f}. Target: 1H Midline (${tp_target:,.2f}), Stop: ${stop_price:,.2f}.",
+                        reason=f"UNIFIED_4L_REBOUND (v5.0.0 Global Vision): 1H %B={pct_b_1h:.2f} <= 0.05, 4H %B={pct_b_4h:.2f} <= 0.35, Headroom={headroom_1h:.2f}% >= 2.0%, VR={vr_4l:.1f}x >= 2.5x, CLV={clv_4l:.2f} >= 0.75. Target: 1H Midline (${tp_target:,.2f}), Stop: ${stop_price:,.2f}.",
                         telemetry={
                             **intent_telemetry,
                             "scenario": "UNIFIED_4L_REBOUND",
@@ -1016,8 +1016,16 @@ class FreeConvictionEngine:
 
         utc_dow = matrix.get("utc_dow")  # 5, 6 is weekend
         is_weekend = (utc_dow in (5, 6)) if utc_dow is not None else False
-        # v4.8.0 Lever 1: Require non-negative 4H EMA50 slope (ema50_4h_slope >= 0.0) to eliminate false bear breakouts
-        if candles_15m_all and len(candles_15m_all) >= 20 and is_bull_macro_sweep and not is_weekend and not in_breakout_cooldown and (ema50_4h_slope >= 0.0):
+        # v5.0.0 Gate 1: 1D EMA50 Macro Vector Filter (prunes false breakouts during chop/bear regimes)
+        tf_1d = tfs.get("1d", {})
+        ema50_1d = float(tf_1d.get("ema_50", tf_1d.get("ema50", 0.0)))
+        ema50_1d_slope = float(tf_1d.get("ema_50_slope", tf_1d.get("ema50_slope", 0.0010)))
+        if ema50_1d > 0:
+            breakout_macro_ok = (price > ema50_1d) and (ema50_1d_slope > 0.0)
+        else:
+            breakout_macro_ok = (ema50_4h_slope >= 0.0)
+
+        if candles_15m_all and len(candles_15m_all) >= 20 and is_bull_macro_sweep and not is_weekend and not in_breakout_cooldown and breakout_macro_ok:
             cur_15m = candles_15m_all[-1]
             c_high = float(cur_15m.get("high", price))
             c_close = float(cur_15m.get("close", price))
