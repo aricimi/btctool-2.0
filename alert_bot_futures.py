@@ -1,5 +1,5 @@
 """
-alert_bot_futures.py — Dedicated Institutional Telegram Alert & Execution Daemon for Futures 2.4.0 (Path A)
+alert_bot_futures.py — Dedicated Institutional Telegram Alert & Execution Daemon for Futures 2.4.1 (Rule 1 Headroom Gate)
 Target Instrument: OKX BTC-USDT-SWAP (Perpetual Futures)
 Margin Architecture: Isolated Margin (Dynamic Volatility Sizing 1.75x–3.125x, Default 2.5x)
 Execution Mode: Paper Simulation / Push Notification Daemon
@@ -72,7 +72,7 @@ class FuturesTelegramNotifier:
         side_icon = "🟢 LONG" if sig.side == "LONG" else "🔴 SHORT"
         pos_size_usd = balance * sig.leverage
         msg = (
-            f"⚡ *[FUTURES 2.4.0 — OKX BTC-USDT-SWAP]* ⚡\n\n"
+            f"⚡ *[FUTURES 2.4.1 — OKX BTC-USDT-SWAP]* ⚡\n\n"
             f"Action: *{sig.action}*\n"
             f"Direction: *{side_icon}*\n"
             f"Setup: `{sig.setup_type}`\n"
@@ -90,7 +90,7 @@ class FuturesTelegramNotifier:
     def notify_exit(self, sig: FuturesSignal, pnl_pct: float, pnl_eur: float, balance: float):
         result_icon = "💰 PROFIT" if pnl_pct > 0 else "🛑 LOSS"
         msg = (
-            f"🔔 *[FUTURES 2.4.0 — EXIT NOTIFICATION]* 🔔\n\n"
+            f"🔔 *[FUTURES 2.4.1 — EXIT NOTIFICATION]* 🔔\n\n"
             f"Result: *{result_icon}*\n"
             f"Side: *{sig.side}*\n"
             f"Setup: `{sig.setup_type}`\n"
@@ -106,7 +106,7 @@ class FuturesTelegramNotifier:
 
 def run_futures_daemon(poll_interval_sec: int = 15):
     print("="*65)
-    print("🏛️ btctool 2.0 / BTC_BOT 2.4.0 · Futures Autonomous Daemon")
+    print("🏛️ btctool 2.0 / BTC_BOT 2.4.1 · Futures Autonomous Daemon")
     print("Instrument: OKX BTC-USDT-SWAP | Leverage: 2.5x Isolated")
     print("="*65)
     notifier = FuturesTelegramNotifier()

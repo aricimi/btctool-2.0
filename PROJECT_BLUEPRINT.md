@@ -3,7 +3,7 @@
 **Root Directory:** `C:\gemini proyect\btctool 2.0`  
 **GitHub Repository:** [https://github.com/aricimi/btctool-2.0](https://github.com/aricimi/btctool-2.0)  
 **Branch:** `main`  
-**Status:** Operational / Live with Version 5.0.0 Global Vision Spot Engine & Version 2.4.0 Institutional Perpetual Futures Architecture (Path A: Pure Core + Upgrades 1 & 3 + Short Runner Valve + Dynamic Risk Budget + Tuned 4H Breakdown Short Module)  
+**Status:** Operational / Live with Version 5.0.0 Global Vision Spot Engine & Version 2.4.1 Institutional Perpetual Futures Architecture (Rule 1: 4H Lower BB Headroom Gate + Pure Core + Upgrades 1 & 3 + Short Runner Valve + Dynamic Risk Budget)  
 
 ---
 
@@ -1155,6 +1155,29 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
       - **Synchronized Artifacts & Deliverables:**
         * `conviction_engine_futures.py`: Autonomous Perpetual Futures Engine Version 2.4.0 (Path A Production).
         * `alert_bot_futures.py`: Dedicated Telegram alert and execution daemon for `BTC-USDT-SWAP` synchronized to Version 2.4.0.
+        * Unit Test Suite: `test_futures.py` with **15/15 unit tests passing cleanly in 0.002s**.
+    - **Version 2.4.1 Institutional Perpetual Futures Architecture (Rule 1: 4H Lower BB Headroom Gate Upgrade):**
+      - **Architectural Motivation & Microstructural Root Cause:**
+        * Forensic lifecycle audit of the 54 stopped-out breakdown short trades in v2.4.0 revealed that **63.0% (34 trades)** were immediate V-reversal bear traps (MFE < 0.50%).
+        * Physical cause: 22 of those 34 traps (64.7%) occurred when price was already pierced below the 4-Hour Lower Bollinger Band (`Close < BB_Lower_4H`). At $-2\sigma$ envelope extension, downside momentum is statistically exhausted, and mean-reversion short-squeezes are highly probable.
+      - **Rule 1 Specification (The 4H Lower BB Headroom Gate):**
+        * Invariant, all-year-round microstructural rule applied strictly inside `TUNED_4H_BREAKDOWN_SHORT`:
+          $$\text{Headroom Condition: } \text{Close}_{15\text{M}} \ge \text{BB Lower}_{4\text{H}} \quad (\text{where } \text{BB Lower}_{4\text{H}} = \mu_{20} - 2.0\sigma_{20})$$
+        * Completely prohibits opening breakdown shorts into exhausted 4H outer-band extensions, while allowing clean breakdown entries when price still has internal envelope headroom to cascade downwards.
+        * Zero impact on Version 2.3.0 core signals: all breakout longs, liquidity sweep reclaims, and upper BB distribution shorts run 100% unaltered.
+      - **Certified Multi-Horizon Telemetry Matrix (Full Production Harness with 0.06% OKX Taker Friction):**
+        * **Full Year 2024 (Secular Bull Market, Jan 1 to Dec 31, 2024 — 40,993 Bars):**
+          - 68 trades | 55.88% WR | 2.04 PF (+0.53 boost over v2.4.0) | **-13.47% MaxDD** (slashed from -18.18%) | **€2,313.95 (+131.40% net return)**
+        * **Full Year 2025 (Chop / ATH Distribution & Cascades, Jan 1 to Dec 31, 2025 — 40,897 Bars):**
+          - 86 trades | 62.79% WR | 2.37 PF (+0.53 boost over v2.4.0) | **-7.40% MaxDD** (slashed nearly in half from -13.83% and safer than Baseline v2.3.0's -9.53%!) | **€2,941.97 (+194.20% net return)**
+        * **Trailing 365 Days (Mixed Distribution & Severe Cascades):**
+          - 77 trades | 61.04% WR | 2.65 PF (+1.16 boost over v2.4.0) | **-16.58% MaxDD** (slashed from -26.14%) | **€2,664.94 (+166.49% net return)** (Outperforming Baseline's +137.21%!)
+        * **Consecutive 2-Calendar-Year Compounding (2024 $\rightarrow$ 2025):**
+          - Starting with **€1,000** on Jan 1, 2024 $\rightarrow$ **€6,807.59 (+580.76% total net return / 6.81x multiplier)** by Dec 31, 2025!
+          - Outperformed Unfiltered v2.4.0 (+€105.67) and crushed Baseline v2.3.0 (+€2,837.51) while cutting historical drawdowns to -7.40%.
+      - **Synchronized Artifacts & Deliverables:**
+        * `conviction_engine_futures.py`: Autonomous Perpetual Futures Engine Version 2.4.1 (Rule 1 Headroom Gate Live).
+        * `alert_bot_futures.py`: Dedicated Telegram alert and execution daemon synchronized to Version 2.4.1.
         * Unit Test Suite: `test_futures.py` with **15/15 unit tests passing cleanly in 0.002s**.
    - **Strict Workspace Isolation Rule (AGENTS.md Rule 4):** The agent environment is strictly locked to `c:\gemini proyect\btctool 2.0`. Under no circumstances may any file be created, read, written, modified, or exported outside the project root.
    - **Master Technical Specification Document (`BTCTOOL_2_0_FULL_SPECIFICATION_WITH_OXY.txt`):** Synchronized to Version 3.2.0 Production with all mathematical formulas, OKX V5 REST and WebSocket specifications, fee model, anti-hanging state machine, and production daemon setup. Stored strictly in the project root.

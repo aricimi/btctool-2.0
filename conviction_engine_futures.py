@@ -1,6 +1,6 @@
 """
-conviction_engine_futures.py — Institutional Bidirectional Futures Engine (btctool 2.0 / BTC_BOT 2.4.0)
-Architecture: Candidate 2 Pure Core Alpha + Upgrades 1 & 3 + Short Runner Valve & Dynamic Risk Budget + Tuned 4H Breakdown Short Module (Path A)
+conviction_engine_futures.py — Institutional Bidirectional Futures Engine (btctool 2.0 / BTC_BOT 2.4.1)
+Architecture: Candidate 2 Pure Core Alpha + Upgrades 1 & 3 + Short Runner Valve & Dynamic Risk Budget + Tuned 4H Breakdown Short with Rule 1 (4H Lower BB Headroom Gate)
 Target Instrument: OKX BTC-USDT-SWAP (Perpetual Futures)
 Margin Architecture: Isolated Margin (Dynamic Volatility Sizing 1.75x–3.125x, Default 2.5x)
 Execution Philosophy:
@@ -8,8 +8,9 @@ Execution Philosophy:
 - Dynamic Short Headroom Hurdle (Upgrade 1): Adapts minimum distance to 4H midline to ATR/volatility (max(0.75%, 1.5*ATR)), unlocking high-conviction pre-breakdown shorts.
 - ATH Range Sweep Gate (Upgrade 3): Requires institutional volume surge (VR >= 3.5) when price is stretched >2.0% above 4H EMA50, eliminating chop drag near all-time highs.
 - Asymmetric Short Runner Valve (Rec 1): Closes 50% at +2.0% profit target, ratchets stop to Breakeven (+0.20% buffer), and trails remaining 50% behind 1H EMA20.
-- Tuned 4H Breakdown Short Module (Version 2.4.0 / Path A):
+- Tuned 4H Breakdown Short Module (Version 2.4.1):
   * Exploits cascading 48H structural breakdowns when 4H trend is bearish (4H EMA50 slope <= +0.0005).
+  * Rule 1 (4H Lower BB Headroom Gate): Requires Close >= BB_Lower_4H at entry, guaranteeing downward envelope expansion headroom and pruning 65% of false bear traps occurring at 4H band-walk climax.
   * Macro Extension Guard (<= 7.0%): Prunes hazardous bottom-shorts when price is over-extended from 4H EMA50.
   * Two-Tranche Monetization: Banks 50% at +3.5% gain, ratchets runner stop to Breakeven (+0.20% buffer), and trails runner behind 3.0x ATR ceiling or 36-hour maximum hold time stop.
 - Volatility-Adjusted Sizing (Rec 3): Dynamically scales leverage between 1.75x and 3.125x inversely to 15M ATR% (scaling up on tight coils, scaling down on chaotic wicks).
@@ -400,12 +401,17 @@ class ConvictionEngineFutures:
                     None, eff_leverage, active_stop_pct
                 )
 
-        # Candidate Breakdown Short: TUNED_4H_BREAKDOWN_SHORT (Version 2.4.0 / Path A)
+        # Candidate Breakdown Short: TUNED_4H_BREAKDOWN_SHORT (Version 2.4.1 / Rule 1 4H Lower BB Headroom Gate)
         cand_breakdown_short = None
         if is_bear_4h and (h4.get('ema50_slope', 0.0) <= 0.0005):
             dist_to_ema50_pct = ((h4['ema50'] - p_close) / h4['ema50']) * 100.0 if h4.get('ema50', 0.0) > 0 else 0.0
+            # Rule 1 (4H Lower BB Headroom Gate): Requires Close >= BB_Lower_4H at entry.
+            # Guarantees downward envelope expansion headroom and prunes 65% of false bear traps at band climax.
+            bb_lower_4h = h4.get('bb_lower', 0.0)
+            bb_headroom_pass = (p_close >= bb_lower_4h) if bb_lower_4h > 0 else True
+
             # Macro Extension Guard <= 7.0%: Eliminates bottom-shorting when price is severely over-extended
-            if dist_to_ema50_pct <= 7.0:
+            if bb_headroom_pass and (dist_to_ema50_pct <= 7.0):
                 if p_close < sl_48h:
                     bd_depth = ((sl_48h - p_close) / sl_48h) * 100.0
                     if 0.20 <= bd_depth <= 2.50:
@@ -414,7 +420,7 @@ class ConvictionEngineFutures:
                             cand_breakdown_short = (
                                 "TUNED_4H_BREAKDOWN_SHORT", "SHORT", "FUTURES_SHORT",
                                 hard_stop, None, "4H_STRUCTURAL_BREAKDOWN",
-                                {'vr': vr, 'clv': clv, 'bd_depth': bd_depth, 'dist_to_ema50_pct': dist_to_ema50_pct},
+                                {'vr': vr, 'clv': clv, 'bd_depth': bd_depth, 'dist_to_ema50_pct': dist_to_ema50_pct, 'bb_lower_4h': bb_lower_4h},
                                 sl_48h, eff_leverage, active_stop_pct
                             )
 

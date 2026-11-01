@@ -335,7 +335,7 @@ class TestConvictionEngineFutures(unittest.TestCase):
         self.assertTrue(equity_risk_high_vol <= 0.0375)
 
     def test_14_tuned_4h_breakdown_short_and_extension_guard(self):
-        # Version 2.4.0 (Path A): Tuned 4H Breakdown Short
+        # Version 2.4.1: Tuned 4H Breakdown Short with Rule 1 (4H Lower BB Headroom Gate)
         # Sub-case A: dist_to_ema50_pct > 7.0% -> BLOCKED by Macro Extension Guard (no bottom-shorting)
         # Prev 48H low = 80,000. Cur close = 79,500 (bd_depth = 500 / 80000 = 0.625% in [0.20%, 2.50%]).
         # If 4H EMA50 is 86,500 -> dist_to_ema50_pct = (86500 - 79500) / 86500 = 8.09% > 7.0% -> BLOCKED
@@ -356,16 +356,29 @@ class TestConvictionEngineFutures(unittest.TestCase):
         # Verify blocked by Macro Extension Guard (> 7.0%)
         self.assertNotEqual(sig_blocked.action, "ENTER_SHORT")
 
-        # Sub-case B: dist_to_ema50_pct <= 7.0% -> PASSES cleanly and triggers TUNED_4H_BREAKDOWN_SHORT
-        # If 4H EMA50 is 83,500 -> dist_to_ema50_pct = (83500 - 79500) / 83500 = 4.79% <= 7.0% -> TRIGGERED
+        # Sub-case B: Rule 1 (4H Lower BB Headroom Gate) Rejection:
+        # Even if dist_to_ema50_pct <= 7.0% (EMA50 = 83,500 -> 4.79%), if price has already pierced
+        # below the 4H Lower BB (e.g. bb_lower = 79,800 > close = 79,500), it MUST be BLOCKED.
+        mtf_data_bb_exhausted = dict(mtf_data_blocked)
+        mtf_data_bb_exhausted['4h'] = dict(mtf_data_blocked['4h'])
+        mtf_data_bb_exhausted['4h']['ema50'] = 83500.0
+        mtf_data_bb_exhausted['4h']['bb_lower'] = 79800.0 # close (79500) < bb_lower (79800) -> exhausted
+        engine_bb_exhausted = ConvictionEngineFutures(leverage=2.5, fee_rt=0.0006)
+        sig_bb_exhausted = engine_bb_exhausted.evaluate_bar(200, cur_bar, prev_bars, mtf_data_bb_exhausted)
+        self.assertNotEqual(sig_bb_exhausted.action, "ENTER_SHORT")
+
+        # Sub-case C: dist_to_ema50_pct <= 7.0% AND close >= bb_lower_4h -> PASSES cleanly and triggers TUNED_4H_BREAKDOWN_SHORT
+        # If 4H EMA50 is 83,500 and 4H bb_lower is 79,000 <= close 79,500 -> TRIGGERED
         mtf_data_pass = dict(mtf_data_blocked)
         mtf_data_pass['4h'] = dict(mtf_data_blocked['4h'])
         mtf_data_pass['4h']['ema50'] = 83500.0
+        mtf_data_pass['4h']['bb_lower'] = 79000.0
         engine_pass = ConvictionEngineFutures(leverage=2.5, fee_rt=0.0006)
         sig_pass = engine_pass.evaluate_bar(200, cur_bar, prev_bars, mtf_data_pass)
         self.assertEqual(sig_pass.action, "ENTER_SHORT")
         self.assertEqual(sig_pass.setup_type, "TUNED_4H_BREAKDOWN_SHORT")
         self.assertTrue(sig_pass.telemetry['dist_to_ema50_pct'] <= 7.0)
+        self.assertTrue(sig_pass.telemetry['bb_lower_4h'] <= cur_bar['close'])
         self.assertTrue(0.20 <= sig_pass.telemetry['bd_depth'] <= 2.50)
 
     def test_15_tuned_4h_breakdown_short_lifecycle_and_two_tranches(self):
