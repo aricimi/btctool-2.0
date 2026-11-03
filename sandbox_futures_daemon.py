@@ -80,13 +80,33 @@ class SandboxTelegramNotifier:
             logger.info(f"[TELEGRAM SIMULATED]:\n{text}")
             return False
         url = f"https://api.telegram.org/bot{self.token}/sendMessage"
-        payload = {"chat_id": self.chat_id, "text": text, "parse_mode": "Markdown"}
+        payload = {
+            "chat_id": str(self.chat_id),
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True
+        }
         try:
             r = requests.post(url, json=payload, timeout=8)
-            return r.status_code == 200
+            if r.status_code == 200:
+                logger.info("[Telegram] Push alert delivered successfully.")
+                return True
+            else:
+                logger.error(f"[Telegram Error] HTTP {r.status_code}: {r.text}")
+                return False
         except Exception as e:
             logger.error(f"Telegram dispatch error: {e}")
             return False
+
+    def send_test_ping(self) -> bool:
+        msg = (
+            "⚡ <b>[SANDBOX 2.4.1 — TELEGRAM CONNECTION ONLINE]</b>\n\n"
+            "Your mobile alert system for <b>Futures Version 2.4.1</b> is connected!\n\n"
+            "• <b>Operating Mode:</b> Pure Event-Driven (Zero Clock Spam)\n"
+            "• <b>Active Alerts:</b> ⚡ Order Entry | 🎯 Target 1 Banked | 🔔 Position Exit\n"
+            "• <b>Shared Token:</b> Operating alongside Spot v5.0.0 without conflict."
+        )
+        return self.send_message(msg)
 
 
 class OKXMarketIngester:
@@ -464,15 +484,16 @@ class LocalSandboxDaemon:
             self._append_ledger(trade_record)
 
             # Dispatch Telegram Notification
+            result_str = "💰 <b>PROFIT</b>" if pnl_eur > 0 else "🛑 <b>LOSS</b>"
             self.notifier.send_message(
-                f"🔔 *[SANDBOX 2.4.1 — EXIT TRIGGERED]* 🔔\n\n"
-                f"Result: *{'💰 PROFIT' if pnl_eur > 0 else '🛑 LOSS'}*\n"
-                f"Setup: `{pos_before.type}` ({pos_before.side})\n"
-                f"Exit Price: `${exit_p:,.2f}`\n"
-                f"Net Realized: *€{pnl_eur:+.2f} ({net_pnl_pct*100:+.2f}%)*\n"
-                f"New Balance: *€{capital_eur:,.2f} EUR*\n"
-                f"Exit Reason: _{exit_reason}_\n"
-                f"Timestamp: `{dt_str}`"
+                f"🔔 <b>[SANDBOX 2.4.1 — EXIT TRIGGERED]</b> 🔔\n\n"
+                f"<b>Result:</b> {result_str}\n"
+                f"<b>Setup:</b> <code>{pos_before.type}</code> ({pos_before.side})\n"
+                f"<b>Exit Price:</b> <code>${exit_p:,.2f}</code>\n"
+                f"<b>Net Realized:</b> <b>€{pnl_eur:+.2f} ({net_pnl_pct*100:+.2f}%)</b>\n"
+                f"<b>New Balance:</b> <b>€{capital_eur:,.2f} EUR</b>\n"
+                f"<b>Exit Reason:</b> <code>{exit_reason}</code>\n"
+                f"<b>Timestamp:</b> <code>{dt_str}</code>"
             )
             logger.info(f"TRADE CLOSED: {pos_before.type} | PnL: €{pnl_eur:+.2f} | Reason: {exit_reason}")
             self.state['active_position'] = None
@@ -484,19 +505,19 @@ class LocalSandboxDaemon:
             self.state['active_position'] = asdict(pos_after)
             pos_size_usd = (capital_eur / eur_rate) * signal.leverage
 
-            target_str = f"Target: `${signal.take_profit:,.2f}`\n" if signal.take_profit else "Target: `Trailing 3.0x ATR Runner`\n"
+            target_str = f"<b>Target:</b> <code>${signal.take_profit:,.2f}</code>\n" if signal.take_profit else "<b>Target:</b> <code>Trailing 3.0x ATR Runner</code>\n"
             self.notifier.send_message(
-                f"⚡ *[SANDBOX 2.4.1 — NEW ORDER ENTERED]* ⚡\n\n"
-                f"Action: *{signal.action}*\n"
-                f"Instrument: `{self.inst_id}` (OKX)\n"
-                f"Setup: `{signal.setup_type}` ({signal.side})\n"
-                f"Entry Fill: `${signal.price:,.2f}`\n"
-                f"Hard Stop: `${signal.hard_stop:,.2f}`\n"
+                f"⚡ <b>[SANDBOX 2.4.1 — NEW ORDER ENTERED]</b> ⚡\n\n"
+                f"<b>Action:</b> {signal.action}\n"
+                f"<b>Instrument:</b> <code>{self.inst_id}</code> (OKX)\n"
+                f"<b>Setup:</b> <code>{signal.setup_type}</code> ({signal.side})\n"
+                f"<b>Entry Fill:</b> <code>${signal.price:,.2f}</code>\n"
+                f"<b>Hard Stop:</b> <code>${signal.hard_stop:,.2f}</code>\n"
                 f"{target_str}"
-                f"Leverage: *{signal.leverage:.2f}x Isolated*\n"
-                f"Position Size: *${pos_size_usd:,.0f} USD (~€{capital_eur*signal.leverage:,.0f})*\n"
-                f"Risk Budget: *<= 3.75% Equity*\n"
-                f"Timestamp: `{dt_str}`"
+                f"<b>Leverage:</b> {signal.leverage:.2f}x Isolated\n"
+                f"<b>Position Size:</b> ${pos_size_usd:,.0f} USD (~€{capital_eur*signal.leverage:,.0f})\n"
+                f"<b>Risk Budget:</b> &lt;= 3.75% Equity\n"
+                f"<b>Timestamp:</b> <code>{dt_str}</code>"
             )
             logger.info(f"NEW ENTRY: {signal.setup_type} ({signal.side}) @ ${signal.price:,.2f} | Lev: {signal.leverage:.2f}x")
 
@@ -504,6 +525,20 @@ class LocalSandboxDaemon:
         # 3. UPDATE ACTIVE POSITION IN STATE
         # -------------------------------------------------------------
         elif pos_after is not None:
+            # Check if Target 1 was just banked
+            was_banked_before = getattr(pos_before, 't1_banked', False) if pos_before else False
+            if pos_after.t1_banked and not was_banked_before:
+                self.notifier.send_message(
+                    f"🎯 <b>[SANDBOX 2.4.1 — TARGET 1 BANKED]</b> 🎯\n\n"
+                    f"<b>Setup:</b> <code>{pos_after.type}</code> ({pos_after.side})\n"
+                    f"<b>T1 Price:</b> <code>${pos_after.t1_price:,.2f}</code>\n"
+                    f"<b>Profit Locked:</b> +{pos_after.t1_ret*100:.2f}% on 50% Size\n"
+                    f"<b>Runner Stop:</b> <code>${pos_after.hard_stop:,.2f}</code> (Breakeven +0.20% Net)\n"
+                    f"<b>Status:</b> 100% Risk-Free Runner Active\n"
+                    f"<b>Timestamp:</b> <code>{dt_str}</code>"
+                )
+                logger.info(f"TARGET 1 BANKED: {pos_after.type} | Stop moved to ${pos_after.hard_stop:,.2f}")
+
             self.state['active_position'] = asdict(pos_after)
 
         self.state['last_processed_ts'] = current_ts
@@ -592,9 +627,19 @@ def main():
     parser.add_argument("--tick-once", action="store_true", help="Run a single evaluation cycle on live data and exit")
     parser.add_argument("--reset", action="store_true", help="Reset sandbox account equity to €1,000.00")
     parser.add_argument("--daemon", action="store_true", help="Run continuous background daemon")
+    parser.add_argument("--test-telegram", action="store_true", help="Send a test push alert to Telegram and exit")
     args = parser.parse_args()
 
     sandbox = LocalSandboxDaemon(inst_id=args.instId)
+
+    if args.test_telegram:
+        print("\nSending test push alert to your Telegram...")
+        success = sandbox.notifier.send_test_ping()
+        if success:
+            print("🎉 Success! Test alert sent. Check Telegram on your phone.")
+        else:
+            print("❌ Delivery failed. Double check telegram_config.json.")
+        return
 
     if args.reset:
         sandbox.reset_sandbox()

@@ -1157,7 +1157,12 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
         * `alert_bot_futures.py`: Dedicated Telegram alert and execution daemon for `BTC-USDT-SWAP` synchronized to Version 2.4.0.
         * `sandbox_futures_daemon.py`: Institutional Local Sandbox & Paper Execution Daemon for Futures Version 2.4.1 with real-time OKX market synchronization, pure EUR (€) base accounting, and zero private key requirement.
         * `sandbox_futures_daemon.py`: Institutional Local Sandbox & Paper Execution Daemon for Futures Version 2.4.1 (Patched: defensive signal telemetry resolution on position exit cycles).
+         * `sandbox_futures_daemon.py`: Institutional Local Sandbox & Paper Execution Daemon for Futures Version 2.4.1 (Synchronized: HTML-safe event-driven Telegram push alerts for Entries, Target 1 Banking, and Exits, with `--test-telegram` verification).
          * Unit Test Suite: `test_futures.py` with **15/15 unit tests passing cleanly in 0.002s**.
+    - **Local Sandbox Daemon Event-Driven Telegram Push Notification Patch:**
+      - Replaced legacy Markdown formatting with HTML mode (`parse_mode="HTML"`), eliminating Telegram HTTP 400 entity parsing failures caused by unescaped underscores in setup identifiers (`SHORT_4H_UPPER_BB_REJECT`) and reasons (`RUNNER_TIME_STOP_12H`).
+      - Integrated Target 1 Banking Push Alert: sends immediate Telegram alert the minute 50% size is banked at profit target and runner stop is ratcheted to Breakeven (+0.20% locked).
+      - Added `--test-telegram` CLI verification command to test live phone delivery on demand.
     - **Local Sandbox Daemon Exit Accounting Hotfix (Attribute Resolution):**
       - Fixed `AttributeError: 'FuturesSignal' object has no attribute 'metadata'` in `sandbox_futures_daemon.py` line 424 during position exit processing (`EXIT_LONG` / `EXIT_SHORT`).
       - In `conviction_engine_futures.py`, signal telemetry is stored in `signal.telemetry`. The daemon now defensively accesses `telem = getattr(signal, 'telemetry', getattr(signal, 'metadata', {}))` ensuring seamless blended return and realized PnL accounting upon target banking and trend exits.
