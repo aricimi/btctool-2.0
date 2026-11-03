@@ -421,8 +421,9 @@ class LocalSandboxDaemon:
             act_stop = pos_before.active_stop_pct
 
             # Calculate return %
-            if signal.metadata and 'blended_pnl_pct' in signal.metadata:
-                ret = signal.metadata['blended_pnl_pct']
+            telem = getattr(signal, 'telemetry', getattr(signal, 'metadata', {}))
+            if telem and 'blended_pnl_pct' in telem:
+                ret = telem['blended_pnl_pct']
             else:
                 ret = (exit_p - entry_p) / entry_p if pos_before.side == 'LONG' else (entry_p - exit_p) / entry_p
                 ret = max(ret, -act_stop)

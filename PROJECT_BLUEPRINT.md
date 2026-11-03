@@ -1156,7 +1156,11 @@ To prevent code drift, feature loss, and AI context amnesia, the repository enfo
         * `conviction_engine_futures.py`: Autonomous Perpetual Futures Engine Version 2.4.0 (Path A Production).
         * `alert_bot_futures.py`: Dedicated Telegram alert and execution daemon for `BTC-USDT-SWAP` synchronized to Version 2.4.0.
         * `sandbox_futures_daemon.py`: Institutional Local Sandbox & Paper Execution Daemon for Futures Version 2.4.1 with real-time OKX market synchronization, pure EUR (€) base accounting, and zero private key requirement.
-        * Unit Test Suite: `test_futures.py` with **15/15 unit tests passing cleanly in 0.002s**.
+        * `sandbox_futures_daemon.py`: Institutional Local Sandbox & Paper Execution Daemon for Futures Version 2.4.1 (Patched: defensive signal telemetry resolution on position exit cycles).
+         * Unit Test Suite: `test_futures.py` with **15/15 unit tests passing cleanly in 0.002s**.
+    - **Local Sandbox Daemon Exit Accounting Hotfix (Attribute Resolution):**
+      - Fixed `AttributeError: 'FuturesSignal' object has no attribute 'metadata'` in `sandbox_futures_daemon.py` line 424 during position exit processing (`EXIT_LONG` / `EXIT_SHORT`).
+      - In `conviction_engine_futures.py`, signal telemetry is stored in `signal.telemetry`. The daemon now defensively accesses `telem = getattr(signal, 'telemetry', getattr(signal, 'metadata', {}))` ensuring seamless blended return and realized PnL accounting upon target banking and trend exits.
     - **Multi-Year Stress Test Matrix across 7 Continuous Cycles (2020 – 2026 YTD):**
       - **Dataset & Protocol**: 501 trades across 7 annual datasets (2020 to 2026 Nov 1) with 60-day preceding MTF warmups under full OKX 0.06% round-trip friction and dynamic volatility-adjusted leverage ($1.75\times - 3.125\times$).
       - **Performance Highlights**:
